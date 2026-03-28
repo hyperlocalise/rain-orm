@@ -33,6 +33,23 @@ type embeddedUsersTable struct {
 	auditColumns
 }
 
+type expandedTypesTable struct {
+	schema.TableModel
+	TinyScore   *schema.Column[int16]
+	Quantity    *schema.Column[int32]
+	Ratio       *schema.Column[float32]
+	Weight      *schema.Column[float64]
+	Amount      *schema.Column[string]
+	Metadata    *schema.Column[any]
+	MetadataB   *schema.Column[any]
+	ExternalID  *schema.Column[string]
+	Payload     *schema.Column[[]byte]
+	PublishedOn *schema.Column[time.Time]
+	ProcessedAt *schema.Column[time.Time]
+	Visibility  *schema.Column[string]
+	Description *schema.Column[string]
+}
+
 func TestSchemaMetadataAndAlias(t *testing.T) {
 	users := schema.Define("users", func(tu *usersTable) {
 		tu.ID = tu.BigSerial("id").PrimaryKey()
@@ -90,5 +107,70 @@ func TestAliasRebindsEmbeddedColumns(t *testing.T) {
 	}
 	if users.CreatedAt.ColumnDef().Table.Alias != "" {
 		t.Fatalf("base embedded column metadata mutated")
+	}
+}
+
+func TestExpandedColumnTypesMetadata(t *testing.T) {
+	table := schema.Define("expanded", func(tt *expandedTypesTable) {
+		tt.TinyScore = tt.SmallInt("tiny_score")
+		tt.Quantity = tt.Integer("quantity")
+		tt.Ratio = tt.Real("ratio")
+		tt.Weight = tt.Double("weight")
+		tt.Amount = tt.Decimal("amount", 12, 2)
+		tt.Metadata = tt.JSON("metadata")
+		tt.MetadataB = tt.JSONB("metadata_b")
+		tt.ExternalID = tt.UUID("external_id")
+		tt.Payload = tt.Bytes("payload")
+		tt.PublishedOn = tt.Date("published_on")
+		tt.ProcessedAt = tt.Timestamp("processed_at")
+		tt.Visibility = tt.Enum("visibility", "public", "private")
+		tt.Description = tt.Text("description")
+	})
+
+	cases := []struct {
+		name      string
+		dataType  schema.DataType
+		size      int
+		precision int
+		scale     int
+		enum      []string
+	}{
+		{name: "tiny_score", dataType: schema.TypeSmallInt},
+		{name: "quantity", dataType: schema.TypeInteger},
+		{name: "ratio", dataType: schema.TypeReal},
+		{name: "weight", dataType: schema.TypeDouble},
+		{name: "amount", dataType: schema.TypeDecimal, precision: 12, scale: 2},
+		{name: "metadata", dataType: schema.TypeJSON},
+		{name: "metadata_b", dataType: schema.TypeJSONB},
+		{name: "external_id", dataType: schema.TypeUUID},
+		{name: "payload", dataType: schema.TypeBytes},
+		{name: "published_on", dataType: schema.TypeDate},
+		{name: "processed_at", dataType: schema.TypeTimestamp},
+		{name: "visibility", dataType: schema.TypeEnum, enum: []string{"public", "private"}},
+		{name: "description", dataType: schema.TypeText},
+	}
+
+	for _, tc := range cases {
+		column, ok := table.TableDef().ColumnByName(tc.name)
+		if !ok {
+			t.Fatalf("expected to find column %q", tc.name)
+		}
+		if column.Type.DataType != tc.dataType {
+			t.Fatalf("column %q expected type %q got %q", tc.name, tc.dataType, column.Type.DataType)
+		}
+		if column.Type.Size != tc.size {
+			t.Fatalf("column %q expected size %d got %d", tc.name, tc.size, column.Type.Size)
+		}
+		if column.Type.Precision != tc.precision || column.Type.Scale != tc.scale {
+			t.Fatalf("column %q expected precision/scale %d/%d got %d/%d", tc.name, tc.precision, tc.scale, column.Type.Precision, column.Type.Scale)
+		}
+		if len(column.Type.EnumValues) != len(tc.enum) {
+			t.Fatalf("column %q expected %d enum values got %d", tc.name, len(tc.enum), len(column.Type.EnumValues))
+		}
+		for idx := range tc.enum {
+			if column.Type.EnumValues[idx] != tc.enum[idx] {
+				t.Fatalf("column %q enum[%d] expected %q got %q", tc.name, idx, tc.enum[idx], column.Type.EnumValues[idx])
+			}
+		}
 	}
 }

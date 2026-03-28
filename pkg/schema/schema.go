@@ -13,11 +13,23 @@ type DataType string
 // Supported schema data types.
 const (
 	TypeBigSerial   DataType = "BIGSERIAL"
+	TypeSmallInt    DataType = "SMALLINT"
+	TypeInteger     DataType = "INTEGER"
 	TypeBigInt      DataType = "BIGINT"
+	TypeReal        DataType = "REAL"
+	TypeDouble      DataType = "DOUBLE"
+	TypeDecimal     DataType = "DECIMAL"
 	TypeText        DataType = "TEXT"
 	TypeVarChar     DataType = "VARCHAR"
 	TypeBoolean     DataType = "BOOLEAN"
+	TypeJSON        DataType = "JSON"
+	TypeJSONB       DataType = "JSONB"
+	TypeUUID        DataType = "UUID"
+	TypeBytes       DataType = "BYTES"
+	TypeDate        DataType = "DATE"
+	TypeTimestamp   DataType = "TIMESTAMP"
 	TypeTimestampTZ DataType = "TIMESTAMPTZ"
+	TypeEnum        DataType = "ENUM"
 )
 
 // SortDirection represents an ORDER BY or index column direction.
@@ -53,8 +65,11 @@ type ColumnReference interface {
 
 // ColumnType stores schema metadata about a column's logical type.
 type ColumnType struct {
-	DataType DataType
-	Size     int
+	DataType   DataType
+	Size       int
+	Precision  int
+	Scale      int
+	EnumValues []string
 }
 
 // TableDef stores immutable table metadata after schema construction.
@@ -149,6 +164,35 @@ func (t *TableModel) BigInt(name string) *Column[int64] {
 	return addColumn[int64](t.def, name, ColumnType{DataType: TypeBigInt}, true, false)
 }
 
+// SmallInt adds a SMALLINT column intended for 16-bit integer values.
+func (t *TableModel) SmallInt(name string) *Column[int16] {
+	return addColumn[int16](t.def, name, ColumnType{DataType: TypeSmallInt}, true, false)
+}
+
+// Integer adds an INTEGER column intended for standard 32-bit integer values.
+func (t *TableModel) Integer(name string) *Column[int32] {
+	return addColumn[int32](t.def, name, ColumnType{DataType: TypeInteger}, true, false)
+}
+
+// Real adds a REAL/FLOAT-style column intended for single-precision values.
+func (t *TableModel) Real(name string) *Column[float32] {
+	return addColumn[float32](t.def, name, ColumnType{DataType: TypeReal}, true, false)
+}
+
+// Double adds a DOUBLE/DOUBLE PRECISION column for double-precision values.
+func (t *TableModel) Double(name string) *Column[float64] {
+	return addColumn[float64](t.def, name, ColumnType{DataType: TypeDouble}, true, false)
+}
+
+// Decimal adds a DECIMAL/NUMERIC column with fixed precision and scale.
+func (t *TableModel) Decimal(name string, precision, scale int) *Column[string] {
+	return addColumn[string](t.def, name, ColumnType{
+		DataType:  TypeDecimal,
+		Precision: precision,
+		Scale:     scale,
+	}, true, false)
+}
+
 // Text adds a TEXT column.
 func (t *TableModel) Text(name string) *Column[string] {
 	return addColumn[string](t.def, name, ColumnType{DataType: TypeText}, true, false)
@@ -164,9 +208,48 @@ func (t *TableModel) Boolean(name string) *Column[bool] {
 	return addColumn[bool](t.def, name, ColumnType{DataType: TypeBoolean}, true, false)
 }
 
+// JSON adds a JSON column for semi-structured values.
+func (t *TableModel) JSON(name string) *Column[any] {
+	return addColumn[any](t.def, name, ColumnType{DataType: TypeJSON}, true, false)
+}
+
+// JSONB adds a JSONB binary JSON column where supported.
+func (t *TableModel) JSONB(name string) *Column[any] {
+	return addColumn[any](t.def, name, ColumnType{DataType: TypeJSONB}, true, false)
+}
+
+// UUID adds a UUID column for canonical UUID string values.
+func (t *TableModel) UUID(name string) *Column[string] {
+	return addColumn[string](t.def, name, ColumnType{DataType: TypeUUID}, true, false)
+}
+
+// Bytes adds a bytes/blob column for arbitrary binary payloads.
+func (t *TableModel) Bytes(name string) *Column[[]byte] {
+	return addColumn[[]byte](t.def, name, ColumnType{DataType: TypeBytes}, true, false)
+}
+
+// Date adds a DATE column intended for calendar-date values.
+func (t *TableModel) Date(name string) *Column[time.Time] {
+	return addColumn[time.Time](t.def, name, ColumnType{DataType: TypeDate}, true, false)
+}
+
+// Timestamp adds a TIMESTAMP column without timezone semantics.
+func (t *TableModel) Timestamp(name string) *Column[time.Time] {
+	return addColumn[time.Time](t.def, name, ColumnType{DataType: TypeTimestamp}, true, false)
+}
+
 // TimestampTZ adds a TIMESTAMPTZ column.
 func (t *TableModel) TimestampTZ(name string) *Column[time.Time] {
 	return addColumn[time.Time](t.def, name, ColumnType{DataType: TypeTimestampTZ}, true, false)
+}
+
+// Enum adds a string-backed enum-style column with allowed values metadata.
+func (t *TableModel) Enum(name string, values ...string) *Column[string] {
+	copiedValues := append([]string(nil), values...)
+	return addColumn[string](t.def, name, ColumnType{
+		DataType:   TypeEnum,
+		EnumValues: copiedValues,
+	}, true, false)
 }
 
 // Index declares a non-unique index.
@@ -525,6 +608,7 @@ func cloneTableDef(src *TableDef, alias string) *TableDef {
 
 	for _, column := range src.Columns {
 		copyColumn := *column
+		copyColumn.Type.EnumValues = append([]string(nil), column.Type.EnumValues...)
 		copyColumn.Table = cloned
 		cloned.Columns = append(cloned.Columns, &copyColumn)
 		cloned.columnsByName[copyColumn.Name] = &copyColumn

@@ -40,25 +40,37 @@ func (d *PostgresDialect) Placeholder(n int) string {
 // DataType returns PostgreSQL-specific type.
 func (d *PostgresDialect) DataType(typ string, size int) string {
 	switch typ {
+	case "smallint":
+		return "SMALLINT"
 	case "string":
 		if size > 0 {
 			return "VARCHAR"
 		}
 		return "TEXT"
-	case "int", "int32":
+	case "int", "int32", "integer":
 		return "INTEGER"
 	case "int64":
 		return "BIGINT"
+	case "decimal":
+		return "NUMERIC"
 	case "float32":
 		return "REAL"
 	case "float64":
 		return "DOUBLE PRECISION"
 	case "bool":
 		return "BOOLEAN"
+	case "date":
+		return "DATE"
+	case "timestamp":
+		return "TIMESTAMP"
 	case "time":
 		return "TIMESTAMPTZ"
 	case "json":
+		return "JSON"
+	case "jsonb":
 		return "JSONB"
+	case "enum":
+		return "TEXT"
 	case "uuid":
 		return "UUID"
 	case "bytes":

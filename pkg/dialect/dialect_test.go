@@ -48,11 +48,21 @@ func TestBaseDialectDefaults(t *testing.T) {
 		{typ: "string", size: 10, want: "VARCHAR"},
 		{typ: "int", want: "INTEGER"},
 		{typ: "int32", want: "INTEGER"},
+		{typ: "integer", want: "INTEGER"},
+		{typ: "smallint", want: "SMALLINT"},
 		{typ: "int64", want: "BIGINT"},
+		{typ: "decimal", want: "DECIMAL"},
 		{typ: "float32", want: "REAL"},
 		{typ: "float64", want: "DOUBLE PRECISION"},
 		{typ: "bool", want: "BOOLEAN"},
+		{typ: "date", want: "DATE"},
+		{typ: "timestamp", want: "TIMESTAMP"},
 		{typ: "time", want: "TIMESTAMP"},
+		{typ: "json", want: "JSON"},
+		{typ: "jsonb", want: "JSONB"},
+		{typ: "uuid", want: "UUID"},
+		{typ: "bytes", want: "BLOB"},
+		{typ: "enum", want: "VARCHAR"},
 		{typ: "custom", want: "custom"},
 	}
 
@@ -126,12 +136,19 @@ func TestPostgresDialect(t *testing.T) {
 		{"string", 32, "VARCHAR"},
 		{"int", 0, "INTEGER"},
 		{"int32", 0, "INTEGER"},
+		{"integer", 0, "INTEGER"},
+		{"smallint", 0, "SMALLINT"},
 		{"int64", 0, "BIGINT"},
+		{"decimal", 0, "NUMERIC"},
 		{"float32", 0, "REAL"},
 		{"float64", 0, "DOUBLE PRECISION"},
 		{"bool", 0, "BOOLEAN"},
+		{"date", 0, "DATE"},
+		{"timestamp", 0, "TIMESTAMP"},
 		{"time", 0, "TIMESTAMPTZ"},
-		{"json", 0, "JSONB"},
+		{"json", 0, "JSON"},
+		{"jsonb", 0, "JSONB"},
+		{"enum", 0, "TEXT"},
 		{"uuid", 0, "UUID"},
 		{"bytes", 0, "BYTEA"},
 		{"custom", 0, "custom"},
@@ -201,12 +218,21 @@ func TestMySQLDialect(t *testing.T) {
 		{"string", 32, "VARCHAR"},
 		{"int", 0, "INT"},
 		{"int32", 0, "INT"},
+		{"integer", 0, "INT"},
+		{"smallint", 0, "SMALLINT"},
 		{"int64", 0, "BIGINT"},
+		{"decimal", 0, "DECIMAL"},
 		{"float32", 0, "FLOAT"},
 		{"float64", 0, "DOUBLE"},
 		{"bool", 0, "BOOLEAN"},
+		{"date", 0, "DATE"},
+		{"timestamp", 0, "TIMESTAMP"},
 		{"time", 0, "DATETIME"},
 		{"json", 0, "JSON"},
+		{"jsonb", 0, "JSON"},
+		{"uuid", 0, "VARCHAR"},
+		{"enum", 0, "VARCHAR"},
+		{"bytes", 0, "BLOB"},
 		{"custom", 0, "custom"},
 	}
 	for _, tc := range dataTypes {
@@ -271,14 +297,23 @@ func TestSQLiteDialect(t *testing.T) {
 		want string
 	}{
 		{"string", 0, "TEXT"},
+		{"smallint", 0, "INTEGER"},
 		{"int", 0, "INTEGER"},
 		{"int32", 0, "INTEGER"},
+		{"integer", 0, "INTEGER"},
 		{"int64", 0, "INTEGER"},
+		{"decimal", 0, "REAL"},
 		{"float32", 0, "REAL"},
 		{"float64", 0, "REAL"},
 		{"bool", 0, "INTEGER"},
+		{"date", 0, "TEXT"},
+		{"timestamp", 0, "TEXT"},
 		{"time", 0, "TEXT"},
 		{"json", 0, "TEXT"},
+		{"jsonb", 0, "TEXT"},
+		{"uuid", 0, "TEXT"},
+		{"enum", 0, "TEXT"},
+		{"bytes", 0, "BLOB"},
 		{"custom", 0, "custom"},
 	}
 	for _, tc := range dataTypes {
@@ -316,5 +351,14 @@ func TestSQLiteDialect(t *testing.T) {
 	}
 	if got := d.CurrentTimestamp(); got != "CURRENT_TIMESTAMP" {
 		t.Fatalf("unexpected current timestamp: %q", got)
+	}
+}
+
+func TestSQLiteDialectJSONBFallback(t *testing.T) {
+	t.Parallel()
+
+	d := &SQLiteDialect{}
+	if got := d.DataType("jsonb", 0); got != "TEXT" {
+		t.Fatalf("expected JSONB fallback to TEXT on sqlite, got %q", got)
 	}
 }

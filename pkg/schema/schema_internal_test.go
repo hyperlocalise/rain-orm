@@ -192,15 +192,21 @@ func TestSchemaInternalPanicsAndCloners(t *testing.T) {
 		TableModel
 		ID     *Column[int64]
 		UserID *Column[int64]
+		Status *Column[string]
 	},
 	) {
 		tp.ID = tp.BigSerial("id").PrimaryKey()
 		tp.UserID = tp.BigInt("user_id").NotNull().References(users.ID)
+		tp.Status = tp.Enum("status", "draft", "published")
 		tp.Index("posts_user_idx").On(tp.UserID)
 	})
 	clonedWithFK := cloneTableDef(posts.TableDef(), "p")
 	if clonedWithFK.Alias != "p" || len(clonedWithFK.ForeignKeys) != 1 || len(clonedWithFK.Indexes) != 1 {
 		t.Fatalf("expected cloneTableDef to preserve alias, indexes, and foreign keys")
+	}
+	posts.Status.ColumnDef().Type.EnumValues[0] = "mutated"
+	if clonedWithFK.columnsByName["status"].Type.EnumValues[0] != "draft" {
+		t.Fatalf("expected enum metadata to be deep-cloned")
 	}
 }
 

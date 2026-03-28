@@ -34,25 +34,39 @@ func (d *MySQLDialect) Placeholder(n int) string {
 // DataType returns MySQL-specific type.
 func (d *MySQLDialect) DataType(typ string, size int) string {
 	switch typ {
+	case "smallint":
+		return "SMALLINT"
 	case "string":
 		if size > 0 {
 			return "VARCHAR"
 		}
 		return "TEXT"
-	case "int", "int32":
+	case "int", "int32", "integer":
 		return "INT"
 	case "int64":
 		return "BIGINT"
+	case "decimal":
+		return "DECIMAL"
 	case "float32":
 		return "FLOAT"
 	case "float64":
 		return "DOUBLE"
 	case "bool":
 		return "BOOLEAN"
+	case "date":
+		return "DATE"
+	case "timestamp":
+		return "TIMESTAMP"
 	case "time":
 		return "DATETIME"
 	case "json":
 		return "JSON"
+	case "jsonb":
+		return "JSON"
+	case "uuid", "enum":
+		return "VARCHAR"
+	case "bytes":
+		return "BLOB"
 	default:
 		return typ
 	}

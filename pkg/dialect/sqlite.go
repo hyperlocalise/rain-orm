@@ -40,16 +40,22 @@ func (d *SQLiteDialect) DataType(typ string, size int) string {
 	switch typ {
 	case "string":
 		return "TEXT"
-	case "int", "int32", "int64":
+	case "smallint", "int", "int32", "int64", "integer":
 		return "INTEGER"
-	case "float32", "float64":
+	case "decimal", "float32", "float64":
 		return "REAL"
 	case "bool":
 		return "INTEGER"
+	case "date", "timestamp":
+		return "TEXT"
 	case "time":
 		return "TEXT"
-	case "json":
+	case "json", "jsonb":
 		return "TEXT"
+	case "uuid", "enum":
+		return "TEXT"
+	case "bytes":
+		return "BLOB"
 	default:
 		return typ
 	}
