@@ -35,19 +35,21 @@ type embeddedUsersTable struct {
 
 type expandedTypesTable struct {
 	schema.TableModel
-	TinyScore   *schema.Column[int16]
-	Quantity    *schema.Column[int32]
-	Ratio       *schema.Column[float32]
-	Weight      *schema.Column[float64]
-	Amount      *schema.Column[string]
-	Metadata    *schema.Column[any]
-	MetadataB   *schema.Column[any]
-	ExternalID  *schema.Column[string]
-	Payload     *schema.Column[[]byte]
-	PublishedOn *schema.Column[time.Time]
-	ProcessedAt *schema.Column[time.Time]
-	Visibility  *schema.Column[string]
-	Description *schema.Column[string]
+	TinyScore       *schema.Column[int16]
+	Quantity        *schema.Column[int32]
+	Ratio           *schema.Column[float32]
+	Weight          *schema.Column[float64]
+	Amount          *schema.Column[string]
+	Metadata        *schema.Column[any]
+	MetadataB       *schema.Column[any]
+	ExternalID      *schema.Column[string]
+	Payload         *schema.Column[[]byte]
+	PublishedOn     *schema.Column[time.Time]
+	ProcessedAt     *schema.Column[time.Time]
+	ProcessedAtPrec *schema.Column[time.Time]
+	ReviewedAtPrec  *schema.Column[time.Time]
+	Visibility      *schema.Column[string]
+	Description     *schema.Column[string]
 }
 
 func TestSchemaMetadataAndAlias(t *testing.T) {
@@ -123,6 +125,8 @@ func TestExpandedColumnTypesMetadata(t *testing.T) {
 		tt.Payload = tt.Bytes("payload")
 		tt.PublishedOn = tt.Date("published_on")
 		tt.ProcessedAt = tt.Timestamp("processed_at")
+		tt.ProcessedAtPrec = tt.TimestampPrecision("processed_at_prec", 6)
+		tt.ReviewedAtPrec = tt.TimestampTZPrecision("reviewed_at_prec", 3)
 		tt.Visibility = tt.Enum("visibility", "public", "private")
 		tt.Description = tt.Text("description")
 	})
@@ -133,6 +137,8 @@ func TestExpandedColumnTypesMetadata(t *testing.T) {
 		size      int
 		precision int
 		scale     int
+		timePrec  int
+		tsKind    schema.TimestampKind
 		enum      []string
 	}{
 		{name: "tiny_score", dataType: schema.TypeSmallInt},
@@ -145,7 +151,9 @@ func TestExpandedColumnTypesMetadata(t *testing.T) {
 		{name: "external_id", dataType: schema.TypeUUID},
 		{name: "payload", dataType: schema.TypeBytes},
 		{name: "published_on", dataType: schema.TypeDate},
-		{name: "processed_at", dataType: schema.TypeTimestamp},
+		{name: "processed_at", dataType: schema.TypeTimestamp, tsKind: schema.TimestampKindWithoutTZ},
+		{name: "processed_at_prec", dataType: schema.TypeTimestamp, timePrec: 6, tsKind: schema.TimestampKindWithoutTZ},
+		{name: "reviewed_at_prec", dataType: schema.TypeTimestampTZ, timePrec: 3, tsKind: schema.TimestampKindWithTZ},
 		{name: "visibility", dataType: schema.TypeEnum, enum: []string{"public", "private"}},
 		{name: "description", dataType: schema.TypeText},
 	}
@@ -163,6 +171,12 @@ func TestExpandedColumnTypesMetadata(t *testing.T) {
 		}
 		if column.Type.Precision != tc.precision || column.Type.Scale != tc.scale {
 			t.Fatalf("column %q expected precision/scale %d/%d got %d/%d", tc.name, tc.precision, tc.scale, column.Type.Precision, column.Type.Scale)
+		}
+		if column.Type.TimePrecision != tc.timePrec {
+			t.Fatalf("column %q expected time precision %d got %d", tc.name, tc.timePrec, column.Type.TimePrecision)
+		}
+		if column.Type.TimestampKind != tc.tsKind {
+			t.Fatalf("column %q expected timestamp kind %q got %q", tc.name, tc.tsKind, column.Type.TimestampKind)
 		}
 		if len(column.Type.EnumValues) != len(tc.enum) {
 			t.Fatalf("column %q expected %d enum values got %d", tc.name, len(tc.enum), len(column.Type.EnumValues))

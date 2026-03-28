@@ -10,6 +10,12 @@ import (
 // DataType represents a database column type.
 type DataType string
 
+// LengthSemantics describes how a type uses any configured length.
+type LengthSemantics string
+
+// TimestampKind describes timestamp timezone semantics.
+type TimestampKind string
+
 // Supported schema data types.
 const (
 	TypeBigSerial   DataType = "BIGSERIAL"
@@ -30,6 +36,18 @@ const (
 	TypeTimestamp   DataType = "TIMESTAMP"
 	TypeTimestampTZ DataType = "TIMESTAMPTZ"
 	TypeEnum        DataType = "ENUM"
+)
+
+const (
+	LengthSemanticsUnspecified LengthSemantics = ""
+	LengthSemanticsVariable    LengthSemantics = "variable"
+	LengthSemanticsFixed       LengthSemantics = "fixed"
+)
+
+const (
+	TimestampKindUnspecified TimestampKind = ""
+	TimestampKindWithoutTZ   TimestampKind = "without_tz"
+	TimestampKindWithTZ      TimestampKind = "with_tz"
 )
 
 // SortDirection represents an ORDER BY or index column direction.
@@ -65,11 +83,14 @@ type ColumnReference interface {
 
 // ColumnType stores schema metadata about a column's logical type.
 type ColumnType struct {
-	DataType   DataType
-	Size       int
-	Precision  int
-	Scale      int
-	EnumValues []string
+	DataType        DataType
+	Size            int
+	LengthSemantics LengthSemantics
+	Precision       int
+	Scale           int
+	TimePrecision   int
+	TimestampKind   TimestampKind
+	EnumValues      []string
 }
 
 // TableDef stores immutable table metadata after schema construction.
@@ -200,7 +221,11 @@ func (t *TableModel) Text(name string) *Column[string] {
 
 // VarChar adds a VARCHAR column.
 func (t *TableModel) VarChar(name string, size int) *Column[string] {
-	return addColumn[string](t.def, name, ColumnType{DataType: TypeVarChar, Size: size}, true, false)
+	return addColumn[string](t.def, name, ColumnType{
+		DataType:        TypeVarChar,
+		Size:            size,
+		LengthSemantics: LengthSemanticsVariable,
+	}, true, false)
 }
 
 // Boolean adds a BOOLEAN column.
@@ -235,12 +260,36 @@ func (t *TableModel) Date(name string) *Column[time.Time] {
 
 // Timestamp adds a TIMESTAMP column without timezone semantics.
 func (t *TableModel) Timestamp(name string) *Column[time.Time] {
-	return addColumn[time.Time](t.def, name, ColumnType{DataType: TypeTimestamp}, true, false)
+	return addColumn[time.Time](t.def, name, ColumnType{
+		DataType:      TypeTimestamp,
+		TimestampKind: TimestampKindWithoutTZ,
+	}, true, false)
 }
 
 // TimestampTZ adds a TIMESTAMPTZ column.
 func (t *TableModel) TimestampTZ(name string) *Column[time.Time] {
-	return addColumn[time.Time](t.def, name, ColumnType{DataType: TypeTimestampTZ}, true, false)
+	return addColumn[time.Time](t.def, name, ColumnType{
+		DataType:      TypeTimestampTZ,
+		TimestampKind: TimestampKindWithTZ,
+	}, true, false)
+}
+
+// TimestampPrecision adds a TIMESTAMP column with explicit fractional precision.
+func (t *TableModel) TimestampPrecision(name string, precision int) *Column[time.Time] {
+	return addColumn[time.Time](t.def, name, ColumnType{
+		DataType:      TypeTimestamp,
+		TimePrecision: precision,
+		TimestampKind: TimestampKindWithoutTZ,
+	}, true, false)
+}
+
+// TimestampTZPrecision adds a TIMESTAMPTZ column with explicit fractional precision.
+func (t *TableModel) TimestampTZPrecision(name string, precision int) *Column[time.Time] {
+	return addColumn[time.Time](t.def, name, ColumnType{
+		DataType:      TypeTimestampTZ,
+		TimePrecision: precision,
+		TimestampKind: TimestampKindWithTZ,
+	}, true, false)
 }
 
 // Enum adds a string-backed enum-style column with allowed values metadata.

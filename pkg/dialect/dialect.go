@@ -2,6 +2,13 @@
 // Implement this interface to add support for new database engines.
 package dialect
 
+import (
+	"fmt"
+	"strings"
+
+	"github.com/hyperlocalise/rain-orm/pkg/schema"
+)
+
 // Dialect represents a database-specific SQL dialect.
 type Dialect interface {
 	// Name returns the dialect name (e.g., "postgres", "mysql", "sqlite").
@@ -16,8 +23,8 @@ type Dialect interface {
 	// Placeholder returns the parameter placeholder for the nth parameter.
 	Placeholder(n int) string
 
-	// DataType returns the SQL type for a given schema type.
-	DataType(typ string, size int) string
+	// DataType returns the SQL type for a given schema column type.
+	DataType(columnType schema.ColumnType) string
 
 	// DefaultValue returns the SQL representation of a default value.
 	DefaultValue(value interface{}) string
@@ -47,32 +54,38 @@ func (d *BaseDialect) Features() Feature {
 }
 
 // DataType returns default SQL type mapping.
-func (d *BaseDialect) DataType(typ string, size int) string {
+func (d *BaseDialect) DataType(columnType schema.ColumnType) string {
+	typ := normalizeType(columnType.DataType)
+
 	switch typ {
+	case "bigserial":
+		return "BIGSERIAL"
 	case "smallint":
 		return "SMALLINT"
-	case "string":
-		if size > 0 {
+	case "string", "varchar":
+		if columnType.Size > 0 {
 			return "VARCHAR"
 		}
 		return "TEXT"
+	case "text":
+		return "TEXT"
 	case "int", "int32", "integer":
 		return "INTEGER"
-	case "int64":
+	case "int64", "bigint":
 		return "BIGINT"
 	case "decimal":
-		return "DECIMAL"
-	case "float32":
+		return renderDecimalType("DECIMAL", columnType)
+	case "float32", "real":
 		return "REAL"
-	case "float64":
+	case "float64", "double":
 		return "DOUBLE PRECISION"
-	case "bool":
+	case "bool", "boolean":
 		return "BOOLEAN"
 	case "date":
 		return "DATE"
 	case "timestamp":
 		return "TIMESTAMP"
-	case "time":
+	case "time", "timestamptz":
 		return "TIMESTAMP"
 	case "json":
 		return "JSON"
@@ -85,7 +98,7 @@ func (d *BaseDialect) DataType(typ string, size int) string {
 	case "enum":
 		return "VARCHAR"
 	default:
-		return typ
+		return string(columnType.DataType)
 	}
 }
 
@@ -97,4 +110,16 @@ func (d *BaseDialect) DefaultValue(value interface{}) string {
 // UpsertClause returns generic upsert syntax.
 func (d *BaseDialect) UpsertClause(table string, conflictCols []string, updateCols []string) string {
 	return ""
+}
+
+func normalizeType(dataType schema.DataType) string {
+	return strings.ToLower(string(dataType))
+}
+
+func renderDecimalType(base string, columnType schema.ColumnType) string {
+	if columnType.Precision <= 0 {
+		return base
+	}
+
+	return fmt.Sprintf("%s(%d,%d)", base, columnType.Precision, columnType.Scale)
 }

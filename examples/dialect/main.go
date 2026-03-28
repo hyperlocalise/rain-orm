@@ -9,6 +9,7 @@ import (
 	"fmt"
 
 	"github.com/hyperlocalise/rain-orm/pkg/dialect"
+	"github.com/hyperlocalise/rain-orm/pkg/schema"
 )
 
 func main() {
@@ -46,9 +47,9 @@ func demoDialect(d dialect.Dialect) {
 	fmt.Printf("Placeholder 2: %s\n", d.Placeholder(2))
 
 	// Data types
-	fmt.Printf("Type 'string': %s\n", d.DataType("string", 255))
-	fmt.Printf("Type 'int64': %s\n", d.DataType("int64", 0))
-	fmt.Printf("Type 'bool': %s\n", d.DataType("bool", 0))
+	fmt.Printf("Type 'string': %s\n", d.DataType(schema.ColumnType{DataType: "string", Size: 255}))
+	fmt.Printf("Type 'int64': %s\n", d.DataType(schema.ColumnType{DataType: "int64"}))
+	fmt.Printf("Type 'bool': %s\n", d.DataType(schema.ColumnType{DataType: "bool"}))
 
 	// Auto increment
 	fmt.Printf("Auto increment keyword: %s\n", d.AutoIncrementKeyword())

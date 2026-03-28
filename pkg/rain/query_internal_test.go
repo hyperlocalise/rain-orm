@@ -84,23 +84,13 @@ func openInternalQueryDB(t *testing.T) *DB {
 func createInternalQuerySchema(t *testing.T, ctx context.Context, db *DB) {
 	t.Helper()
 
-	statements := []string{
-		`CREATE TABLE users (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			email TEXT NOT NULL,
-			name TEXT NOT NULL DEFAULT 'guest',
-			active BOOLEAN NOT NULL DEFAULT 1,
-			nickname TEXT DEFAULT 'buddy',
-			created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-		)`,
-		`CREATE TABLE posts (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			user_id INTEGER NOT NULL,
-			title TEXT NOT NULL
-		)`,
-	}
+	users, posts := defineInternalQueryTables()
 
-	for _, statement := range statements {
+	for _, table := range []schema.TableReference{users, posts} {
+		statement, err := db.CreateTableSQL(table)
+		if err != nil {
+			t.Fatalf("compile schema for %q: %v", table.TableDef().Name, err)
+		}
 		if _, err := db.Exec(ctx, statement); err != nil {
 			t.Fatalf("exec schema statement %q: %v", statement, err)
 		}

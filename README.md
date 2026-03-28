@@ -189,10 +189,29 @@ var Users = schema.Define("users", func(t *UsersTable) {
 })
 ```
 
+## Create Table SQL
+
+```go
+ddl, err := rain.OpenDialect("sqlite")
+if err != nil {
+    panic(err)
+}
+
+sql, err := ddl.CreateTableSQL(Users)
+if err != nil {
+    panic(err)
+}
+```
+
+Rain can compile `CREATE TABLE` SQL directly from schema metadata, including dialect-specific type rendering, defaults, foreign keys, and enum `CHECK` constraints.
+
+This is intentionally limited to schema-to-DDL compilation. Rain does not generate migration diffs or manage migration history.
+
 ## Database Dialects
 
 ```go
-import "github.com/quiet-circles/rain-orm/pkg/dialect"
+import "github.com/hyperlocalise/rain-orm/pkg/dialect"
+import "github.com/hyperlocalise/rain-orm/pkg/schema"
 
 // Get dialect by name
 d, err := dialect.GetDialect("postgres")
@@ -203,7 +222,7 @@ if err != nil {
 // Use dialect-specific features
 quoted := d.QuoteIdentifier("users")  // "users"
 placeholder := d.Placeholder(1)       // $1
-sqlType := d.DataType("string", 255)  // VARCHAR
+sqlType := d.DataType(schema.ColumnType{DataType: "string", Size: 255})  // VARCHAR
 ```
 
 See the [examples/](examples/) directory for complete, runnable examples.

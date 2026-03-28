@@ -1,6 +1,17 @@
 package dialect
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/hyperlocalise/rain-orm/pkg/schema"
+)
+
+func columnType(typ string, size int) schema.ColumnType {
+	return schema.ColumnType{
+		DataType: schema.DataType(typ),
+		Size:     size,
+	}
+}
 
 func TestFeatureHelpers(t *testing.T) {
 	t.Parallel()
@@ -46,6 +57,7 @@ func TestBaseDialectDefaults(t *testing.T) {
 	}{
 		{typ: "string", size: 0, want: "TEXT"},
 		{typ: "string", size: 10, want: "VARCHAR"},
+		{typ: "bigserial", want: "BIGSERIAL"},
 		{typ: "int", want: "INTEGER"},
 		{typ: "int32", want: "INTEGER"},
 		{typ: "integer", want: "INTEGER"},
@@ -58,6 +70,7 @@ func TestBaseDialectDefaults(t *testing.T) {
 		{typ: "date", want: "DATE"},
 		{typ: "timestamp", want: "TIMESTAMP"},
 		{typ: "time", want: "TIMESTAMP"},
+		{typ: "timestamptz", want: "TIMESTAMP"},
 		{typ: "json", want: "JSON"},
 		{typ: "jsonb", want: "JSONB"},
 		{typ: "uuid", want: "UUID"},
@@ -67,9 +80,13 @@ func TestBaseDialectDefaults(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		if got := d.DataType(tc.typ, tc.size); got != tc.want {
+		if got := d.DataType(columnType(tc.typ, tc.size)); got != tc.want {
 			t.Fatalf("DataType(%q, %d): want %q got %q", tc.typ, tc.size, tc.want, got)
 		}
+	}
+
+	if got := d.DataType(schema.ColumnType{DataType: schema.TypeDecimal, Precision: 12, Scale: 2}); got != "DECIMAL(12,2)" {
+		t.Fatalf("DataType(decimal 12,2): want %q got %q", "DECIMAL(12,2)", got)
 	}
 
 	if got := d.DefaultValue("ignored"); got != "DEFAULT" {
@@ -134,6 +151,7 @@ func TestPostgresDialect(t *testing.T) {
 	}{
 		{"string", 0, "TEXT"},
 		{"string", 32, "VARCHAR"},
+		{"bigserial", 0, "BIGSERIAL"},
 		{"int", 0, "INTEGER"},
 		{"int32", 0, "INTEGER"},
 		{"integer", 0, "INTEGER"},
@@ -141,11 +159,14 @@ func TestPostgresDialect(t *testing.T) {
 		{"int64", 0, "BIGINT"},
 		{"decimal", 0, "NUMERIC"},
 		{"float32", 0, "REAL"},
+		{"real", 0, "REAL"},
 		{"float64", 0, "DOUBLE PRECISION"},
+		{"double", 0, "DOUBLE PRECISION"},
 		{"bool", 0, "BOOLEAN"},
 		{"date", 0, "DATE"},
 		{"timestamp", 0, "TIMESTAMP"},
 		{"time", 0, "TIMESTAMPTZ"},
+		{"timestamptz", 0, "TIMESTAMPTZ"},
 		{"json", 0, "JSON"},
 		{"jsonb", 0, "JSONB"},
 		{"enum", 0, "TEXT"},
@@ -154,9 +175,13 @@ func TestPostgresDialect(t *testing.T) {
 		{"custom", 0, "custom"},
 	}
 	for _, tc := range dataTypes {
-		if got := d.DataType(tc.typ, tc.size); got != tc.want {
+		if got := d.DataType(columnType(tc.typ, tc.size)); got != tc.want {
 			t.Fatalf("DataType(%q, %d): want %q got %q", tc.typ, tc.size, tc.want, got)
 		}
+	}
+
+	if got := d.DataType(schema.ColumnType{DataType: schema.TypeDecimal, Precision: 12, Scale: 2}); got != "NUMERIC(12,2)" {
+		t.Fatalf("DataType(decimal 12,2): want %q got %q", "NUMERIC(12,2)", got)
 	}
 
 	if got := d.AutoIncrementKeyword(); got != "SERIAL" {
@@ -216,6 +241,7 @@ func TestMySQLDialect(t *testing.T) {
 	}{
 		{"string", 0, "TEXT"},
 		{"string", 32, "VARCHAR"},
+		{"bigserial", 0, "BIGINT"},
 		{"int", 0, "INT"},
 		{"int32", 0, "INT"},
 		{"integer", 0, "INT"},
@@ -223,22 +249,29 @@ func TestMySQLDialect(t *testing.T) {
 		{"int64", 0, "BIGINT"},
 		{"decimal", 0, "DECIMAL"},
 		{"float32", 0, "FLOAT"},
+		{"real", 0, "FLOAT"},
 		{"float64", 0, "DOUBLE"},
+		{"double", 0, "DOUBLE"},
 		{"bool", 0, "BOOLEAN"},
 		{"date", 0, "DATE"},
 		{"timestamp", 0, "TIMESTAMP"},
 		{"time", 0, "DATETIME"},
+		{"timestamptz", 0, "DATETIME"},
 		{"json", 0, "JSON"},
 		{"jsonb", 0, "JSON"},
-		{"uuid", 0, "VARCHAR"},
-		{"enum", 0, "VARCHAR"},
+		{"uuid", 0, "CHAR(36)"},
+		{"enum", 0, "VARCHAR(255)"},
 		{"bytes", 0, "BLOB"},
 		{"custom", 0, "custom"},
 	}
 	for _, tc := range dataTypes {
-		if got := d.DataType(tc.typ, tc.size); got != tc.want {
+		if got := d.DataType(columnType(tc.typ, tc.size)); got != tc.want {
 			t.Fatalf("DataType(%q, %d): want %q got %q", tc.typ, tc.size, tc.want, got)
 		}
+	}
+
+	if got := d.DataType(schema.ColumnType{DataType: schema.TypeDecimal, Precision: 12, Scale: 2}); got != "DECIMAL(12,2)" {
+		t.Fatalf("DataType(decimal 12,2): want %q got %q", "DECIMAL(12,2)", got)
 	}
 
 	if got := d.AutoIncrementKeyword(); got != "AUTO_INCREMENT" {
@@ -297,6 +330,7 @@ func TestSQLiteDialect(t *testing.T) {
 		want string
 	}{
 		{"string", 0, "TEXT"},
+		{"bigserial", 0, "INTEGER"},
 		{"smallint", 0, "INTEGER"},
 		{"int", 0, "INTEGER"},
 		{"int32", 0, "INTEGER"},
@@ -304,11 +338,14 @@ func TestSQLiteDialect(t *testing.T) {
 		{"int64", 0, "INTEGER"},
 		{"decimal", 0, "REAL"},
 		{"float32", 0, "REAL"},
+		{"real", 0, "REAL"},
 		{"float64", 0, "REAL"},
+		{"double", 0, "REAL"},
 		{"bool", 0, "INTEGER"},
 		{"date", 0, "TEXT"},
 		{"timestamp", 0, "TEXT"},
 		{"time", 0, "TEXT"},
+		{"timestamptz", 0, "TEXT"},
 		{"json", 0, "TEXT"},
 		{"jsonb", 0, "TEXT"},
 		{"uuid", 0, "TEXT"},
@@ -317,7 +354,7 @@ func TestSQLiteDialect(t *testing.T) {
 		{"custom", 0, "custom"},
 	}
 	for _, tc := range dataTypes {
-		if got := d.DataType(tc.typ, tc.size); got != tc.want {
+		if got := d.DataType(columnType(tc.typ, tc.size)); got != tc.want {
 			t.Fatalf("DataType(%q, %d): want %q got %q", tc.typ, tc.size, tc.want, got)
 		}
 	}
@@ -358,7 +395,7 @@ func TestSQLiteDialectJSONBFallback(t *testing.T) {
 	t.Parallel()
 
 	d := &SQLiteDialect{}
-	if got := d.DataType("jsonb", 0); got != "TEXT" {
+	if got := d.DataType(columnType("jsonb", 0)); got != "TEXT" {
 		t.Fatalf("expected JSONB fallback to TEXT on sqlite, got %q", got)
 	}
 }
