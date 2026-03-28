@@ -1,0 +1,36 @@
+{
+  "languages": {
+    "Go": {
+      "language_servers": [
+        "gopls",
+        "!gpt"
+      ],
+      "format_on_save": "on",
+      "formatter": {
+        "external": {
+          "command": "make",
+          "arguments": [
+            "fmt-file",
+            "FILE={buffer_path}"
+          ]
+        }
+      }
+    }
+  },
+  "lsp": {
+    "gopls": {
+      "settings": {
+        "gopls": {
+          "ui.diagnostic.annotations": {
+            "bounds": true,
+            "escape": true,
+            "inline": true,
+            "nil": true
+          },
+          "ui.diagnostic.staticcheck": true,
+          "ui.diagnostic.vulncheck": "Imports"
+        }
+      }
+    }
+  }
+}
