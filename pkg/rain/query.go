@@ -17,7 +17,6 @@ type Query struct {
 	joins   []Join
 	groupBy []string
 	having  []Condition
-	err     error
 }
 
 // Condition represents a WHERE or HAVING condition.

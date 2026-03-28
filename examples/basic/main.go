@@ -41,7 +41,7 @@ type Post struct {
 func main() {
 	// Open database connection
 	db := rain.Open("postgres", "postgres://user:pass@localhost/mydb")
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	ctx := context.Background()
 
@@ -119,6 +119,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	fmt.Printf("Soft deleted %d rows\n", affected)
 
 	// Hard delete
 	affected, err = db.Delete("users").Where("id", "=", 99).Delete()
@@ -142,7 +143,7 @@ func main() {
 	}
 	err = tx.Model(&post).Create()
 	if err != nil {
-		tx.Rollback()
+		_ = tx.Rollback()
 		log.Fatal(err)
 	}
 
