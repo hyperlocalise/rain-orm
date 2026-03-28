@@ -16,12 +16,12 @@ build: ## build the library (verifies compilation)
 
 .PHONY: test
 test: ## run tests with coverage
-	go test -race -coverprofile=coverage.out ./...
+	go test -race -coverprofile=coverage.out $$(go list ./... | grep -v '/examples/')
 	go tool cover -func=coverage.out | sort -rnk3
 
 .PHONY: test-json
 test-json: ## run tests with JSON output (for CI)
-	go test -json -race -coverprofile=coverage.out ./... > test-report.jsonl
+	go test -json -race -coverprofile=coverage.out $$(go list ./... | grep -v '/examples/') > test-report.jsonl
 
 .PHONY: clean
 clean: ## clean up test artifacts
