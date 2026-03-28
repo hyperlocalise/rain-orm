@@ -89,7 +89,8 @@ func TestSelectAdvancedComposition(t *testing.T) {
 		schema.TableModel
 		UserID *schema.Column[int64]
 		Total  *schema.Column[int64]
-	}) {
+	},
+	) {
 		t.UserID = t.BigInt("user_id")
 		t.Total = t.BigInt("total")
 	})
@@ -97,7 +98,8 @@ func TestSelectAdvancedComposition(t *testing.T) {
 		schema.TableModel
 		UserID *schema.Column[int64]
 		Total  *schema.Column[int64]
-	}) {
+	},
+	) {
 		t.UserID = t.BigInt("user_id")
 		t.Total = t.BigInt("total")
 	})
@@ -280,6 +282,23 @@ func TestSelectAdvancedComposition(t *testing.T) {
 				return db.Select().With("u", base).Table(users)
 			},
 			wantErr: "do not support CTEs",
+		},
+		{
+			name:    "nested cte body is invalid",
+			dialect: "postgres",
+			build: func(db *rain.DB) *rain.SelectQuery {
+				inner := db.Select().Table(users).Column(users.ID)
+				outerBody := db.Select().
+					With("inner", inner).
+					Table(users).
+					Column(users.ID)
+
+				return db.Select().
+					With("outer", outerBody).
+					Table(users).
+					Column(users.ID)
+			},
+			wantErr: `CTE "outer" body cannot itself contain CTEs`,
 		},
 	}
 
