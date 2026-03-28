@@ -1,9 +1,11 @@
 package rain_test
 
 import (
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/hyperlocalise/rain-orm/pkg/dialect"
 	"github.com/hyperlocalise/rain-orm/pkg/rain"
 	"github.com/hyperlocalise/rain-orm/pkg/schema"
 )
@@ -50,7 +52,10 @@ func defineTables() (*usersTable, *postsTable) {
 }
 
 func TestSelectToSQL(t *testing.T) {
-	db := rain.OpenDialect("postgres")
+	db, err := rain.OpenDialect("postgres")
+	if err != nil {
+		t.Fatalf("OpenDialect returned error: %v", err)
+	}
 	users, posts := defineTables()
 	u := schema.Alias(users, "u")
 	p := schema.Alias(posts, "p")
@@ -77,7 +82,10 @@ func TestSelectToSQL(t *testing.T) {
 }
 
 func TestInsertUpdateDeleteToSQL(t *testing.T) {
-	db := rain.OpenDialect("postgres")
+	db, err := rain.OpenDialect("postgres")
+	if err != nil {
+		t.Fatalf("OpenDialect returned error: %v", err)
+	}
 	users, _ := defineTables()
 
 	insertSQL, insertArgs, err := db.Insert().
@@ -128,22 +136,163 @@ func TestInsertUpdateDeleteToSQL(t *testing.T) {
 	}
 }
 
+func TestDialectFeatures(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name     string
+		dialect  string
+		features dialect.Feature
+		missing  []dialect.Feature
+	}{
+		{
+			name:    "postgres",
+			dialect: "postgres",
+			features: dialect.FeatureInsertReturning |
+				dialect.FeatureUpdateReturning |
+				dialect.FeatureDeleteReturning |
+				dialect.FeatureOffset |
+				dialect.FeatureUpsert |
+				dialect.FeatureCTE |
+				dialect.FeatureDefaultPlaceholder,
+		},
+		{
+			name:     "mysql",
+			dialect:  "mysql",
+			features: dialect.FeatureOffset | dialect.FeatureUpsert,
+			missing: []dialect.Feature{
+				dialect.FeatureInsertReturning,
+				dialect.FeatureUpdateReturning,
+				dialect.FeatureDeleteReturning,
+				dialect.FeatureCTE,
+				dialect.FeatureDefaultPlaceholder,
+			},
+		},
+		{
+			name:    "sqlite",
+			dialect: "sqlite",
+			features: dialect.FeatureInsertReturning |
+				dialect.FeatureUpdateReturning |
+				dialect.FeatureDeleteReturning |
+				dialect.FeatureOffset |
+				dialect.FeatureUpsert,
+			missing: []dialect.Feature{
+				dialect.FeatureCTE,
+				dialect.FeatureDefaultPlaceholder,
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			db, err := rain.OpenDialect(tc.dialect)
+			if err != nil {
+				t.Fatalf("OpenDialect returned error: %v", err)
+			}
+			got := db.Dialect().Features()
+			if got != tc.features {
+				t.Fatalf("unexpected features: want %b got %b", tc.features, got)
+			}
+			for _, feature := range tc.missing {
+				if dialect.HasFeature(got, feature) {
+					t.Fatalf("expected feature %b to be absent from %b", feature, got)
+				}
+			}
+		})
+	}
+}
+
+func TestOpenDialectUnknownDialectReturnsError(t *testing.T) {
+	t.Parallel()
+
+	db, err := rain.OpenDialect("postres")
+	if err == nil {
+		t.Fatalf("expected unsupported dialect error, got nil")
+	}
+	if db != nil {
+		t.Fatalf("expected nil db for unsupported dialect")
+	}
+}
+
 func TestReturningUnsupportedDialect(t *testing.T) {
-	db := rain.OpenDialect("mysql")
+	db, err := rain.OpenDialect("mysql")
+	if err != nil {
+		t.Fatalf("OpenDialect returned error: %v", err)
+	}
 	users, _ := defineTables()
 
-	_, _, err := db.Insert().
+	_, _, err = db.Insert().
 		Table(users).
 		Set(users.Name, "Alice").
 		Returning(users.ID).
 		ToSQL()
-	if err == nil {
-		t.Fatalf("expected RETURNING to fail on mysql dialect")
+	if err == nil || !strings.Contains(err.Error(), "insert queries do not support RETURNING") {
+		t.Fatalf("expected insert RETURNING to fail on mysql dialect, got %v", err)
+	}
+
+	_, _, err = db.Update().
+		Table(users).
+		Set(users.Name, "Alice").
+		Where(users.ID.Eq(int64(1))).
+		Returning(users.ID).
+		ToSQL()
+	if err == nil || !strings.Contains(err.Error(), "update queries do not support RETURNING") {
+		t.Fatalf("expected update RETURNING to fail on mysql dialect, got %v", err)
+	}
+
+	_, _, err = db.Delete().
+		Table(users).
+		Where(users.ID.Eq(int64(1))).
+		Returning(users.ID).
+		ToSQL()
+	if err == nil || !strings.Contains(err.Error(), "delete queries do not support RETURNING") {
+		t.Fatalf("expected delete RETURNING to fail on mysql dialect, got %v", err)
+	}
+}
+
+func TestReturningSupportedOperations(t *testing.T) {
+	db, err := rain.OpenDialect("postgres")
+	if err != nil {
+		t.Fatalf("OpenDialect returned error: %v", err)
+	}
+	users, _ := defineTables()
+
+	insertSQL, _, err := db.Insert().
+		Table(users).
+		Set(users.Name, "Alice").
+		Returning(users.ID).
+		ToSQL()
+	if err != nil || !strings.Contains(insertSQL, "RETURNING") {
+		t.Fatalf("expected insert RETURNING to compile, got sql=%q err=%v", insertSQL, err)
+	}
+
+	updateSQL, _, err := db.Update().
+		Table(users).
+		Set(users.Name, "Alice").
+		Where(users.ID.Eq(int64(1))).
+		Returning(users.ID).
+		ToSQL()
+	if err != nil || !strings.Contains(updateSQL, "RETURNING") {
+		t.Fatalf("expected update RETURNING to compile, got sql=%q err=%v", updateSQL, err)
+	}
+
+	deleteSQL, _, err := db.Delete().
+		Table(users).
+		Where(users.ID.Eq(int64(1))).
+		Returning(users.ID).
+		ToSQL()
+	if err != nil || !strings.Contains(deleteSQL, "RETURNING") {
+		t.Fatalf("expected delete RETURNING to compile, got sql=%q err=%v", deleteSQL, err)
 	}
 }
 
 func TestInsertModelAndSetMergeToSQL(t *testing.T) {
-	db := rain.OpenDialect("postgres")
+	db, err := rain.OpenDialect("postgres")
+	if err != nil {
+		t.Fatalf("OpenDialect returned error: %v", err)
+	}
 	users, _ := defineTables()
 
 	sqlText, args, err := db.Insert().
@@ -166,7 +315,10 @@ func TestInsertModelAndSetMergeToSQL(t *testing.T) {
 }
 
 func TestInsertOmitDefaultBackedZeroValues(t *testing.T) {
-	db := rain.OpenDialect("postgres")
+	db, err := rain.OpenDialect("postgres")
+	if err != nil {
+		t.Fatalf("OpenDialect returned error: %v", err)
+	}
 	users, _ := defineTables()
 
 	sqlText, args, err := db.Insert().

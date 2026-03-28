@@ -3,6 +3,7 @@ package rain_test
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -77,6 +78,21 @@ func TestOpenUnknownDriverReturnsError(t *testing.T) {
 	}
 	if db != nil {
 		t.Fatalf("expected nil db when open fails")
+	}
+}
+
+func TestOpenPostgresAliasReturnsHelpfulDriverError(t *testing.T) {
+	t.Parallel()
+
+	db, err := rain.Open("postgresql", "dsn")
+	if err == nil {
+		t.Fatalf("expected alias driver error, got nil")
+	}
+	if db != nil {
+		t.Fatalf("expected nil db when open fails")
+	}
+	if !strings.Contains(err.Error(), `dialect "postgresql" maps to "postgres"`) {
+		t.Fatalf("expected helpful alias message, got %v", err)
 	}
 }
 

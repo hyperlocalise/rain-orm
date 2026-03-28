@@ -193,7 +193,10 @@ func TestQueryExecutionPaths(t *testing.T) {
 func TestQueryBuilderAndHelperErrors(t *testing.T) {
 	t.Parallel()
 
-	db := OpenDialect("postgres")
+	db, err := OpenDialect("postgres")
+	if err != nil {
+		t.Fatalf("OpenDialect returned error: %v", err)
+	}
 	users, posts := defineInternalQueryTables()
 
 	if _, _, err := db.Select().ToSQL(); err == nil || !strings.Contains(err.Error(), "requires a table") {
@@ -291,7 +294,7 @@ func TestCompileContextAndAssignmentsHelpers(t *testing.T) {
 
 	users, posts := defineInternalQueryTables()
 
-	ctx := newCompileContext(dialectForTest("postgres"))
+	ctx := newCompileContext(dialectForTest(t, "postgres"))
 	if err := ctx.writeRaw(schema.Raw("NOW()")); err != nil {
 		t.Fatalf("writeRaw without args failed: %v", err)
 	}
@@ -299,7 +302,7 @@ func TestCompileContextAndAssignmentsHelpers(t *testing.T) {
 		t.Fatalf("unexpected raw SQL: %s", ctx.String())
 	}
 
-	ctx = newCompileContext(dialectForTest("postgres"))
+	ctx = newCompileContext(dialectForTest(t, "postgres"))
 	if err := ctx.writeRaw(schema.Raw("? + ?", 1, 2)); err != nil {
 		t.Fatalf("writeRaw placeholders failed: %v", err)
 	}
@@ -307,13 +310,13 @@ func TestCompileContextAndAssignmentsHelpers(t *testing.T) {
 		t.Fatalf("unexpected placeholder SQL: %s", ctx.String())
 	}
 
-	if err := newCompileContext(dialectForTest("postgres")).writeRaw(schema.Raw("?", 1, 2)); err == nil || !strings.Contains(err.Error(), "unused args") {
+	if err := newCompileContext(dialectForTest(t, "postgres")).writeRaw(schema.Raw("?", 1, 2)); err == nil || !strings.Contains(err.Error(), "unused args") {
 		t.Fatalf("expected raw unused args error, got %v", err)
 	}
-	if err := newCompileContext(dialectForTest("postgres")).writeRaw(schema.Raw("? ?", 1)); err == nil || !strings.Contains(err.Error(), "placeholder count") {
+	if err := newCompileContext(dialectForTest(t, "postgres")).writeRaw(schema.Raw("? ?", 1)); err == nil || !strings.Contains(err.Error(), "placeholder count") {
 		t.Fatalf("expected raw placeholder mismatch error, got %v", err)
 	}
-	if err := newCompileContext(dialectForTest("postgres")).writeExpression(nil); err == nil || !strings.Contains(err.Error(), "unsupported expression type") {
+	if err := newCompileContext(dialectForTest(t, "postgres")).writeExpression(nil); err == nil || !strings.Contains(err.Error(), "unsupported expression type") {
 		t.Fatalf("expected unsupported expression error, got %v", err)
 	}
 
@@ -424,6 +427,13 @@ func TestModelAssignmentAndValueHelpers(t *testing.T) {
 	}
 }
 
-func dialectForTest(driver string) dialect.Dialect {
-	return OpenDialect(driver).Dialect()
+func dialectForTest(t *testing.T, driver string) dialect.Dialect {
+	t.Helper()
+
+	db, err := OpenDialect(driver)
+	if err != nil {
+		t.Fatalf("OpenDialect returned error: %v", err)
+	}
+
+	return db.Dialect()
 }

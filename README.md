@@ -195,7 +195,10 @@ var Users = schema.Define("users", func(t *UsersTable) {
 import "github.com/quiet-circles/rain-orm/pkg/dialect"
 
 // Get dialect by name
-d := dialect.GetDialect("postgres")
+d, err := dialect.GetDialect("postgres")
+if err != nil {
+    panic(err)
+}
 
 // Use dialect-specific features
 quoted := d.QuoteIdentifier("users")  // "users"
