@@ -89,7 +89,8 @@ func TestSelectAdvancedComposition(t *testing.T) {
 		schema.TableModel
 		UserID *schema.Column[int64]
 		Total  *schema.Column[int64]
-	}) {
+	},
+	) {
 		t.UserID = t.BigInt("user_id")
 		t.Total = t.BigInt("total")
 	})
@@ -97,7 +98,8 @@ func TestSelectAdvancedComposition(t *testing.T) {
 		schema.TableModel
 		UserID *schema.Column[int64]
 		Total  *schema.Column[int64]
-	}) {
+	},
+	) {
 		t.UserID = t.BigInt("user_id")
 		t.Total = t.BigInt("total")
 	})
