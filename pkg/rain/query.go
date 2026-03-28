@@ -215,6 +215,9 @@ func (q *SelectQuery) writeSQL(ctx *compileContext) error {
 			if cte.query == nil {
 				return fmt.Errorf("rain: CTE %q requires a query", cte.name)
 			}
+			if len(cte.query.ctes) > 0 {
+				return fmt.Errorf("rain: CTE %q body cannot itself contain CTEs", cte.name)
+			}
 			ctx.writeQuotedIdentifier(cte.name)
 			ctx.writeString(" AS (")
 			if err := cte.query.writeSQL(ctx); err != nil {
