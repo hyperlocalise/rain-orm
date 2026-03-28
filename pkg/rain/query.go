@@ -29,6 +29,11 @@ type assignment struct {
 	value  schema.Expression
 }
 
+type returningClause struct {
+	feature dialect.Feature
+	label   string
+}
+
 func closeRows(rows *sql.Rows, errp *error) {
 	if err := rows.Close(); err != nil && *errp == nil {
 		*errp = err
@@ -343,11 +348,18 @@ func (q *InsertQuery) ToSQL() (string, []any, error) {
 	}
 	ctx.writeByte(')')
 
-	if err := ctx.writeReturning(q.returning); err != nil {
+	if err := ctx.writeReturning(q.returning, q.returningClause()); err != nil {
 		return "", nil, err
 	}
 
 	return ctx.String(), ctx.args, ctx.err
+}
+
+func (q *InsertQuery) returningClause() returningClause {
+	return returningClause{
+		feature: dialect.FeatureInsertReturning,
+		label:   "insert",
+	}
 }
 
 // Exec executes the INSERT query.
@@ -493,11 +505,18 @@ func (q *UpdateQuery) ToSQL() (string, []any, error) {
 		}
 	}
 
-	if err := ctx.writeReturning(q.returning); err != nil {
+	if err := ctx.writeReturning(q.returning, q.returningClause()); err != nil {
 		return "", nil, err
 	}
 
 	return ctx.String(), ctx.args, ctx.err
+}
+
+func (q *UpdateQuery) returningClause() returningClause {
+	return returningClause{
+		feature: dialect.FeatureUpdateReturning,
+		label:   "update",
+	}
 }
 
 // Exec executes the UPDATE query.
@@ -591,11 +610,18 @@ func (q *DeleteQuery) ToSQL() (string, []any, error) {
 		}
 	}
 
-	if err := ctx.writeReturning(q.returning); err != nil {
+	if err := ctx.writeReturning(q.returning, q.returningClause()); err != nil {
 		return "", nil, err
 	}
 
 	return ctx.String(), ctx.args, ctx.err
+}
+
+func (q *DeleteQuery) returningClause() returningClause {
+	return returningClause{
+		feature: dialect.FeatureDeleteReturning,
+		label:   "delete",
+	}
 }
 
 // Exec executes the DELETE query.
@@ -678,12 +704,12 @@ func (c *compileContext) writeTable(table *schema.TableDef) {
 	}
 }
 
-func (c *compileContext) writeReturning(exprs []schema.Expression) error {
+func (c *compileContext) writeReturning(exprs []schema.Expression, clause returningClause) error {
 	if len(exprs) == 0 {
 		return nil
 	}
-	if !c.dialect.ReturningClause() {
-		return errors.New("rain: dialect does not support RETURNING")
+	if !dialect.HasFeature(c.dialect.Features(), clause.feature) {
+		return fmt.Errorf("rain: %s queries do not support RETURNING for %s dialect", clause.label, c.dialect.Name())
 	}
 
 	c.writeString(" RETURNING ")

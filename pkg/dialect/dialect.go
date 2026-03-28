@@ -2,15 +2,13 @@
 // Implement this interface to add support for new database engines.
 package dialect
 
-import (
-	"strconv"
-	"strings"
-)
-
 // Dialect represents a database-specific SQL dialect.
 type Dialect interface {
 	// Name returns the dialect name (e.g., "postgres", "mysql", "sqlite").
 	Name() string
+
+	// Features returns the set of SQL capabilities supported by the dialect.
+	Features() Feature
 
 	// QuoteIdentifier quotes a database identifier (table/column name).
 	QuoteIdentifier(name string) string
@@ -30,9 +28,6 @@ type Dialect interface {
 	// LimitOffset returns the LIMIT/OFFSET clause SQL.
 	LimitOffset(limit, offset int) string
 
-	// ReturningClause returns true if the dialect supports RETURNING.
-	ReturningClause() bool
-
 	// UpsertClause returns the UPSERT syntax (INSERT ... ON CONFLICT, etc.).
 	UpsertClause(table string, conflictCols []string, updateCols []string) string
 
@@ -46,9 +41,13 @@ type Dialect interface {
 // BaseDialect provides common implementations.
 type BaseDialect struct{}
 
+// Features returns the default shared feature set.
+func (d *BaseDialect) Features() Feature {
+	return 0
+}
+
 // DataType returns default SQL type mapping.
 func (d *BaseDialect) DataType(typ string, size int) string {
-	// Default type mapping
 	switch typ {
 	case "string":
 		if size > 0 {
@@ -80,299 +79,4 @@ func (d *BaseDialect) DefaultValue(value interface{}) string {
 // UpsertClause returns generic upsert syntax.
 func (d *BaseDialect) UpsertClause(table string, conflictCols []string, updateCols []string) string {
 	return ""
-}
-
-// PostgresDialect implements PostgreSQL-specific SQL.
-type PostgresDialect struct {
-	BaseDialect
-}
-
-// Name returns the dialect name.
-func (d *PostgresDialect) Name() string {
-	return "postgres"
-}
-
-// QuoteIdentifier quotes identifiers with double quotes.
-// Inner double quotes are escaped by doubling them.
-func (d *PostgresDialect) QuoteIdentifier(name string) string {
-	return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
-}
-
-// Placeholder returns PostgreSQL-style $n placeholders.
-func (d *PostgresDialect) Placeholder(n int) string {
-	return "$" + strconv.Itoa(n)
-}
-
-// DataType returns PostgreSQL-specific type.
-func (d *PostgresDialect) DataType(typ string, size int) string {
-	switch typ {
-	case "string":
-		if size > 0 {
-			return "VARCHAR"
-		}
-		return "TEXT"
-	case "int", "int32":
-		return "INTEGER"
-	case "int64":
-		return "BIGINT"
-	case "float32":
-		return "REAL"
-	case "float64":
-		return "DOUBLE PRECISION"
-	case "bool":
-		return "BOOLEAN"
-	case "time":
-		return "TIMESTAMPTZ"
-	case "json":
-		return "JSONB"
-	case "uuid":
-		return "UUID"
-	case "bytes":
-		return "BYTEA"
-	default:
-		return typ
-	}
-}
-
-// AutoIncrementKeyword returns SERIAL for PostgreSQL.
-func (d *PostgresDialect) AutoIncrementKeyword() string {
-	return "SERIAL"
-}
-
-// LimitOffset returns PostgreSQL LIMIT/OFFSET syntax.
-func (d *PostgresDialect) LimitOffset(limit, offset int) string {
-	if limit > 0 && offset > 0 {
-		return "LIMIT " + strconv.Itoa(limit) + " OFFSET " + strconv.Itoa(offset)
-	}
-	if limit > 0 {
-		return "LIMIT " + strconv.Itoa(limit)
-	}
-	if offset > 0 {
-		return "OFFSET " + strconv.Itoa(offset)
-	}
-	return ""
-}
-
-// ReturningClause returns true (PostgreSQL supports RETURNING).
-func (d *PostgresDialect) ReturningClause() bool {
-	return true
-}
-
-// UpsertClause returns PostgreSQL upsert syntax.
-func (d *PostgresDialect) UpsertClause(table string, conflictCols []string, updateCols []string) string {
-	// INSERT ... ON CONFLICT DO UPDATE
-	return "ON CONFLICT DO UPDATE"
-}
-
-// DefaultValue returns PostgreSQL default value.
-func (d *PostgresDialect) DefaultValue(value interface{}) string {
-	return "DEFAULT"
-}
-
-// BooleanLiteral returns PostgreSQL boolean literals.
-func (d *PostgresDialect) BooleanLiteral(v bool) string {
-	if v {
-		return "TRUE"
-	}
-	return "FALSE"
-}
-
-// CurrentTimestamp returns PostgreSQL current timestamp.
-func (d *PostgresDialect) CurrentTimestamp() string {
-	return "CURRENT_TIMESTAMP"
-}
-
-// MySQLDialect implements MySQL-specific SQL.
-type MySQLDialect struct {
-	BaseDialect
-}
-
-// Name returns the dialect name.
-func (d *MySQLDialect) Name() string {
-	return "mysql"
-}
-
-// QuoteIdentifier quotes identifiers with backticks.
-// Inner backticks are escaped by doubling them.
-func (d *MySQLDialect) QuoteIdentifier(name string) string {
-	return "`" + strings.ReplaceAll(name, "`", "``") + "`"
-}
-
-// Placeholder returns MySQL-style ? placeholders.
-func (d *MySQLDialect) Placeholder(n int) string {
-	return "?"
-}
-
-// DataType returns MySQL-specific type.
-func (d *MySQLDialect) DataType(typ string, size int) string {
-	switch typ {
-	case "string":
-		if size > 0 {
-			return "VARCHAR"
-		}
-		return "TEXT"
-	case "int", "int32":
-		return "INT"
-	case "int64":
-		return "BIGINT"
-	case "float32":
-		return "FLOAT"
-	case "float64":
-		return "DOUBLE"
-	case "bool":
-		return "BOOLEAN"
-	case "time":
-		return "DATETIME"
-	case "json":
-		return "JSON"
-	default:
-		return typ
-	}
-}
-
-// AutoIncrementKeyword returns AUTO_INCREMENT for MySQL.
-func (d *MySQLDialect) AutoIncrementKeyword() string {
-	return "AUTO_INCREMENT"
-}
-
-// LimitOffset returns MySQL LIMIT/OFFSET syntax.
-func (d *MySQLDialect) LimitOffset(limit, offset int) string {
-	if limit > 0 {
-		if offset > 0 {
-			return "LIMIT " + strconv.Itoa(offset) + ", " + strconv.Itoa(limit)
-		}
-		return "LIMIT " + strconv.Itoa(limit)
-	}
-	if offset > 0 {
-		// MySQL requires a LIMIT when using OFFSET
-		return "LIMIT 18446744073709551615 OFFSET " + strconv.Itoa(offset)
-	}
-	return ""
-}
-
-// ReturningClause returns false (MySQL doesn't support RETURNING until 8.0.19).
-func (d *MySQLDialect) ReturningClause() bool {
-	return false
-}
-
-// UpsertClause returns MySQL upsert syntax.
-func (d *MySQLDialect) UpsertClause(table string, conflictCols []string, updateCols []string) string {
-	return "ON DUPLICATE KEY UPDATE"
-}
-
-// DefaultValue returns MySQL default value.
-func (d *MySQLDialect) DefaultValue(value interface{}) string {
-	return "DEFAULT"
-}
-
-// BooleanLiteral returns MySQL boolean literals.
-func (d *MySQLDialect) BooleanLiteral(v bool) string {
-	if v {
-		return "1"
-	}
-	return "0"
-}
-
-// CurrentTimestamp returns MySQL current timestamp.
-func (d *MySQLDialect) CurrentTimestamp() string {
-	return "CURRENT_TIMESTAMP"
-}
-
-// SQLiteDialect implements SQLite-specific SQL.
-type SQLiteDialect struct {
-	BaseDialect
-}
-
-// Name returns the dialect name.
-func (d *SQLiteDialect) Name() string {
-	return "sqlite"
-}
-
-// QuoteIdentifier quotes identifiers with double quotes.
-// Inner double quotes are escaped by doubling them.
-func (d *SQLiteDialect) QuoteIdentifier(name string) string {
-	return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
-}
-
-// Placeholder returns SQLite-style ? placeholders.
-func (d *SQLiteDialect) Placeholder(n int) string {
-	return "?"
-}
-
-// DataType returns SQLite-specific type.
-func (d *SQLiteDialect) DataType(typ string, size int) string {
-	switch typ {
-	case "string":
-		return "TEXT"
-	case "int", "int32", "int64":
-		return "INTEGER"
-	case "float32", "float64":
-		return "REAL"
-	case "bool":
-		return "INTEGER"
-	case "time":
-		return "TEXT"
-	case "json":
-		return "TEXT"
-	default:
-		return typ
-	}
-}
-
-// AutoIncrementKeyword returns AUTOINCREMENT for SQLite.
-func (d *SQLiteDialect) AutoIncrementKeyword() string {
-	return "AUTOINCREMENT"
-}
-
-// LimitOffset returns SQLite LIMIT/OFFSET syntax.
-func (d *SQLiteDialect) LimitOffset(limit, offset int) string {
-	if limit > 0 {
-		if offset > 0 {
-			return "LIMIT " + strconv.Itoa(limit) + " OFFSET " + strconv.Itoa(offset)
-		}
-		return "LIMIT " + strconv.Itoa(limit)
-	}
-	return ""
-}
-
-// ReturningClause returns true (SQLite 3.35+ supports RETURNING).
-func (d *SQLiteDialect) ReturningClause() bool {
-	return true
-}
-
-// UpsertClause returns SQLite upsert syntax.
-func (d *SQLiteDialect) UpsertClause(table string, conflictCols []string, updateCols []string) string {
-	return "ON CONFLICT DO UPDATE"
-}
-
-// DefaultValue returns SQLite default value.
-func (d *SQLiteDialect) DefaultValue(value interface{}) string {
-	return "DEFAULT"
-}
-
-// BooleanLiteral returns SQLite boolean literals.
-func (d *SQLiteDialect) BooleanLiteral(v bool) string {
-	if v {
-		return "1"
-	}
-	return "0"
-}
-
-// CurrentTimestamp returns SQLite current timestamp.
-func (d *SQLiteDialect) CurrentTimestamp() string {
-	return "CURRENT_TIMESTAMP"
-}
-
-// GetDialect returns a dialect by name.
-func GetDialect(name string) Dialect {
-	switch name {
-	case "postgres", "postgresql":
-		return &PostgresDialect{}
-	case "mysql":
-		return &MySQLDialect{}
-	case "sqlite", "sqlite3":
-		return &SQLiteDialect{}
-	default:
-		return &PostgresDialect{}
-	}
 }

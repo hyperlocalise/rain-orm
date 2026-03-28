@@ -21,6 +21,11 @@ type DB struct {
 
 // Open creates a database handle for the selected dialect.
 func Open(driver, dsn string) (*DB, error) {
+	d, err := dialect.GetDialect(driver)
+	if err != nil {
+		return nil, err
+	}
+
 	db, err := sql.Open(driver, dsn)
 	if err != nil {
 		return nil, fmt.Errorf("rain: open %s database: %w", driver, err)
@@ -28,15 +33,20 @@ func Open(driver, dsn string) (*DB, error) {
 
 	return &DB{
 		db:      db,
-		dialect: dialect.GetDialect(driver),
+		dialect: d,
 	}, nil
 }
 
 // OpenDialect creates a dialect-only handle that can compile SQL without a live database connection.
-func OpenDialect(driver string) *DB {
-	return &DB{
-		dialect: dialect.GetDialect(driver),
+func OpenDialect(driver string) (*DB, error) {
+	d, err := dialect.GetDialect(driver)
+	if err != nil {
+		return nil, err
 	}
+
+	return &DB{
+		dialect: d,
+	}, nil
 }
 
 // Close closes the database connection.

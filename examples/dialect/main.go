@@ -14,15 +14,24 @@ import (
 func main() {
 	// Test with PostgreSQL
 	fmt.Println("=== PostgreSQL ===")
-	demoDialect(dialect.GetDialect("postgres"))
+	demo("postgres")
 
 	// Test with MySQL
 	fmt.Println("\n=== MySQL ===")
-	demoDialect(dialect.GetDialect("mysql"))
+	demo("mysql")
 
 	// Test with SQLite
 	fmt.Println("\n=== SQLite ===")
-	demoDialect(dialect.GetDialect("sqlite"))
+	demo("sqlite")
+}
+
+func demo(name string) {
+	d, err := dialect.GetDialect(name)
+	if err != nil {
+		panic(err)
+	}
+
+	demoDialect(d)
 }
 
 func demoDialect(d dialect.Dialect) {
@@ -49,7 +58,7 @@ func demoDialect(d dialect.Dialect) {
 	fmt.Printf("LIMIT 10 OFFSET 20: %s\n", d.LimitOffset(10, 20))
 
 	// RETURNING support
-	fmt.Printf("Supports RETURNING: %v\n", d.ReturningClause())
+	fmt.Printf("Supports INSERT RETURNING: %v\n", dialect.HasFeature(d.Features(), dialect.FeatureInsertReturning))
 
 	// Boolean literals
 	fmt.Printf("Boolean true: %s\n", d.BooleanLiteral(true))
