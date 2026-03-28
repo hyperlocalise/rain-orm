@@ -3,13 +3,14 @@ module github.com/hyperlocalise/rain-orm
 go 1.26
 
 tool (
-	github.com/daixiang0/gci
 	github.com/go-critic/go-critic/cmd/gocritic
 	github.com/golangci/golangci-lint/v2/cmd/golangci-lint
 	golang.org/x/tools/cmd/goimports
 	honnef.co/go/tools/cmd/staticcheck
 	mvdan.cc/gofumpt
 )
+
+require modernc.org/sqlite v1.48.0
 
 require (
 	4d63.com/gocheckcompilerdirectives v1.3.0 // indirect
@@ -227,7 +228,6 @@ require (
 	modernc.org/libc v1.70.0 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
-	modernc.org/sqlite v1.48.0 // indirect
 	mvdan.cc/gofumpt v0.9.2 // indirect
 	mvdan.cc/unparam v0.0.0-20251027182757-5beb8c8f8f15 // indirect
 )

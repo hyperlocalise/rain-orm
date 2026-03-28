@@ -1,30 +1,28 @@
 {
   "languages": {
     "Go": {
-      "language_servers": ["gopls", "!gpt"],
-      "format_on_save": "off",
-      "formatter": {
-        "external": {
-          "command": "make",
-          "arguments": ["fmt-file", "FILE={buffer_path}"],
-        },
-      },
-    },
+      "language_servers": [
+        "gopls",
+        "!gpt"
+      ],
+      "format_on_save": "on"
+    }
   },
   "lsp": {
     "gopls": {
       "settings": {
         "gopls": {
+          "formatting.gofumpt": true,
           "ui.diagnostic.annotations": {
             "bounds": true,
             "escape": true,
             "inline": true,
-            "nil": true,
+            "nil": true
           },
           "ui.diagnostic.staticcheck": true,
-          "ui.diagnostic.vulncheck": "Imports",
-        },
-      },
-    },
-  },
+          "ui.diagnostic.vulncheck": "Imports"
+        }
+      }
+    }
+  }
 }
