@@ -3,6 +3,8 @@ package dialect
 import (
 	"strconv"
 	"strings"
+
+	"github.com/hyperlocalise/rain-orm/pkg/schema"
 )
 
 // MySQLDialect implements MySQL-specific SQL.
@@ -32,29 +34,51 @@ func (d *MySQLDialect) Placeholder(n int) string {
 }
 
 // DataType returns MySQL-specific type.
-func (d *MySQLDialect) DataType(typ string, size int) string {
+func (d *MySQLDialect) DataType(columnType schema.ColumnType) string {
+	typ := normalizeType(columnType.DataType)
+
 	switch typ {
-	case "string":
-		if size > 0 {
+	case "bigserial":
+		return "BIGINT"
+	case "smallint":
+		return "SMALLINT"
+	case "string", "varchar":
+		if columnType.Size > 0 {
 			return "VARCHAR"
 		}
 		return "TEXT"
-	case "int", "int32":
+	case "text":
+		return "TEXT"
+	case "int", "int32", "integer":
 		return "INT"
-	case "int64":
+	case "int64", "bigint":
 		return "BIGINT"
-	case "float32":
+	case "decimal":
+		return renderDecimalType("DECIMAL", columnType)
+	case "float32", "real":
 		return "FLOAT"
-	case "float64":
+	case "float64", "double":
 		return "DOUBLE"
-	case "bool":
+	case "bool", "boolean":
 		return "BOOLEAN"
-	case "time":
+	case "date":
+		return "DATE"
+	case "timestamp":
+		return "TIMESTAMP"
+	case "time", "timestamptz":
 		return "DATETIME"
 	case "json":
 		return "JSON"
+	case "jsonb":
+		return "JSON"
+	case "uuid":
+		return "CHAR(36)"
+	case "enum":
+		return "VARCHAR(255)"
+	case "bytes":
+		return "BLOB"
 	default:
-		return typ
+		return string(columnType.DataType)
 	}
 }
 

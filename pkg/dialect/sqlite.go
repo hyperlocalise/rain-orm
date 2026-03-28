@@ -3,6 +3,8 @@ package dialect
 import (
 	"strconv"
 	"strings"
+
+	"github.com/hyperlocalise/rain-orm/pkg/schema"
 )
 
 // SQLiteDialect implements SQLite-specific SQL.
@@ -36,22 +38,32 @@ func (d *SQLiteDialect) Placeholder(n int) string {
 }
 
 // DataType returns SQLite-specific type.
-func (d *SQLiteDialect) DataType(typ string, size int) string {
+func (d *SQLiteDialect) DataType(columnType schema.ColumnType) string {
+	typ := normalizeType(columnType.DataType)
+
 	switch typ {
-	case "string":
-		return "TEXT"
-	case "int", "int32", "int64":
+	case "bigserial":
 		return "INTEGER"
-	case "float32", "float64":
+	case "string", "varchar", "text":
+		return "TEXT"
+	case "smallint", "int", "int32", "int64", "integer", "bigint":
+		return "INTEGER"
+	case "decimal", "float32", "float64", "real", "double":
 		return "REAL"
-	case "bool":
+	case "bool", "boolean":
 		return "INTEGER"
-	case "time":
+	case "date", "timestamp":
 		return "TEXT"
-	case "json":
+	case "time", "timestamptz":
 		return "TEXT"
+	case "json", "jsonb":
+		return "TEXT"
+	case "uuid", "enum":
+		return "TEXT"
+	case "bytes":
+		return "BLOB"
 	default:
-		return typ
+		return string(columnType.DataType)
 	}
 }
 

@@ -3,6 +3,8 @@ package dialect
 import (
 	"strconv"
 	"strings"
+
+	"github.com/hyperlocalise/rain-orm/pkg/schema"
 )
 
 // PostgresDialect implements PostgreSQL-specific SQL.
@@ -38,33 +40,51 @@ func (d *PostgresDialect) Placeholder(n int) string {
 }
 
 // DataType returns PostgreSQL-specific type.
-func (d *PostgresDialect) DataType(typ string, size int) string {
+func (d *PostgresDialect) DataType(columnType schema.ColumnType) string {
+	typ := normalizeType(columnType.DataType)
+
 	switch typ {
-	case "string":
-		if size > 0 {
+	case "bigserial":
+		return "BIGSERIAL"
+	case "smallint":
+		return "SMALLINT"
+	case "string", "varchar":
+		if columnType.Size > 0 {
 			return "VARCHAR"
 		}
 		return "TEXT"
-	case "int", "int32":
+	case "text":
+		return "TEXT"
+	case "int", "int32", "integer":
 		return "INTEGER"
-	case "int64":
+	case "int64", "bigint":
 		return "BIGINT"
-	case "float32":
+	case "decimal":
+		return renderDecimalType("NUMERIC", columnType)
+	case "float32", "real":
 		return "REAL"
-	case "float64":
+	case "float64", "double":
 		return "DOUBLE PRECISION"
-	case "bool":
+	case "bool", "boolean":
 		return "BOOLEAN"
-	case "time":
+	case "date":
+		return "DATE"
+	case "timestamp":
+		return "TIMESTAMP"
+	case "time", "timestamptz":
 		return "TIMESTAMPTZ"
 	case "json":
+		return "JSON"
+	case "jsonb":
 		return "JSONB"
+	case "enum":
+		return "TEXT"
 	case "uuid":
 		return "UUID"
 	case "bytes":
 		return "BYTEA"
 	default:
-		return typ
+		return string(columnType.DataType)
 	}
 }
 

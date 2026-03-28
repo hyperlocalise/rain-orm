@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hyperlocalise/rain-orm/pkg/dialect"
 	"github.com/hyperlocalise/rain-orm/pkg/rain"
 	"github.com/hyperlocalise/rain-orm/pkg/schema"
 	_ "modernc.org/sqlite"
@@ -194,6 +195,82 @@ func TestSQLiteIntegrationInsertDefaultsOverridesAndScan(t *testing.T) {
 	}
 }
 
+func TestSQLiteIntegrationDialectTypeRendering(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db := openSQLiteTestDB(t)
+
+	sqliteDialect, err := dialect.GetDialect("sqlite")
+	if err != nil {
+		t.Fatalf("get sqlite dialect: %v", err)
+	}
+
+	statement := `CREATE TABLE dialect_types (
+		ratio ` + sqliteDialect.DataType(schema.ColumnType{DataType: schema.TypeReal}) + ` NOT NULL,
+		precise ` + sqliteDialect.DataType(schema.ColumnType{DataType: schema.TypeDouble}) + ` NOT NULL,
+		amount ` + sqliteDialect.DataType(schema.ColumnType{DataType: schema.TypeDecimal, Precision: 12, Scale: 2}) + ` NOT NULL,
+		created_at ` + sqliteDialect.DataType(schema.ColumnType{DataType: schema.TypeTimestampTZ}) + ` NOT NULL,
+		metadata ` + sqliteDialect.DataType(schema.ColumnType{DataType: schema.TypeJSONB}) + `,
+		external_id ` + sqliteDialect.DataType(schema.ColumnType{DataType: schema.TypeUUID}) + `,
+		status ` + sqliteDialect.DataType(schema.ColumnType{DataType: schema.TypeEnum, EnumValues: []string{"draft", "published"}}) + `,
+		payload ` + sqliteDialect.DataType(schema.ColumnType{DataType: schema.TypeBytes}) + `
+	)`
+
+	if _, err := db.Exec(ctx, statement); err != nil {
+		t.Fatalf("create dialect_types table failed: %v", err)
+	}
+
+	rows, err := db.Query(ctx, `PRAGMA table_info(dialect_types)`)
+	if err != nil {
+		t.Fatalf("query pragma table_info: %v", err)
+	}
+	defer func() {
+		if err := rows.Close(); err != nil {
+			t.Errorf("close pragma table_info rows: %v", err)
+		}
+	}()
+
+	got := map[string]string{}
+	for rows.Next() {
+		var (
+			cid        int
+			name       string
+			declared   string
+			notNull    int
+			defaultSQL any
+			primaryKey int
+		)
+		if err := rows.Scan(&cid, &name, &declared, &notNull, &defaultSQL, &primaryKey); err != nil {
+			t.Fatalf("scan pragma table_info row: %v", err)
+		}
+		got[name] = declared
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate pragma table_info rows: %v", err)
+	}
+
+	want := map[string]string{
+		"ratio":       "REAL",
+		"precise":     "REAL",
+		"amount":      "REAL",
+		"created_at":  "TEXT",
+		"metadata":    "TEXT",
+		"external_id": "TEXT",
+		"status":      "TEXT",
+		"payload":     "BLOB",
+	}
+
+	if len(got) != len(want) {
+		t.Fatalf("expected %d columns, got %d: %#v", len(want), len(got), got)
+	}
+	for name, expectedType := range want {
+		if got[name] != expectedType {
+			t.Fatalf("column %q: want declared type %q got %q", name, expectedType, got[name])
+		}
+	}
+}
+
 func openSQLiteTestDB(t *testing.T) *rain.DB {
 	t.Helper()
 
@@ -212,23 +289,13 @@ func openSQLiteTestDB(t *testing.T) *rain.DB {
 func createSQLiteSchema(t *testing.T, ctx context.Context, db *rain.DB) {
 	t.Helper()
 
-	statements := []string{
-		`CREATE TABLE users (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			email TEXT NOT NULL,
-			name TEXT NOT NULL DEFAULT 'guest',
-			active BOOLEAN NOT NULL DEFAULT 1,
-			nickname TEXT DEFAULT 'buddy',
-			created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-		)`,
-		`CREATE TABLE posts (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			user_id INTEGER NOT NULL,
-			title TEXT NOT NULL
-		)`,
-	}
+	users, posts := defineSQLiteTables()
 
-	for _, statement := range statements {
+	for _, table := range []schema.TableReference{users, posts} {
+		statement, err := db.CreateTableSQL(table)
+		if err != nil {
+			t.Fatalf("compile schema for %q: %v", table.TableDef().Name, err)
+		}
 		if _, err := db.Exec(ctx, statement); err != nil {
 			t.Fatalf("exec schema statement %q: %v", statement, err)
 		}
