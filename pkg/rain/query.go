@@ -296,6 +296,8 @@ func (q *InsertQuery) Table(table schema.TableReference) *InsertQuery {
 }
 
 // Model sets a struct payload for the insert.
+// Zero-valued fields for columns with schema defaults are omitted so the
+// database default applies; use Set to override that behavior explicitly.
 func (q *InsertQuery) Model(model any) *InsertQuery {
 	q.model = model
 	return q
@@ -424,6 +426,7 @@ type UpdateQuery struct {
 	values    []assignment
 	where     []schema.Predicate
 	returning []schema.Expression
+	unbounded bool
 }
 
 // Table sets the UPDATE target table.
@@ -450,6 +453,12 @@ func (q *UpdateQuery) Returning(exprs ...schema.Expression) *UpdateQuery {
 	return q
 }
 
+// Unbounded allows UPDATE without a WHERE clause.
+func (q *UpdateQuery) Unbounded() *UpdateQuery {
+	q.unbounded = true
+	return q
+}
+
 // ToSQL compiles the update into SQL and args.
 func (q *UpdateQuery) ToSQL() (string, []any, error) {
 	if q.table == nil {
@@ -457,6 +466,9 @@ func (q *UpdateQuery) ToSQL() (string, []any, error) {
 	}
 	if len(q.values) == 0 {
 		return "", nil, errors.New("rain: update query requires at least one assignment")
+	}
+	if len(q.where) == 0 && !q.unbounded {
+		return "", nil, errors.New("rain: update query requires at least one WHERE predicate; call Unbounded() to allow all rows")
 	}
 
 	ctx := newCompileContext(q.dialect)
@@ -533,6 +545,7 @@ type DeleteQuery struct {
 	table     *schema.TableDef
 	where     []schema.Predicate
 	returning []schema.Expression
+	unbounded bool
 }
 
 // Table sets the DELETE target table.
@@ -553,10 +566,19 @@ func (q *DeleteQuery) Returning(exprs ...schema.Expression) *DeleteQuery {
 	return q
 }
 
+// Unbounded allows DELETE without a WHERE clause.
+func (q *DeleteQuery) Unbounded() *DeleteQuery {
+	q.unbounded = true
+	return q
+}
+
 // ToSQL compiles the delete into SQL and args.
 func (q *DeleteQuery) ToSQL() (string, []any, error) {
 	if q.table == nil {
 		return "", nil, errors.New("rain: delete query requires a table")
+	}
+	if len(q.where) == 0 && !q.unbounded {
+		return "", nil, errors.New("rain: delete query requires at least one WHERE predicate; call Unbounded() to allow all rows")
 	}
 
 	ctx := newCompileContext(q.dialect)

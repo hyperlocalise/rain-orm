@@ -156,10 +156,6 @@ func TestSchemaInternalPanicsAndCloners(t *testing.T) {
 	})
 	assertPanics(t, func() { users.C("missing") })
 	assertPanics(t, func() {
-		idx := users.Index("broken")
-		idx.On(123)
-	})
-	assertPanics(t, func() {
 		idx := users.Index("also-broken")
 		idx.On(OrderExpr{Expr: Raw("x"), Direction: SortAsc})
 	})

@@ -104,6 +104,11 @@ type IndexColumn struct {
 	Direction SortDirection
 }
 
+// IndexColumnSpec is implemented by values that can be bound to an index.
+type IndexColumnSpec interface {
+	indexColumnSpec()
+}
+
 // TableModel is embedded in user-defined table structs.
 type TableModel struct {
 	def *TableDef
@@ -235,7 +240,8 @@ func (c *AnyColumn) Desc() OrderExpr {
 	return OrderExpr{Expr: c, Direction: SortDesc}
 }
 
-func (c *AnyColumn) isExpression() {}
+func (c *AnyColumn) isExpression()    {}
+func (c *AnyColumn) indexColumnSpec() {}
 
 // Column represents a typed column handle.
 type Column[T any] struct {
@@ -357,7 +363,8 @@ func (c *Column[T]) Desc() OrderExpr {
 	return OrderExpr{Expr: c, Direction: SortDesc}
 }
 
-func (c *Column[T]) isExpression() {}
+func (c *Column[T]) isExpression()    {}
+func (c *Column[T]) indexColumnSpec() {}
 
 // ValueExpr wraps a Go value for SQL rendering.
 type ValueExpr struct {
@@ -400,6 +407,8 @@ type OrderExpr struct {
 	Direction SortDirection
 }
 
+func (OrderExpr) indexColumnSpec() {}
+
 // RawExpr is an escape hatch for raw SQL with bound args.
 type RawExpr struct {
 	SQL  string
@@ -430,7 +439,7 @@ type IndexBuilder struct {
 }
 
 // On binds ordered columns to the index.
-func (b *IndexBuilder) On(columns ...any) *IndexBuilder {
+func (b *IndexBuilder) On(columns ...IndexColumnSpec) *IndexBuilder {
 	resolved := make([]IndexColumn, 0, len(columns))
 	for _, column := range columns {
 		switch value := column.(type) {

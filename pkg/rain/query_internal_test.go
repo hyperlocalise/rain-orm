@@ -235,6 +235,12 @@ func TestQueryBuilderAndHelperErrors(t *testing.T) {
 	if _, _, err := db.Update().Table(users).ToSQL(); err == nil || !strings.Contains(err.Error(), "requires at least one assignment") {
 		t.Fatalf("expected update assignment error, got %v", err)
 	}
+	if _, _, err := db.Update().Table(users).Set(users.Name, "Alice").ToSQL(); err == nil || !strings.Contains(err.Error(), "requires at least one WHERE predicate") {
+		t.Fatalf("expected update WHERE guard error, got %v", err)
+	}
+	if _, _, err := db.Update().Table(users).Set(users.Name, "Alice").Unbounded().ToSQL(); err != nil {
+		t.Fatalf("expected unbounded update to succeed, got %v", err)
+	}
 	updateNoRunner := &UpdateQuery{dialect: db.Dialect(), table: users.TableDef(), values: []assignment{{column: users.Name, value: schema.ValueExpr{Value: "Alice"}}}, returning: []schema.Expression{users.ID}}
 	if err := updateNoRunner.Scan(context.Background(), &internalUserRow{}); !errors.Is(err, ErrNoConnection) {
 		t.Fatalf("expected update scan ErrNoConnection, got %v", err)
@@ -246,6 +252,12 @@ func TestQueryBuilderAndHelperErrors(t *testing.T) {
 
 	if _, _, err := db.Delete().ToSQL(); err == nil || !strings.Contains(err.Error(), "requires a table") {
 		t.Fatalf("expected delete table error, got %v", err)
+	}
+	if _, _, err := db.Delete().Table(users).ToSQL(); err == nil || !strings.Contains(err.Error(), "requires at least one WHERE predicate") {
+		t.Fatalf("expected delete WHERE guard error, got %v", err)
+	}
+	if _, _, err := db.Delete().Table(users).Unbounded().ToSQL(); err != nil {
+		t.Fatalf("expected unbounded delete to succeed, got %v", err)
 	}
 	deleteNoRunner := &DeleteQuery{dialect: db.Dialect(), table: users.TableDef(), returning: []schema.Expression{users.ID}}
 	if err := deleteNoRunner.Scan(context.Background(), &internalUserRow{}); !errors.Is(err, ErrNoConnection) {
