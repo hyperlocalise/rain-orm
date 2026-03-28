@@ -68,6 +68,9 @@ func (d *SQLiteDialect) LimitOffset(limit, offset int) string {
 		}
 		return "LIMIT " + strconv.Itoa(limit)
 	}
+	if offset > 0 {
+		return "LIMIT -1 OFFSET " + strconv.Itoa(offset)
+	}
 	return ""
 }
 

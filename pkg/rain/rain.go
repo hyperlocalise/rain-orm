@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/hyperlocalise/rain-orm/pkg/dialect"
 )
@@ -28,6 +29,9 @@ func Open(driver, dsn string) (*DB, error) {
 
 	db, err := sql.Open(driver, dsn)
 	if err != nil {
+		if d.Name() != driver && strings.Contains(err.Error(), "unknown driver") {
+			return nil, fmt.Errorf("rain: open %s database: %w (dialect %q maps to %q, but sql.Open requires the registered database/sql driver name)", driver, err, driver, d.Name())
+		}
 		return nil, fmt.Errorf("rain: open %s database: %w", driver, err)
 	}
 

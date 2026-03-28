@@ -15,7 +15,7 @@ const (
 
 // HasFeature reports whether a feature set includes the requested capability.
 func HasFeature(features, feature Feature) bool {
-	return features&feature == feature
+	return feature != 0 && features&feature == feature
 }
 
 // HasAnyFeature reports whether a feature set includes any requested capability.

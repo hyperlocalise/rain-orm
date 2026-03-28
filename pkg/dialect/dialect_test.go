@@ -19,6 +19,9 @@ func TestFeatureHelpers(t *testing.T) {
 	if HasFeature(features, FeatureInsertReturning|FeatureDeleteReturning) {
 		t.Fatalf("expected incomplete feature mask to be absent")
 	}
+	if HasFeature(features, 0) {
+		t.Fatalf("expected zero-value feature mask to be absent")
+	}
 	if !HasAnyFeature(features, FeatureDeleteReturning|FeatureOffset) {
 		t.Fatalf("expected overlap to satisfy HasAnyFeature")
 	}
@@ -293,7 +296,7 @@ func TestSQLiteDialect(t *testing.T) {
 	if got := d.LimitOffset(10, 0); got != "LIMIT 10" {
 		t.Fatalf("unexpected limit only clause: %q", got)
 	}
-	if got := d.LimitOffset(0, 20); got != "" {
+	if got := d.LimitOffset(0, 20); got != "LIMIT -1 OFFSET 20" {
 		t.Fatalf("unexpected offset only clause: %q", got)
 	}
 	if got := d.LimitOffset(0, 0); got != "" {
