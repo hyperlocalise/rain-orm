@@ -87,8 +87,12 @@ func (db *DB) Exec(ctx context.Context, sql string, args ...interface{}) (sql.Re
 }
 
 // QueryRow executes a query that returns a single row.
+// Note: This currently requires a valid database connection.
+// TODO: Implement proper error handling instead of returning nil.
 func (db *DB) QueryRow(ctx context.Context, sql string, args ...interface{}) *sql.Row {
-	// TODO: Implement actual execution
+	if db.db != nil {
+		return db.db.QueryRowContext(ctx, sql, args...)
+	}
 	return nil
 }
 

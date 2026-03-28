@@ -1,4 +1,4 @@
-module github.com/quiet-circles/rain-orm
+module github.com/hyperlocalise/rain-orm
 
 go 1.26
 

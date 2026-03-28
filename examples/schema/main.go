@@ -9,7 +9,7 @@ package main
 import (
 	"fmt"
 
-	"github.com/quiet-circles/rain-orm/pkg/schema"
+	"github.com/hyperlocalise/rain-orm/pkg/schema"
 )
 
 func main() {

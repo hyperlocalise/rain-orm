@@ -120,7 +120,7 @@ func (tb *TableBuilder) Column(name string, colType ColumnType) *ColumnBuilder {
 		Type: colType,
 	}
 	tb.columns = append(tb.columns, col)
-	return &ColumnBuilder{table: tb, column: &tb.columns[len(tb.columns)-1]}
+	return &ColumnBuilder{table: tb, index: len(tb.columns) - 1}
 }
 
 // PrimaryKey sets the primary key columns.
@@ -161,56 +161,56 @@ func (tb *TableBuilder) Build() *Table {
 
 // ColumnBuilder builds a column definition.
 type ColumnBuilder struct {
-	table  *TableBuilder
-	column *Column
+	table *TableBuilder
+	index int
 }
 
 // NotNull marks the column as NOT NULL.
 func (cb *ColumnBuilder) NotNull() *ColumnBuilder {
-	cb.column.Nullable = false
+	cb.table.columns[cb.index].Nullable = false
 	return cb
 }
 
 // Nullable marks the column as nullable.
 func (cb *ColumnBuilder) Nullable() *ColumnBuilder {
-	cb.column.Nullable = true
+	cb.table.columns[cb.index].Nullable = true
 	return cb
 }
 
 // Default sets the default value.
 func (cb *ColumnBuilder) Default(value interface{}) *ColumnBuilder {
-	cb.column.Default = value
+	cb.table.columns[cb.index].Default = value
 	return cb
 }
 
 // PrimaryKey marks the column as primary key.
 func (cb *ColumnBuilder) PrimaryKey() *ColumnBuilder {
-	cb.column.PrimaryKey = true
-	cb.table.primaryKey = append(cb.table.primaryKey, cb.column.Name)
+	cb.table.columns[cb.index].PrimaryKey = true
+	cb.table.primaryKey = append(cb.table.primaryKey, cb.table.columns[cb.index].Name)
 	return cb
 }
 
 // AutoIncrement marks the column as auto-increment.
 func (cb *ColumnBuilder) AutoIncrement() *ColumnBuilder {
-	cb.column.AutoIncrement = true
+	cb.table.columns[cb.index].AutoIncrement = true
 	return cb
 }
 
 // Unique marks the column as unique.
 func (cb *ColumnBuilder) Unique() *ColumnBuilder {
-	cb.column.Unique = true
+	cb.table.columns[cb.index].Unique = true
 	return cb
 }
 
 // Index adds an index on this column.
 func (cb *ColumnBuilder) Index() *ColumnBuilder {
-	cb.column.Index = true
+	cb.table.columns[cb.index].Index = true
 	return cb
 }
 
 // Comment adds a comment to the column.
 func (cb *ColumnBuilder) Comment(text string) *ColumnBuilder {
-	cb.column.Comment = text
+	cb.table.columns[cb.index].Comment = text
 	return cb
 }
 

@@ -2,6 +2,11 @@
 // Implement this interface to add support for new database engines.
 package dialect
 
+import (
+	"strconv"
+	"strings"
+)
+
 // Dialect represents a database-specific SQL dialect.
 type Dialect interface {
 	// Name returns the dialect name (e.g., "postgres", "mysql", "sqlite").
@@ -88,8 +93,9 @@ func (d *PostgresDialect) Name() string {
 }
 
 // QuoteIdentifier quotes identifiers with double quotes.
+// Inner double quotes are escaped by doubling them.
 func (d *PostgresDialect) QuoteIdentifier(name string) string {
-	return `"` + name + `"`
+	return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
 }
 
 // Placeholder returns PostgreSQL-style $n placeholders.
@@ -187,8 +193,9 @@ func (d *MySQLDialect) Name() string {
 }
 
 // QuoteIdentifier quotes identifiers with backticks.
+// Inner backticks are escaped by doubling them.
 func (d *MySQLDialect) QuoteIdentifier(name string) string {
-	return "`" + name + "`"
+	return "`" + strings.ReplaceAll(name, "`", "``") + "`"
 }
 
 // Placeholder returns MySQL-style ? placeholders.
@@ -236,6 +243,10 @@ func (d *MySQLDialect) LimitOffset(limit, offset int) string {
 		}
 		return "LIMIT " + itoa(limit)
 	}
+	if offset > 0 {
+		// MySQL requires a LIMIT when using OFFSET
+		return "LIMIT 18446744073709551615 OFFSET " + itoa(offset)
+	}
 	return ""
 }
 
@@ -278,8 +289,9 @@ func (d *SQLiteDialect) Name() string {
 }
 
 // QuoteIdentifier quotes identifiers with double quotes.
+// Inner double quotes are escaped by doubling them.
 func (d *SQLiteDialect) QuoteIdentifier(name string) string {
-	return `"` + name + `"`
+	return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
 }
 
 // Placeholder returns SQLite-style ? placeholders.
@@ -365,22 +377,7 @@ func GetDialect(name string) Dialect {
 	}
 }
 
-// itoa converts int to string.
+// itoa converts int to string using strconv.Itoa.
 func itoa(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	var result []byte
-	negative := n < 0
-	if negative {
-		n = -n
-	}
-	for n > 0 {
-		result = append([]byte{byte('0' + n%10)}, result...)
-		n /= 10
-	}
-	if negative {
-		result = append([]byte{'-'}, result...)
-	}
-	return string(result)
+	return strconv.Itoa(n)
 }

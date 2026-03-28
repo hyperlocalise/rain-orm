@@ -8,7 +8,7 @@ package main
 import (
 	"fmt"
 
-	"github.com/quiet-circles/rain-orm/pkg/dialect"
+	"github.com/hyperlocalise/rain-orm/pkg/dialect"
 )
 
 func main() {

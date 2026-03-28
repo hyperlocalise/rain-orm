@@ -13,8 +13,8 @@ import (
 	"log"
 	"time"
 
-	"github.com/quiet-circles/rain-orm/pkg/rain"
-	"github.com/quiet-circles/rain-orm/pkg/schema"
+	"github.com/hyperlocalise/rain-orm/pkg/rain"
+	"github.com/hyperlocalise/rain-orm/pkg/schema"
 )
 
 // User represents a user in the system.
