@@ -100,7 +100,7 @@ func (d *PostgresDialect) QuoteIdentifier(name string) string {
 
 // Placeholder returns PostgreSQL-style $n placeholders.
 func (d *PostgresDialect) Placeholder(n int) string {
-	return "$" + itoa(n)
+	return "$" + strconv.Itoa(n)
 }
 
 // DataType returns PostgreSQL-specific type.
@@ -142,13 +142,13 @@ func (d *PostgresDialect) AutoIncrementKeyword() string {
 // LimitOffset returns PostgreSQL LIMIT/OFFSET syntax.
 func (d *PostgresDialect) LimitOffset(limit, offset int) string {
 	if limit > 0 && offset > 0 {
-		return "LIMIT " + itoa(limit) + " OFFSET " + itoa(offset)
+		return "LIMIT " + strconv.Itoa(limit) + " OFFSET " + strconv.Itoa(offset)
 	}
 	if limit > 0 {
-		return "LIMIT " + itoa(limit)
+		return "LIMIT " + strconv.Itoa(limit)
 	}
 	if offset > 0 {
-		return "OFFSET " + itoa(offset)
+		return "OFFSET " + strconv.Itoa(offset)
 	}
 	return ""
 }
@@ -239,13 +239,13 @@ func (d *MySQLDialect) AutoIncrementKeyword() string {
 func (d *MySQLDialect) LimitOffset(limit, offset int) string {
 	if limit > 0 {
 		if offset > 0 {
-			return "LIMIT " + itoa(offset) + ", " + itoa(limit)
+			return "LIMIT " + strconv.Itoa(offset) + ", " + strconv.Itoa(limit)
 		}
-		return "LIMIT " + itoa(limit)
+		return "LIMIT " + strconv.Itoa(limit)
 	}
 	if offset > 0 {
 		// MySQL requires a LIMIT when using OFFSET
-		return "LIMIT 18446744073709551615 OFFSET " + itoa(offset)
+		return "LIMIT 18446744073709551615 OFFSET " + strconv.Itoa(offset)
 	}
 	return ""
 }
@@ -328,9 +328,9 @@ func (d *SQLiteDialect) AutoIncrementKeyword() string {
 func (d *SQLiteDialect) LimitOffset(limit, offset int) string {
 	if limit > 0 {
 		if offset > 0 {
-			return "LIMIT " + itoa(limit) + " OFFSET " + itoa(offset)
+			return "LIMIT " + strconv.Itoa(limit) + " OFFSET " + strconv.Itoa(offset)
 		}
-		return "LIMIT " + itoa(limit)
+		return "LIMIT " + strconv.Itoa(limit)
 	}
 	return ""
 }
@@ -375,9 +375,4 @@ func GetDialect(name string) Dialect {
 	default:
 		return &PostgresDialect{}
 	}
-}
-
-// itoa converts int to string using strconv.Itoa.
-func itoa(n int) string {
-	return strconv.Itoa(n)
 }
