@@ -29,13 +29,13 @@ clean: ## clean up test artifacts
 
 .PHONY: fmt
 fmt: ## format go files
+	go tool goimports -w .
 	go tool gofumpt -w .
-	go tool gci write .
 
 .PHONY: fmt-file
 fmt-file: ## format a single file (usage: make fmt-file FILE=path/to/file.go)
+	go tool goimports -w $(FILE)
 	go tool gofumpt -w $(FILE)
-	go tool gci write $(FILE)
 
 .PHONY: lint
 lint: ## lint go files
