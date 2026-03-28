@@ -81,6 +81,243 @@ func TestSelectToSQL(t *testing.T) {
 	}
 }
 
+func TestSelectAdvancedComposition(t *testing.T) {
+	t.Parallel()
+
+	users, posts := defineTables()
+	cteSales := schema.Define("sales_by_user", func(t *struct {
+		schema.TableModel
+		UserID *schema.Column[int64]
+		Total  *schema.Column[int64]
+	}) {
+		t.UserID = t.BigInt("user_id")
+		t.Total = t.BigInt("total")
+	})
+	cteFiltered := schema.Define("filtered_sales", func(t *struct {
+		schema.TableModel
+		UserID *schema.Column[int64]
+		Total  *schema.Column[int64]
+	}) {
+		t.UserID = t.BigInt("user_id")
+		t.Total = t.BigInt("total")
+	})
+
+	type tc struct {
+		name     string
+		dialect  string
+		build    func(*rain.DB) *rain.SelectQuery
+		wantSQL  string
+		wantArgs []any
+		wantErr  string
+	}
+
+	cases := []tc{
+		{
+			name:    "distinct rendering postgres",
+			dialect: "postgres",
+			build: func(db *rain.DB) *rain.SelectQuery {
+				return db.Select().Distinct().Table(users).Column(users.ID)
+			},
+			wantSQL: `SELECT DISTINCT "users"."id" FROM "users"`,
+		},
+		{
+			name:    "group by without having mysql",
+			dialect: "mysql",
+			build: func(db *rain.DB) *rain.SelectQuery {
+				return db.Select().
+					Table(posts).
+					Column(posts.UserID, schema.Raw("COUNT(*)")).
+					GroupBy(posts.UserID)
+			},
+			wantSQL: "SELECT `posts`.`user_id`, COUNT(*) FROM `posts` GROUP BY `posts`.`user_id`",
+		},
+		{
+			name:    "group by with having postgres",
+			dialect: "postgres",
+			build: func(db *rain.DB) *rain.SelectQuery {
+				return db.Select().
+					Table(posts).
+					Column(posts.UserID, schema.Raw("COUNT(*)")).
+					GroupBy(posts.UserID).
+					Having(schema.ComparisonExpr{
+						Left:     schema.Raw("COUNT(*)"),
+						Operator: ">",
+						Right:    schema.ValueExpr{Value: 2},
+					})
+			},
+			wantSQL:  `SELECT "posts"."user_id", COUNT(*) FROM "posts" GROUP BY "posts"."user_id" HAVING COUNT(*) > $1`,
+			wantArgs: []any{2},
+		},
+		{
+			name:    "single cte postgres",
+			dialect: "postgres",
+			build: func(db *rain.DB) *rain.SelectQuery {
+				salesByUser := db.Select().
+					Table(posts).
+					Column(posts.UserID, schema.Raw("SUM(amount) AS total")).
+					GroupBy(posts.UserID)
+
+				return db.Select().
+					With("sales_by_user", salesByUser).
+					Table(cteSales).
+					Column(cteSales.UserID, cteSales.Total)
+			},
+			wantSQL: `WITH "sales_by_user" AS (SELECT "posts"."user_id", SUM(amount) AS total FROM "posts" GROUP BY "posts"."user_id") SELECT "sales_by_user"."user_id", "sales_by_user"."total" FROM "sales_by_user"`,
+		},
+		{
+			name:    "multiple ctes postgres",
+			dialect: "postgres",
+			build: func(db *rain.DB) *rain.SelectQuery {
+				salesByUser := db.Select().
+					Table(posts).
+					Column(posts.UserID, schema.Raw("SUM(amount) AS total")).
+					GroupBy(posts.UserID)
+				filtered := db.Select().
+					Table(cteSales).
+					Column(cteSales.UserID, cteSales.Total).
+					Where(schema.ComparisonExpr{
+						Left:     schema.Raw("total"),
+						Operator: ">",
+						Right:    schema.ValueExpr{Value: 100},
+					})
+
+				return db.Select().
+					With("sales_by_user", salesByUser).
+					With("filtered_sales", filtered).
+					Table(cteFiltered).
+					Column(cteFiltered.UserID, cteFiltered.Total)
+			},
+			wantSQL:  `WITH "sales_by_user" AS (SELECT "posts"."user_id", SUM(amount) AS total FROM "posts" GROUP BY "posts"."user_id"), "filtered_sales" AS (SELECT "sales_by_user"."user_id", "sales_by_user"."total" FROM "sales_by_user" WHERE total > $1) SELECT "filtered_sales"."user_id", "filtered_sales"."total" FROM "filtered_sales"`,
+			wantArgs: []any{100},
+		},
+		{
+			name:    "subquery in from placeholder numbering postgres",
+			dialect: "postgres",
+			build: func(db *rain.DB) *rain.SelectQuery {
+				postsByUser := db.Select().
+					Table(posts).
+					Column(posts.UserID, schema.Raw("COUNT(*) AS post_count")).
+					Where(posts.Title.Eq("hello")).
+					GroupBy(posts.UserID)
+
+				return db.Select().
+					TableSubquery(postsByUser, "pbu").
+					Column(schema.Raw("pbu.user_id"), schema.Raw("pbu.post_count")).
+					Where(schema.ComparisonExpr{
+						Left:     schema.Raw("pbu.post_count"),
+						Operator: ">",
+						Right:    schema.ValueExpr{Value: 3},
+					})
+			},
+			wantSQL:  `SELECT pbu.user_id, pbu.post_count FROM (SELECT "posts"."user_id", COUNT(*) AS post_count FROM "posts" WHERE "posts"."title" = $1 GROUP BY "posts"."user_id") AS "pbu" WHERE pbu.post_count > $2`,
+			wantArgs: []any{"hello", 3},
+		},
+		{
+			name:    "subquery in join mysql",
+			dialect: "mysql",
+			build: func(db *rain.DB) *rain.SelectQuery {
+				userPosts := db.Select().
+					Table(posts).
+					Column(posts.UserID, schema.Raw("COUNT(*) AS post_count")).
+					GroupBy(posts.UserID)
+
+				return db.Select().
+					Table(users).
+					Column(users.ID, schema.Raw("up.post_count")).
+					JoinSubquery(userPosts, "up", schema.ComparisonExpr{
+						Left:     users.ID,
+						Operator: "=",
+						Right:    schema.Raw("up.user_id"),
+					})
+			},
+			wantSQL: "SELECT `users`.`id`, up.post_count FROM `users` INNER JOIN (SELECT `posts`.`user_id`, COUNT(*) AS post_count FROM `posts` GROUP BY `posts`.`user_id`) AS `up` ON `users`.`id` = up.user_id",
+		},
+		{
+			name:    "left join subquery postgres",
+			dialect: "postgres",
+			build: func(db *rain.DB) *rain.SelectQuery {
+				userPosts := db.Select().
+					Table(posts).
+					Column(posts.UserID, schema.Raw("COUNT(*) AS post_count")).
+					GroupBy(posts.UserID)
+
+				return db.Select().
+					Table(users).
+					Column(users.ID, schema.Raw("up.post_count")).
+					LeftJoinSubquery(userPosts, "up", schema.ComparisonExpr{
+						Left:     users.ID,
+						Operator: "=",
+						Right:    schema.Raw("up.user_id"),
+					})
+			},
+			wantSQL: `SELECT "users"."id", up.post_count FROM "users" LEFT JOIN (SELECT "posts"."user_id", COUNT(*) AS post_count FROM "posts" GROUP BY "posts"."user_id") AS "up" ON "users"."id" = up.user_id`,
+		},
+		{
+			name:    "subquery without alias is invalid",
+			dialect: "postgres",
+			build: func(db *rain.DB) *rain.SelectQuery {
+				return db.Select().
+					TableSubquery(db.Select().Table(users), "").
+					Column(schema.Raw("id"))
+			},
+			wantErr: "requires a non-empty alias",
+		},
+		{
+			name:    "subquery without query is invalid",
+			dialect: "postgres",
+			build: func(db *rain.DB) *rain.SelectQuery {
+				return db.Select().
+					TableSubquery(nil, "sq").
+					Column(schema.Raw("id"))
+			},
+			wantErr: "requires a non-nil query",
+		},
+		{
+			name:    "cte unsupported on mysql",
+			dialect: "mysql",
+			build: func(db *rain.DB) *rain.SelectQuery {
+				base := db.Select().Table(users)
+				return db.Select().With("u", base).Table(users)
+			},
+			wantErr: "do not support CTEs",
+		},
+	}
+
+	for _, tt := range cases {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			db, err := rain.OpenDialect(tt.dialect)
+			if err != nil {
+				t.Fatalf("OpenDialect returned error: %v", err)
+			}
+
+			sqlText, args, err := tt.build(db).ToSQL()
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("expected error containing %q, got %v", tt.wantErr, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ToSQL returned error: %v", err)
+			}
+			if sqlText != tt.wantSQL {
+				t.Fatalf("unexpected SQL:\nwant: %s\ngot:  %s", tt.wantSQL, sqlText)
+			}
+			if len(args) != len(tt.wantArgs) {
+				t.Fatalf("unexpected arg count: want %d got %d (%#v)", len(tt.wantArgs), len(args), args)
+			}
+			for idx := range tt.wantArgs {
+				if args[idx] != tt.wantArgs[idx] {
+					t.Fatalf("unexpected arg[%d]: want %#v got %#v", idx, tt.wantArgs[idx], args[idx])
+				}
+			}
+		})
+	}
+}
+
 func TestInsertUpdateDeleteToSQL(t *testing.T) {
 	db, err := rain.OpenDialect("postgres")
 	if err != nil {

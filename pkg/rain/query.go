@@ -20,7 +20,7 @@ type queryRunner interface {
 
 type joinClause struct {
 	kind  string
-	table *schema.TableDef
+	table selectTableSource
 	on    schema.Predicate
 }
 
@@ -34,6 +34,45 @@ type returningClause struct {
 	label   string
 }
 
+type selectTableSource interface {
+	writeSQL(*compileContext) error
+}
+
+type tableDefSource struct {
+	table *schema.TableDef
+}
+
+func (s tableDefSource) writeSQL(ctx *compileContext) error {
+	ctx.writeTable(s.table)
+	return nil
+}
+
+type subqueryTableSource struct {
+	query *SelectQuery
+	alias string
+}
+
+func (s subqueryTableSource) writeSQL(ctx *compileContext) error {
+	if strings.TrimSpace(s.alias) == "" {
+		return errors.New("rain: subquery table source requires a non-empty alias")
+	}
+	if s.query == nil {
+		return fmt.Errorf("rain: subquery table source %q requires a non-nil query", s.alias)
+	}
+	ctx.writeByte('(')
+	if err := s.query.writeSQL(ctx); err != nil {
+		return err
+	}
+	ctx.writeString(") AS ")
+	ctx.writeQuotedIdentifier(s.alias)
+	return nil
+}
+
+type cteDefinition struct {
+	name  string
+	query *SelectQuery
+}
+
 func closeRows(rows *sql.Rows, errp *error) {
 	if err := rows.Close(); err != nil && *errp == nil {
 		*errp = err
@@ -42,20 +81,30 @@ func closeRows(rows *sql.Rows, errp *error) {
 
 // SelectQuery builds typed SELECT statements.
 type SelectQuery struct {
-	runner  queryRunner
-	dialect dialect.Dialect
-	table   *schema.TableDef
-	cols    []schema.Expression
-	where   []schema.Predicate
-	joins   []joinClause
-	order   []schema.OrderExpr
-	limit   int
-	offset  int
+	runner   queryRunner
+	dialect  dialect.Dialect
+	table    selectTableSource
+	cols     []schema.Expression
+	where    []schema.Predicate
+	joins    []joinClause
+	order    []schema.OrderExpr
+	groupBy  []schema.Expression
+	having   []schema.Predicate
+	ctes     []cteDefinition
+	distinct bool
+	limit    int
+	offset   int
 }
 
 // Table sets the table source for the query.
 func (q *SelectQuery) Table(table schema.TableReference) *SelectQuery {
-	q.table = table.TableDef()
+	q.table = tableDefSource{table: table.TableDef()}
+	return q
+}
+
+// TableSubquery sets a subquery source for the query's FROM clause.
+func (q *SelectQuery) TableSubquery(query *SelectQuery, alias string) *SelectQuery {
+	q.table = subqueryTableSource{query: query, alias: alias}
 	return q
 }
 
@@ -73,13 +122,49 @@ func (q *SelectQuery) Where(predicate schema.Predicate) *SelectQuery {
 
 // Join appends an INNER JOIN clause.
 func (q *SelectQuery) Join(table schema.TableReference, on schema.Predicate) *SelectQuery {
-	q.joins = append(q.joins, joinClause{kind: "INNER JOIN", table: table.TableDef(), on: on})
+	q.joins = append(q.joins, joinClause{kind: "INNER JOIN", table: tableDefSource{table: table.TableDef()}, on: on})
 	return q
 }
 
 // LeftJoin appends a LEFT JOIN clause.
 func (q *SelectQuery) LeftJoin(table schema.TableReference, on schema.Predicate) *SelectQuery {
-	q.joins = append(q.joins, joinClause{kind: "LEFT JOIN", table: table.TableDef(), on: on})
+	q.joins = append(q.joins, joinClause{kind: "LEFT JOIN", table: tableDefSource{table: table.TableDef()}, on: on})
+	return q
+}
+
+// JoinSubquery appends an INNER JOIN against a subquery source.
+func (q *SelectQuery) JoinSubquery(query *SelectQuery, alias string, on schema.Predicate) *SelectQuery {
+	q.joins = append(q.joins, joinClause{kind: "INNER JOIN", table: subqueryTableSource{query: query, alias: alias}, on: on})
+	return q
+}
+
+// LeftJoinSubquery appends a LEFT JOIN against a subquery source.
+func (q *SelectQuery) LeftJoinSubquery(query *SelectQuery, alias string, on schema.Predicate) *SelectQuery {
+	q.joins = append(q.joins, joinClause{kind: "LEFT JOIN", table: subqueryTableSource{query: query, alias: alias}, on: on})
+	return q
+}
+
+// Distinct marks the SELECT query as DISTINCT.
+func (q *SelectQuery) Distinct() *SelectQuery {
+	q.distinct = true
+	return q
+}
+
+// GroupBy appends GROUP BY expressions.
+func (q *SelectQuery) GroupBy(exprs ...schema.Expression) *SelectQuery {
+	q.groupBy = append(q.groupBy, exprs...)
+	return q
+}
+
+// Having appends a HAVING predicate joined with AND.
+func (q *SelectQuery) Having(predicate schema.Predicate) *SelectQuery {
+	q.having = append(q.having, predicate)
+	return q
+}
+
+// With appends a common table expression definition.
+func (q *SelectQuery) With(name string, query *SelectQuery) *SelectQuery {
+	q.ctes = append(q.ctes, cteDefinition{name: name, query: query})
 	return q
 }
 
@@ -103,12 +188,47 @@ func (q *SelectQuery) Offset(offset int) *SelectQuery {
 
 // ToSQL compiles the query into SQL and args.
 func (q *SelectQuery) ToSQL() (string, []any, error) {
+	ctx := newCompileContext(q.dialect)
+	if err := q.writeSQL(ctx); err != nil {
+		return "", nil, err
+	}
+	return ctx.String(), ctx.args, nil
+}
+
+func (q *SelectQuery) writeSQL(ctx *compileContext) error {
 	if q.table == nil {
-		return "", nil, errors.New("rain: select query requires a table")
+		return errors.New("rain: select query requires a table")
 	}
 
-	ctx := newCompileContext(q.dialect)
+	if len(q.ctes) > 0 {
+		if !dialect.HasFeature(ctx.dialect.Features(), dialect.FeatureCTE) {
+			return fmt.Errorf("rain: select queries do not support CTEs for %s dialect", ctx.dialect.Name())
+		}
+		ctx.writeString("WITH ")
+		for idx, cte := range q.ctes {
+			if idx > 0 {
+				ctx.writeString(", ")
+			}
+			if strings.TrimSpace(cte.name) == "" {
+				return errors.New("rain: CTE name cannot be empty")
+			}
+			if cte.query == nil {
+				return fmt.Errorf("rain: CTE %q requires a query", cte.name)
+			}
+			ctx.writeQuotedIdentifier(cte.name)
+			ctx.writeString(" AS (")
+			if err := cte.query.writeSQL(ctx); err != nil {
+				return err
+			}
+			ctx.writeByte(')')
+		}
+		ctx.writeByte(' ')
+	}
+
 	ctx.writeString("SELECT ")
+	if q.distinct {
+		ctx.writeString("DISTINCT ")
+	}
 	if len(q.cols) == 0 {
 		ctx.writeString("*")
 	} else {
@@ -117,29 +237,52 @@ func (q *SelectQuery) ToSQL() (string, []any, error) {
 				ctx.writeString(", ")
 			}
 			if err := ctx.writeExpression(column); err != nil {
-				return "", nil, err
+				return err
 			}
 		}
 	}
 
 	ctx.writeString(" FROM ")
-	ctx.writeTable(q.table)
+	if err := q.table.writeSQL(ctx); err != nil {
+		return err
+	}
 
 	for _, join := range q.joins {
 		ctx.writeByte(' ')
 		ctx.writeString(join.kind)
 		ctx.writeByte(' ')
-		ctx.writeTable(join.table)
+		if err := join.table.writeSQL(ctx); err != nil {
+			return err
+		}
 		ctx.writeString(" ON ")
 		if err := ctx.writePredicate(join.on); err != nil {
-			return "", nil, err
+			return err
 		}
 	}
 
 	if len(q.where) > 0 {
 		ctx.writeString(" WHERE ")
 		if err := ctx.writePredicate(joinPredicates(q.where)); err != nil {
-			return "", nil, err
+			return err
+		}
+	}
+
+	if len(q.groupBy) > 0 {
+		ctx.writeString(" GROUP BY ")
+		for idx, expr := range q.groupBy {
+			if idx > 0 {
+				ctx.writeString(", ")
+			}
+			if err := ctx.writeExpression(expr); err != nil {
+				return err
+			}
+		}
+	}
+
+	if len(q.having) > 0 {
+		ctx.writeString(" HAVING ")
+		if err := ctx.writePredicate(joinPredicates(q.having)); err != nil {
+			return err
 		}
 	}
 
@@ -150,7 +293,7 @@ func (q *SelectQuery) ToSQL() (string, []any, error) {
 				ctx.writeString(", ")
 			}
 			if err := ctx.writeExpression(item.Expr); err != nil {
-				return "", nil, err
+				return err
 			}
 			ctx.writeByte(' ')
 			ctx.writeString(string(item.Direction))
@@ -162,7 +305,7 @@ func (q *SelectQuery) ToSQL() (string, []any, error) {
 		ctx.writeString(clause)
 	}
 
-	return ctx.String(), ctx.args, ctx.err
+	return nil
 }
 
 // Scan executes the SELECT query and scans results into dest.
@@ -256,18 +399,28 @@ func (q *SelectQuery) toAggregateSQL(selection string) (string, []any, error) {
 	if q.table == nil {
 		return "", nil, errors.New("rain: select query requires a table")
 	}
+	if len(q.ctes) > 0 {
+		return "", nil, errors.New("rain: aggregate helpers do not support WITH clauses")
+	}
+	if q.distinct || len(q.groupBy) > 0 || len(q.having) > 0 {
+		return "", nil, errors.New("rain: aggregate helpers do not support DISTINCT, GROUP BY, or HAVING clauses")
+	}
 
 	ctx := newCompileContext(q.dialect)
 	ctx.writeString("SELECT ")
 	ctx.writeString(selection)
 	ctx.writeString(" FROM ")
-	ctx.writeTable(q.table)
+	if err := q.table.writeSQL(ctx); err != nil {
+		return "", nil, err
+	}
 
 	for _, join := range q.joins {
 		ctx.writeByte(' ')
 		ctx.writeString(join.kind)
 		ctx.writeByte(' ')
-		ctx.writeTable(join.table)
+		if err := join.table.writeSQL(ctx); err != nil {
+			return "", nil, err
+		}
 		ctx.writeString(" ON ")
 		if err := ctx.writePredicate(join.on); err != nil {
 			return "", nil, err

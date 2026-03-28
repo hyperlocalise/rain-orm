@@ -202,7 +202,7 @@ func TestQueryBuilderAndHelperErrors(t *testing.T) {
 	if _, _, err := db.Select().ToSQL(); err == nil || !strings.Contains(err.Error(), "requires a table") {
 		t.Fatalf("expected select table error, got %v", err)
 	}
-	selectNoRunner := &SelectQuery{dialect: db.Dialect(), table: users.TableDef()}
+	selectNoRunner := &SelectQuery{dialect: db.Dialect(), table: tableDefSource{table: users.TableDef()}}
 	if err := selectNoRunner.Scan(context.Background(), &internalUserRow{}); !errors.Is(err, ErrNoConnection) {
 		t.Fatalf("expected select scan ErrNoConnection, got %v", err)
 	}
