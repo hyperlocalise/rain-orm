@@ -29,6 +29,12 @@ type assignment struct {
 	value  schema.Expression
 }
 
+func closeRows(rows *sql.Rows, errp *error) {
+	if err := rows.Close(); err != nil && *errp == nil {
+		*errp = err
+	}
+}
+
 // SelectQuery builds typed SELECT statements.
 type SelectQuery struct {
 	runner  queryRunner
@@ -169,9 +175,10 @@ func (q *SelectQuery) Scan(ctx context.Context, dest any) error {
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	defer closeRows(rows, &err)
 
-	return scanRows(rows, dest)
+	err = scanRows(rows, dest)
+	return err
 }
 
 // Count executes SELECT COUNT(*).
@@ -189,17 +196,19 @@ func (q *SelectQuery) Count(ctx context.Context) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	defer rows.Close()
+	defer closeRows(rows, &err)
 
 	var count int64
 	if !rows.Next() {
-		return 0, sql.ErrNoRows
+		err = sql.ErrNoRows
+		return 0, err
 	}
 	if err := rows.Scan(&count); err != nil {
 		return 0, err
 	}
 
-	return count, rows.Err()
+	err = rows.Err()
+	return count, err
 }
 
 // Exists executes a SELECT EXISTS query.
@@ -223,17 +232,19 @@ func (q *SelectQuery) Exists(ctx context.Context) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	defer rows.Close()
+	defer closeRows(rows, &err)
 
 	var exists bool
 	if !rows.Next() {
-		return false, sql.ErrNoRows
+		err = sql.ErrNoRows
+		return false, err
 	}
 	if err := rows.Scan(&exists); err != nil {
 		return false, err
 	}
 
-	return exists, rows.Err()
+	err = rows.Err()
+	return exists, err
 }
 
 func (q *SelectQuery) toAggregateSQL(selection string) (string, []any, error) {
@@ -369,9 +380,10 @@ func (q *InsertQuery) Scan(ctx context.Context, dest any) error {
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	defer closeRows(rows, &err)
 
-	return scanRows(rows, dest)
+	err = scanRows(rows, dest)
+	return err
 }
 
 func (q *InsertQuery) insertAssignments() ([]assignment, error) {
@@ -508,9 +520,10 @@ func (q *UpdateQuery) Scan(ctx context.Context, dest any) error {
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	defer closeRows(rows, &err)
 
-	return scanRows(rows, dest)
+	err = scanRows(rows, dest)
+	return err
 }
 
 // DeleteQuery builds typed DELETE statements.
@@ -595,9 +608,10 @@ func (q *DeleteQuery) Scan(ctx context.Context, dest any) error {
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	defer closeRows(rows, &err)
 
-	return scanRows(rows, dest)
+	err = scanRows(rows, dest)
+	return err
 }
 
 type compileContext struct {

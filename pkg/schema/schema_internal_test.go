@@ -196,7 +196,8 @@ func TestSchemaInternalPanicsAndCloners(t *testing.T) {
 		TableModel
 		ID     *Column[int64]
 		UserID *Column[int64]
-	}) {
+	},
+	) {
 		tp.ID = tp.BigSerial("id").PrimaryKey()
 		tp.UserID = tp.BigInt("user_id").NotNull().References(users.ID)
 		tp.Index("posts_user_idx").On(tp.UserID)
