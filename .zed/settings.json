@@ -1,21 +1,15 @@
 {
   "languages": {
     "Go": {
-      "language_servers": [
-        "gopls",
-        "!gpt"
-      ],
-      "format_on_save": "on",
+      "language_servers": ["gopls", "!gpt"],
+      "format_on_save": "off",
       "formatter": {
         "external": {
           "command": "make",
-          "arguments": [
-            "fmt-file",
-            "FILE={buffer_path}"
-          ]
-        }
-      }
-    }
+          "arguments": ["fmt-file", "FILE={buffer_path}"],
+        },
+      },
+    },
   },
   "lsp": {
     "gopls": {
@@ -25,12 +19,12 @@
             "bounds": true,
             "escape": true,
             "inline": true,
-            "nil": true
+            "nil": true,
           },
           "ui.diagnostic.staticcheck": true,
-          "ui.diagnostic.vulncheck": "Imports"
-        }
-      }
-    }
-  }
+          "ui.diagnostic.vulncheck": "Imports",
+        },
+      },
+    },
+  },
 }

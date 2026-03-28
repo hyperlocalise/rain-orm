@@ -1,190 +1,90 @@
-// Package main demonstrates basic Rain ORM usage.
-//
-// This example shows:
-// - Database connection
-// - Basic CRUD operations
-// - Query building
-// - Transactions
 package main
 
 import (
-	"context"
 	"fmt"
-	"log"
 	"time"
 
 	"github.com/hyperlocalise/rain-orm/pkg/rain"
 	"github.com/hyperlocalise/rain-orm/pkg/schema"
 )
 
-// User represents a user in the system.
-// Embed schema.Timestamps to automatically manage created_at/updated_at.
+type UsersTable struct {
+	schema.TableModel
+	ID        *schema.Column[int64]
+	Email     *schema.Column[string]
+	Name      *schema.Column[string]
+	Active    *schema.Column[bool]
+	CreatedAt *schema.Column[time.Time]
+}
+
+type PostsTable struct {
+	schema.TableModel
+	ID     *schema.Column[int64]
+	UserID *schema.Column[int64]
+	Title  *schema.Column[string]
+	Body   *schema.Column[string]
+}
+
 type User struct {
 	ID     int64  `db:"id"`
 	Email  string `db:"email"`
 	Name   string `db:"name"`
-	Age    int    `db:"age"`
 	Active bool   `db:"active"`
-	schema.Timestamps
 }
 
-// Post represents a blog post.
-type Post struct {
-	ID        int64  `db:"id"`
-	UserID    int64  `db:"user_id"`
-	Title     string `db:"title"`
-	Content   string `db:"content"`
-	Published bool   `db:"published"`
-	schema.Timestamps
-}
+var Users = schema.Define("users", func(t *UsersTable) {
+	t.ID = t.BigSerial("id").PrimaryKey()
+	t.Email = t.VarChar("email", 255).NotNull().Unique()
+	t.Name = t.Text("name").NotNull()
+	t.Active = t.Boolean("active").NotNull().Default(true)
+	t.CreatedAt = t.TimestampTZ("created_at").NotNull().DefaultNow()
+})
+
+var Posts = schema.Define("posts", func(t *PostsTable) {
+	t.ID = t.BigSerial("id").PrimaryKey()
+	t.UserID = t.BigInt("user_id").NotNull().References(Users.ID)
+	t.Title = t.Text("title").NotNull()
+	t.Body = t.Text("body").NotNull()
+})
 
 func main() {
-	// Open database connection
-	db := rain.Open("postgres", "postgres://user:pass@localhost/mydb")
+	db, err := rain.Open("postgres", "postgres://example")
+	if err != nil {
+		panic(err)
+	}
 	defer func() { _ = db.Close() }()
 
-	ctx := context.Background()
+	u := schema.Alias(Users, "u")
+	p := schema.Alias(Posts, "p")
 
-	// ========== CREATE ==========
-	// Insert a new user
-	newUser := User{
-		Email:  "alice@example.com",
-		Name:   "Alice",
-		Age:    30,
-		Active: true,
-	}
-
-	err := db.Model(&newUser).Create()
-	if err != nil {
-		log.Fatal(err)
-	}
-	fmt.Printf("Created user with ID: %d\n", newUser.ID)
-
-	// ========== READ ==========
-	// Find a single user by ID
-	var user User
-	err = db.Model(&User{}).Where("id", "=", 1).First(&user)
-	if err != nil {
-		log.Fatal(err)
-	}
-	fmt.Printf("Found user: %+v\n", user)
-
-	// Find all active users
-	var users []User
-	err = db.Model(&User{}).
-		Where("active", "=", true).
-		OrderBy("created_at DESC").
-		Find(&users)
-	if err != nil {
-		log.Fatal(err)
-	}
-	fmt.Printf("Found %d active users\n", len(users))
-
-	// Query with multiple conditions
-	var adults []User
-	err = db.Select("*").From("users").
-		Where("age", ">=", 18).
-		Where("active", "=", true).
+	selectSQL, selectArgs, _ := db.Select().
+		Table(p).
+		Column(p.ID, p.Title, u.Email).
+		Join(u, p.UserID.EqCol(u.ID)).
+		Where(u.Active.Eq(true)).
+		OrderBy(p.ID.Desc()).
 		Limit(10).
-		Find(&adults)
-	if err != nil {
-		log.Fatal(err)
-	}
+		ToSQL()
 
-	// ========== UPDATE ==========
-	// Update a user's email
-	affected, err := db.Update("users").
-		Set("email", "alice.new@example.com").
-		Set("updated_at", time.Now()).
-		Where("id", "=", 1).
-		Update()
-	if err != nil {
-		log.Fatal(err)
-	}
-	fmt.Printf("Updated %d rows\n", affected)
+	insertSQL, insertArgs, _ := db.Insert().
+		Table(Users).
+		Model(&User{Email: "alice@example.com", Name: "Alice", Active: true}).
+		Returning(Users.ID).
+		ToSQL()
 
-	// Update using model
-	user.Name = "Alice Smith"
-	err = db.Model(&user).Save()
-	if err != nil {
-		log.Fatal(err)
-	}
+	updateSQL, updateArgs, _ := db.Update().
+		Table(Users).
+		Set(Users.Name, "Alice Smith").
+		Where(Users.ID.Eq(int64(1))).
+		ToSQL()
 
-	// ========== DELETE ==========
-	// Soft delete (recommended) - update deleted_at
-	affected, err = db.Update("users").
-		Set("deleted_at", time.Now()).
-		Where("id", "=", 1).
-		Update()
-	if err != nil {
-		log.Fatal(err)
-	}
-	fmt.Printf("Soft deleted %d rows\n", affected)
+	deleteSQL, deleteArgs, _ := db.Delete().
+		Table(Users).
+		Where(Users.ID.Eq(int64(99))).
+		ToSQL()
 
-	// Hard delete
-	affected, err = db.Delete("users").Where("id", "=", 99).Delete()
-	if err != nil {
-		log.Fatal(err)
-	}
-	fmt.Printf("Deleted %d rows\n", affected)
-
-	// ========== TRANSACTIONS ==========
-	tx, err := db.Begin(ctx)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	// Perform operations within transaction
-	post := Post{
-		UserID:    user.ID,
-		Title:     "My First Post",
-		Content:   "Hello, World!",
-		Published: true,
-	}
-	err = tx.Model(&post).Create()
-	if err != nil {
-		_ = tx.Rollback()
-		log.Fatal(err)
-	}
-
-	err = tx.Commit()
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	// ========== ADVANCED QUERIES ==========
-	// Join example
-	var results []struct {
-		UserName  string `db:"user_name"`
-		PostTitle string `db:"post_title"`
-	}
-
-	err = db.Select("u.name as user_name, p.title as post_title").
-		From("users u").
-		InnerJoin("posts p", "p.user_id = u.id").
-		Where("p.published", "=", true).
-		Find(&results)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	// Count
-	count, err := db.Model(&User{}).Where("active", "=", true).Count()
-	if err != nil {
-		log.Fatal(err)
-	}
-	fmt.Printf("Active users count: %d\n", count)
-
-	// Check existence
-	exists, err := db.Model(&User{}).Where("email", "=", "alice@example.com").Exists()
-	if err != nil {
-		log.Fatal(err)
-	}
-	fmt.Printf("User exists: %v\n", exists)
-
-	// Raw SQL for complex queries
-	_, err = db.Exec(ctx, "ANALYZE users")
-	if err != nil {
-		log.Fatal(err)
-	}
+	fmt.Println(selectSQL, selectArgs)
+	fmt.Println(insertSQL, insertArgs)
+	fmt.Println(updateSQL, updateArgs)
+	fmt.Println(deleteSQL, deleteArgs)
 }

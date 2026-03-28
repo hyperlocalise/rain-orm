@@ -1,232 +1,624 @@
-// Package schema provides type-safe table and column definitions for Rain ORM.
-// Define your database schema as Go structs with struct tags.
+// Package schema provides typed schema definitions and reusable SQL expressions.
 package schema
 
-import "time"
+import (
+	"fmt"
+	"reflect"
+	"time"
+)
 
-// Table represents a database table definition.
-type Table struct {
-	Name        string
-	Columns     []Column
-	PrimaryKey  []string
-	Indexes     []Index
-	Constraints []Constraint
+// DataType represents a database column type.
+type DataType string
+
+// Supported schema data types.
+const (
+	TypeBigSerial   DataType = "BIGSERIAL"
+	TypeBigInt      DataType = "BIGINT"
+	TypeText        DataType = "TEXT"
+	TypeVarChar     DataType = "VARCHAR"
+	TypeBoolean     DataType = "BOOLEAN"
+	TypeTimestampTZ DataType = "TIMESTAMPTZ"
+)
+
+// SortDirection represents an ORDER BY or index column direction.
+type SortDirection string
+
+// Supported sort directions.
+const (
+	SortAsc  SortDirection = "ASC"
+	SortDesc SortDirection = "DESC"
+)
+
+// TableReference is implemented by typed table handles.
+type TableReference interface {
+	TableDef() *TableDef
 }
 
-// Column represents a database column definition.
-type Column struct {
+// Expression is implemented by all query expressions.
+type Expression interface {
+	isExpression()
+}
+
+// Predicate is implemented by boolean SQL expressions.
+type Predicate interface {
+	Expression
+	isPredicate()
+}
+
+// ColumnReference is implemented by typed and untyped column handles.
+type ColumnReference interface {
+	Expression
+	ColumnDef() *ColumnDef
+}
+
+// ColumnType stores schema metadata about a column's logical type.
+type ColumnType struct {
+	DataType DataType
+	Size     int
+}
+
+// TableDef stores immutable table metadata after schema construction.
+type TableDef struct {
+	Name        string
+	Alias       string
+	Columns     []*ColumnDef
+	Indexes     []IndexDef
+	ForeignKeys []ForeignKeyDef
+
+	columnsByName map[string]*ColumnDef
+}
+
+// ColumnDef stores immutable column metadata after schema construction.
+type ColumnDef struct {
+	Table         *TableDef
 	Name          string
 	Type          ColumnType
 	Nullable      bool
-	Default       interface{}
+	Default       any
+	HasDefault    bool
+	DefaultSQL    string
 	PrimaryKey    bool
 	AutoIncrement bool
 	Unique        bool
-	Index         bool
-	Comment       string
 }
 
-// ColumnType represents a column data type.
-type ColumnType string
+// ForeignKeyDef stores a foreign-key relationship.
+type ForeignKeyDef struct {
+	Name             string
+	Column           *ColumnDef
+	ReferencedTable  *TableDef
+	ReferencedColumn *ColumnDef
+}
 
-// Common column types.
-const (
-	TypeInteger   ColumnType = "INTEGER"
-	TypeBigInt    ColumnType = "BIGINT"
-	TypeSmallInt  ColumnType = "SMALLINT"
-	TypeSerial    ColumnType = "SERIAL"
-	TypeBigSerial ColumnType = "BIGSERIAL"
-	TypeDecimal   ColumnType = "DECIMAL"
-	TypeNumeric   ColumnType = "NUMERIC"
-	TypeReal      ColumnType = "REAL"
-	TypeDouble    ColumnType = "DOUBLE PRECISION"
-
-	TypeVarchar ColumnType = "VARCHAR"
-	TypeText    ColumnType = "TEXT"
-	TypeChar    ColumnType = "CHAR"
-
-	TypeBoolean ColumnType = "BOOLEAN"
-
-	TypeTimestamp   ColumnType = "TIMESTAMP"
-	TypeTimestampTZ ColumnType = "TIMESTAMPTZ"
-	TypeDate        ColumnType = "DATE"
-	TypeTime        ColumnType = "TIME"
-
-	TypeJSON  ColumnType = "JSON"
-	TypeJSONB ColumnType = "JSONB"
-
-	TypeUUID  ColumnType = "UUID"
-	TypeBytea ColumnType = "BYTEA"
-	TypeInet  ColumnType = "INET"
-)
-
-// Index represents a database index.
-type Index struct {
+// IndexDef stores table-level index metadata.
+type IndexDef struct {
 	Name    string
-	Columns []string
 	Unique  bool
+	Columns []IndexColumn
 	Where   string
 }
 
-// Constraint represents a table constraint.
-type Constraint struct {
-	Name string
-	Type string // CHECK, FOREIGN KEY, etc.
-	Def  string
+// IndexColumn stores an indexed column and its sort direction.
+type IndexColumn struct {
+	Column    ColumnReference
+	Direction SortDirection
 }
 
-// Schema provides methods to define tables.
-type Schema struct {
-	tables map[string]*Table
+// IndexColumnSpec is implemented by values that can be bound to an index.
+type IndexColumnSpec interface {
+	indexColumnSpec()
 }
 
-// NewSchema creates a new schema builder.
-func NewSchema() *Schema {
-	return &Schema{
-		tables: make(map[string]*Table),
+// TableModel is embedded in user-defined table structs.
+type TableModel struct {
+	def *TableDef
+}
+
+// TableDef returns the underlying table metadata.
+func (t *TableModel) TableDef() *TableDef {
+	return t.def
+}
+
+// ColumnByName returns a column definition by name.
+func (t *TableDef) ColumnByName(name string) (*ColumnDef, bool) {
+	column, ok := t.columnsByName[name]
+	return column, ok
+}
+
+// C returns an untyped column handle by name for index definitions or dynamic access.
+func (t *TableModel) C(name string) *AnyColumn {
+	if t.def == nil {
+		panic("schema: table model is not initialized")
 	}
-}
 
-// CreateTable registers a new table definition.
-func (s *Schema) CreateTable(name string, def func(*TableBuilder)) *Table {
-	builder := &TableBuilder{Name: name}
-	if def != nil {
-		def(builder)
+	col, ok := t.def.columnsByName[name]
+	if !ok {
+		panic(fmt.Sprintf("schema: unknown column %q on table %q", name, t.def.Name))
 	}
-	table := builder.Build()
-	s.tables[name] = table
-	return table
+
+	return &AnyColumn{def: col}
 }
 
-// GetTable returns a table definition by name.
-func (s *Schema) GetTable(name string) (*Table, bool) {
-	table, ok := s.tables[name]
-	return table, ok
+// BigSerial adds a BIGSERIAL column.
+func (t *TableModel) BigSerial(name string) *Column[int64] {
+	return addColumn[int64](t.def, name, ColumnType{DataType: TypeBigSerial}, false, true)
 }
 
-// TableBuilder builds a table definition.
-type TableBuilder struct {
-	Name        string
-	columns     []Column
-	primaryKey  []string
-	indexes     []Index
-	constraints []Constraint
+// BigInt adds a BIGINT column.
+func (t *TableModel) BigInt(name string) *Column[int64] {
+	return addColumn[int64](t.def, name, ColumnType{DataType: TypeBigInt}, true, false)
 }
 
-// Column adds a column to the table.
-func (tb *TableBuilder) Column(name string, colType ColumnType) *ColumnBuilder {
-	col := Column{
-		Name: name,
-		Type: colType,
+// Text adds a TEXT column.
+func (t *TableModel) Text(name string) *Column[string] {
+	return addColumn[string](t.def, name, ColumnType{DataType: TypeText}, true, false)
+}
+
+// VarChar adds a VARCHAR column.
+func (t *TableModel) VarChar(name string, size int) *Column[string] {
+	return addColumn[string](t.def, name, ColumnType{DataType: TypeVarChar, Size: size}, true, false)
+}
+
+// Boolean adds a BOOLEAN column.
+func (t *TableModel) Boolean(name string) *Column[bool] {
+	return addColumn[bool](t.def, name, ColumnType{DataType: TypeBoolean}, true, false)
+}
+
+// TimestampTZ adds a TIMESTAMPTZ column.
+func (t *TableModel) TimestampTZ(name string) *Column[time.Time] {
+	return addColumn[time.Time](t.def, name, ColumnType{DataType: TypeTimestampTZ}, true, false)
+}
+
+// Index declares a non-unique index.
+func (t *TableModel) Index(name string) *IndexBuilder {
+	idx := &IndexDef{Name: name}
+	t.def.Indexes = append(t.def.Indexes, *idx)
+
+	return &IndexBuilder{table: t.def, index: len(t.def.Indexes) - 1}
+}
+
+// UniqueIndex declares a unique index.
+func (t *TableModel) UniqueIndex(name string) *IndexBuilder {
+	idx := &IndexDef{Name: name, Unique: true}
+	t.def.Indexes = append(t.def.Indexes, *idx)
+
+	return &IndexBuilder{table: t.def, index: len(t.def.Indexes) - 1}
+}
+
+// Define creates a typed table handle backed by schema metadata.
+func Define[T any](name string, fn func(*T)) *T {
+	handle := new(T)
+	def := &TableDef{
+		Name:          name,
+		Columns:       make([]*ColumnDef, 0, 8),
+		Indexes:       make([]IndexDef, 0, 4),
+		ForeignKeys:   make([]ForeignKeyDef, 0, 4),
+		columnsByName: make(map[string]*ColumnDef, 8),
 	}
-	tb.columns = append(tb.columns, col)
-	return &ColumnBuilder{table: tb, index: len(tb.columns) - 1}
+	bindTableModel(handle, def)
+	fn(handle)
+
+	return handle
 }
 
-// PrimaryKey sets the primary key columns.
-func (tb *TableBuilder) PrimaryKey(columns ...string) *TableBuilder {
-	tb.primaryKey = columns
-	return tb
+// Alias clones a typed table handle with a SQL alias.
+func Alias[T any](src *T, alias string) *T {
+	clone := new(T)
+	srcValue := reflect.ValueOf(src).Elem()
+	dstValue := reflect.ValueOf(clone).Elem()
+	dstValue.Set(srcValue)
+
+	aliasedDef := cloneTableDef(tableDefOf(src), alias)
+	bindTableModel(clone, aliasedDef)
+	rebindAliasedColumns(dstValue, aliasedDef)
+
+	return clone
 }
 
-// Index adds an index to the table.
-func (tb *TableBuilder) Index(name string, columns ...string) *TableBuilder {
-	tb.indexes = append(tb.indexes, Index{
-		Name:    name,
-		Columns: columns,
-	})
-	return tb
+// AnyColumn is an untyped column reference.
+type AnyColumn struct {
+	def *ColumnDef
 }
 
-// UniqueIndex adds a unique index to the table.
-func (tb *TableBuilder) UniqueIndex(name string, columns ...string) *TableBuilder {
-	tb.indexes = append(tb.indexes, Index{
-		Name:    name,
-		Columns: columns,
-		Unique:  true,
-	})
-	return tb
+// Ref creates an untyped column reference from metadata.
+func Ref(def *ColumnDef) *AnyColumn {
+	return &AnyColumn{def: def}
 }
 
-// Build creates the Table definition.
-func (tb *TableBuilder) Build() *Table {
-	return &Table{
-		Name:        tb.Name,
-		Columns:     tb.columns,
-		PrimaryKey:  tb.primaryKey,
-		Indexes:     tb.indexes,
-		Constraints: tb.constraints,
+// ColumnDef returns metadata for this column.
+func (c *AnyColumn) ColumnDef() *ColumnDef {
+	return c.def
+}
+
+// Asc returns an ascending sort expression.
+func (c *AnyColumn) Asc() OrderExpr {
+	return OrderExpr{Expr: c, Direction: SortAsc}
+}
+
+// Desc returns a descending sort expression.
+func (c *AnyColumn) Desc() OrderExpr {
+	return OrderExpr{Expr: c, Direction: SortDesc}
+}
+
+func (c *AnyColumn) isExpression()    {}
+func (c *AnyColumn) indexColumnSpec() {}
+
+// Column represents a typed column handle.
+type Column[T any] struct {
+	def *ColumnDef
+}
+
+// ColumnDef returns metadata for this column.
+func (c *Column[T]) ColumnDef() *ColumnDef {
+	return c.def
+}
+
+// PrimaryKey marks the column as a primary key.
+func (c *Column[T]) PrimaryKey() *Column[T] {
+	c.def.PrimaryKey = true
+	c.def.Nullable = false
+	if c.def.Type.DataType == TypeBigSerial {
+		c.def.AutoIncrement = true
 	}
-}
 
-// ColumnBuilder builds a column definition.
-type ColumnBuilder struct {
-	table *TableBuilder
-	index int
+	return c
 }
 
 // NotNull marks the column as NOT NULL.
-func (cb *ColumnBuilder) NotNull() *ColumnBuilder {
-	cb.table.columns[cb.index].Nullable = false
-	return cb
+func (c *Column[T]) NotNull() *Column[T] {
+	c.def.Nullable = false
+	return c
 }
 
 // Nullable marks the column as nullable.
-func (cb *ColumnBuilder) Nullable() *ColumnBuilder {
-	cb.table.columns[cb.index].Nullable = true
-	return cb
+func (c *Column[T]) Nullable() *Column[T] {
+	c.def.Nullable = true
+	return c
 }
 
-// Default sets the default value.
-func (cb *ColumnBuilder) Default(value interface{}) *ColumnBuilder {
-	cb.table.columns[cb.index].Default = value
-	return cb
+// Default sets a Go value default.
+func (c *Column[T]) Default(value T) *Column[T] {
+	c.def.HasDefault = true
+	c.def.Default = value
+	return c
 }
 
-// PrimaryKey marks the column as primary key.
-func (cb *ColumnBuilder) PrimaryKey() *ColumnBuilder {
-	cb.table.columns[cb.index].PrimaryKey = true
-	cb.table.primaryKey = append(cb.table.primaryKey, cb.table.columns[cb.index].Name)
-	return cb
-}
-
-// AutoIncrement marks the column as auto-increment.
-func (cb *ColumnBuilder) AutoIncrement() *ColumnBuilder {
-	cb.table.columns[cb.index].AutoIncrement = true
-	return cb
+// DefaultNow sets CURRENT_TIMESTAMP as the default value.
+func (c *Column[T]) DefaultNow() *Column[T] {
+	c.def.HasDefault = true
+	c.def.DefaultSQL = "CURRENT_TIMESTAMP"
+	return c
 }
 
 // Unique marks the column as unique.
-func (cb *ColumnBuilder) Unique() *ColumnBuilder {
-	cb.table.columns[cb.index].Unique = true
-	return cb
+func (c *Column[T]) Unique() *Column[T] {
+	c.def.Unique = true
+	return c
 }
 
-// Index adds an index on this column.
-func (cb *ColumnBuilder) Index() *ColumnBuilder {
-	cb.table.columns[cb.index].Index = true
-	return cb
+// References creates a foreign-key reference to another column.
+func (c *Column[T]) References(other ColumnReference) *Column[T] {
+	ref := ForeignKeyDef{
+		Column:           c.def,
+		ReferencedTable:  other.ColumnDef().Table,
+		ReferencedColumn: other.ColumnDef(),
+	}
+	c.def.Table.ForeignKeys = append(c.def.Table.ForeignKeys, ref)
+
+	return c
 }
 
-// Comment adds a comment to the column.
-func (cb *ColumnBuilder) Comment(text string) *ColumnBuilder {
-	cb.table.columns[cb.index].Comment = text
-	return cb
+// Eq compares this column to a Go value.
+func (c *Column[T]) Eq(value T) ComparisonExpr {
+	return ComparisonExpr{Left: c, Operator: "=", Right: ValueExpr{Value: value}}
 }
 
-// References creates a foreign key reference.
-func (cb *ColumnBuilder) References(table, column string) *ColumnBuilder {
-	// TODO: Add foreign key constraint
-	return cb
+// Ne compares this column to a Go value.
+func (c *Column[T]) Ne(value T) ComparisonExpr {
+	return ComparisonExpr{Left: c, Operator: "<>", Right: ValueExpr{Value: value}}
 }
 
-// Common model fields that can be embedded.
+// Gt compares this column to a Go value.
+func (c *Column[T]) Gt(value T) ComparisonExpr {
+	return ComparisonExpr{Left: c, Operator: ">", Right: ValueExpr{Value: value}}
+}
+
+// Gte compares this column to a Go value.
+func (c *Column[T]) Gte(value T) ComparisonExpr {
+	return ComparisonExpr{Left: c, Operator: ">=", Right: ValueExpr{Value: value}}
+}
+
+// Lt compares this column to a Go value.
+func (c *Column[T]) Lt(value T) ComparisonExpr {
+	return ComparisonExpr{Left: c, Operator: "<", Right: ValueExpr{Value: value}}
+}
+
+// Lte compares this column to a Go value.
+func (c *Column[T]) Lte(value T) ComparisonExpr {
+	return ComparisonExpr{Left: c, Operator: "<=", Right: ValueExpr{Value: value}}
+}
+
+// EqCol compares this column to another column.
+func (c *Column[T]) EqCol(other ColumnReference) ComparisonExpr {
+	return ComparisonExpr{Left: c, Operator: "=", Right: other}
+}
+
+// IsNull creates an IS NULL predicate.
+func (c *Column[T]) IsNull() NullCheckExpr {
+	return NullCheckExpr{Expr: c, Negated: false}
+}
+
+// IsNotNull creates an IS NOT NULL predicate.
+func (c *Column[T]) IsNotNull() NullCheckExpr {
+	return NullCheckExpr{Expr: c, Negated: true}
+}
+
+// Asc returns an ascending sort expression.
+func (c *Column[T]) Asc() OrderExpr {
+	return OrderExpr{Expr: c, Direction: SortAsc}
+}
+
+// Desc returns a descending sort expression.
+func (c *Column[T]) Desc() OrderExpr {
+	return OrderExpr{Expr: c, Direction: SortDesc}
+}
+
+func (c *Column[T]) isExpression()    {}
+func (c *Column[T]) indexColumnSpec() {}
+
+// ValueExpr wraps a Go value for SQL rendering.
+type ValueExpr struct {
+	Value any
+}
+
+func (ValueExpr) isExpression() {}
+
+// ComparisonExpr compares two expressions.
+type ComparisonExpr struct {
+	Left     Expression
+	Operator string
+	Right    Expression
+}
+
+func (ComparisonExpr) isExpression() {}
+func (ComparisonExpr) isPredicate()  {}
+
+// NullCheckExpr renders IS NULL or IS NOT NULL.
+type NullCheckExpr struct {
+	Expr    Expression
+	Negated bool
+}
+
+func (NullCheckExpr) isExpression() {}
+func (NullCheckExpr) isPredicate()  {}
+
+// LogicalExpr groups predicates with AND or OR.
+type LogicalExpr struct {
+	Operator string
+	Exprs    []Predicate
+}
+
+func (LogicalExpr) isExpression() {}
+func (LogicalExpr) isPredicate()  {}
+
+// OrderExpr renders ORDER BY expressions and indexed sort directions.
+type OrderExpr struct {
+	Expr      Expression
+	Direction SortDirection
+}
+
+func (OrderExpr) indexColumnSpec() {}
+
+// RawExpr is an escape hatch for raw SQL with bound args.
+type RawExpr struct {
+	SQL  string
+	Args []any
+}
+
+func (RawExpr) isExpression() {}
+
+// Raw returns a raw SQL expression.
+func Raw(sql string, args ...any) RawExpr {
+	return RawExpr{SQL: sql, Args: args}
+}
+
+// And combines predicates with AND.
+func And(predicates ...Predicate) LogicalExpr {
+	return LogicalExpr{Operator: "AND", Exprs: predicates}
+}
+
+// Or combines predicates with OR.
+func Or(predicates ...Predicate) LogicalExpr {
+	return LogicalExpr{Operator: "OR", Exprs: predicates}
+}
+
+// IndexBuilder configures a table index.
+type IndexBuilder struct {
+	table *TableDef
+	index int
+}
+
+// On binds ordered columns to the index.
+func (b *IndexBuilder) On(columns ...IndexColumnSpec) *IndexBuilder {
+	resolved := make([]IndexColumn, 0, len(columns))
+	for _, column := range columns {
+		switch value := column.(type) {
+		case ColumnReference:
+			resolved = append(resolved, IndexColumn{Column: value, Direction: SortAsc})
+		case OrderExpr:
+			col, ok := value.Expr.(ColumnReference)
+			if !ok {
+				panic("schema: index order expression must wrap a column")
+			}
+			resolved = append(resolved, IndexColumn{Column: col, Direction: value.Direction})
+		default:
+			panic(fmt.Sprintf("schema: unsupported index column type %T", column))
+		}
+	}
+	b.table.Indexes[b.index].Columns = resolved
+	return b
+}
+
+// Timestamps can be embedded into models used for scans and payloads.
 type Timestamps struct {
 	CreatedAt time.Time `db:"created_at"`
 	UpdatedAt time.Time `db:"updated_at"`
 }
 
-// SoftDelete provides soft delete functionality.
+// SoftDelete can be embedded into models used for scans and payloads.
 type SoftDelete struct {
 	DeletedAt *time.Time `db:"deleted_at"`
+}
+
+type tableCloner interface {
+	cloneForTable(*TableDef) any
+}
+
+func (c *AnyColumn) cloneForTable(table *TableDef) any {
+	clonedMeta, ok := table.columnsByName[c.def.Name]
+	if !ok {
+		panic(fmt.Sprintf("schema: alias missing column %q", c.def.Name))
+	}
+
+	return &AnyColumn{def: clonedMeta}
+}
+
+func (c *Column[T]) cloneForTable(table *TableDef) any {
+	clonedMeta, ok := table.columnsByName[c.def.Name]
+	if !ok {
+		panic(fmt.Sprintf("schema: alias missing column %q", c.def.Name))
+	}
+
+	return &Column[T]{def: clonedMeta}
+}
+
+func addColumn[T any](table *TableDef, name string, columnType ColumnType, nullable bool, autoIncrement bool) *Column[T] {
+	if table == nil {
+		panic("schema: table model is not initialized")
+	}
+	if _, exists := table.columnsByName[name]; exists {
+		panic(fmt.Sprintf("schema: duplicate column %q on table %q", name, table.Name))
+	}
+
+	def := &ColumnDef{
+		Table:         table,
+		Name:          name,
+		Type:          columnType,
+		Nullable:      nullable,
+		AutoIncrement: autoIncrement,
+	}
+	table.Columns = append(table.Columns, def)
+	table.columnsByName[name] = def
+
+	return &Column[T]{def: def}
+}
+
+func cloneTableDef(src *TableDef, alias string) *TableDef {
+	cloned := &TableDef{
+		Name:          src.Name,
+		Alias:         alias,
+		Columns:       make([]*ColumnDef, 0, len(src.Columns)),
+		Indexes:       make([]IndexDef, len(src.Indexes)),
+		ForeignKeys:   make([]ForeignKeyDef, 0, len(src.ForeignKeys)),
+		columnsByName: make(map[string]*ColumnDef, len(src.Columns)),
+	}
+
+	for _, column := range src.Columns {
+		copyColumn := *column
+		copyColumn.Table = cloned
+		cloned.Columns = append(cloned.Columns, &copyColumn)
+		cloned.columnsByName[copyColumn.Name] = &copyColumn
+	}
+
+	for idx := range src.Indexes {
+		clonedIndex := IndexDef{
+			Name:   src.Indexes[idx].Name,
+			Unique: src.Indexes[idx].Unique,
+			Where:  src.Indexes[idx].Where,
+		}
+		for _, indexedColumn := range src.Indexes[idx].Columns {
+			clonedIndex.Columns = append(clonedIndex.Columns, IndexColumn{
+				Column:    &AnyColumn{def: cloned.columnsByName[indexedColumn.Column.ColumnDef().Name]},
+				Direction: indexedColumn.Direction,
+			})
+		}
+		cloned.Indexes[idx] = clonedIndex
+	}
+
+	for _, foreignKey := range src.ForeignKeys {
+		cloned.ForeignKeys = append(cloned.ForeignKeys, ForeignKeyDef{
+			Name:             foreignKey.Name,
+			Column:           cloned.columnsByName[foreignKey.Column.Name],
+			ReferencedTable:  foreignKey.ReferencedTable,
+			ReferencedColumn: foreignKey.ReferencedColumn,
+		})
+	}
+
+	return cloned
+}
+
+func bindTableModel(target any, def *TableDef) {
+	value := reflect.ValueOf(target)
+	if value.Kind() != reflect.Pointer || value.IsNil() {
+		panic("schema: target must be a non-nil pointer")
+	}
+
+	model := locateTableModel(value.Elem())
+	if !model.IsValid() {
+		panic("schema: typed table structs must embed schema.TableModel")
+	}
+
+	model.Set(reflect.ValueOf(TableModel{def: def}))
+}
+
+func locateTableModel(value reflect.Value) reflect.Value {
+	for fieldIndex := range value.NumField() {
+		field := value.Field(fieldIndex)
+		fieldType := value.Type().Field(fieldIndex)
+		if fieldType.Type == reflect.TypeFor[TableModel]() {
+			return field
+		}
+		if field.Kind() == reflect.Struct {
+			nested := locateTableModel(field)
+			if nested.IsValid() {
+				return nested
+			}
+		}
+	}
+
+	return reflect.Value{}
+}
+
+func tableDefOf(value any) *TableDef {
+	table, ok := value.(TableReference)
+	if !ok {
+		panic(fmt.Sprintf("schema: %T does not implement schema.TableReference", value))
+	}
+
+	return table.TableDef()
+}
+
+func rebindAliasedColumns(value reflect.Value, table *TableDef) {
+	if !value.IsValid() {
+		return
+	}
+
+	switch value.Kind() {
+	case reflect.Pointer:
+		if value.IsNil() || !value.CanSet() {
+			return
+		}
+		if cloner, ok := value.Interface().(tableCloner); ok {
+			value.Set(reflect.ValueOf(cloner.cloneForTable(table)))
+			return
+		}
+		rebindAliasedColumns(value.Elem(), table)
+	case reflect.Struct:
+		if value.Type() == reflect.TypeFor[TableModel]() {
+			return
+		}
+		for _, field := range value.Fields() {
+			rebindAliasedColumns(field, table)
+		}
+	}
 }
