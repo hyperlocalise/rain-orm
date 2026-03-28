@@ -17,7 +17,7 @@ A type-safe, SQL-like ORM for Go inspired by DrizzleORM — lightweight, fast, a
 # Features
 
 - **Type-safe query builder** — Chain methods with compile-time safety
-- **Schema-first design** — Define tables as Go structs with struct tags
+- **Schema-first design** — Define tables and indexes with typed Go schema handles
 - **Multiple dialect support** — PostgreSQL, MySQL, SQLite (extensible)
 - **Fluent API** — DrizzleORM-inspired SQL-like syntax
 - **Transaction support** — First-class transaction handling
@@ -57,10 +57,21 @@ rain-orm/
 package main
 
 import (
-    "github.com/quiet-circles/rain-orm/pkg/rain"
+    "time"
+
+    "github.com/hyperlocalise/rain-orm/pkg/rain"
+    "github.com/hyperlocalise/rain-orm/pkg/schema"
 )
 
-// Define your model
+type UsersTable struct {
+    schema.TableModel
+    ID        *schema.Column[int64]
+    Email     *schema.Column[string]
+    Name      *schema.Column[string]
+    Active    *schema.Column[bool]
+    CreatedAt *schema.Column[time.Time]
+}
+
 type User struct {
     ID     int64  `db:"id"`
     Email  string `db:"email"`
@@ -68,35 +79,40 @@ type User struct {
     Active bool   `db:"active"`
 }
 
+var Users = schema.Define("users", func(t *UsersTable) {
+    t.ID = t.BigSerial("id").PrimaryKey()
+    t.Email = t.VarChar("email", 255).NotNull().Unique()
+    t.Name = t.Text("name").NotNull()
+    t.Active = t.Boolean("active").NotNull().Default(true)
+    t.CreatedAt = t.TimestampTZ("created_at").NotNull().DefaultNow()
+})
+
 func main() {
-    // Open database connection
-    db := rain.Open("postgres", "postgres://user:pass@localhost/mydb")
+    db, err := rain.Open("postgres", "postgres://user:pass@localhost/mydb")
+    if err != nil {
+        panic(err)
+    }
     defer db.Close()
 
-    // Create
-    user := User{Email: "alice@example.com", Name: "Alice", Active: true}
-    db.Model(&user).Create()
+    insertSQL, _, _ := db.Insert().
+        Table(Users).
+        Model(&User{Email: "alice@example.com", Name: "Alice", Active: true}).
+        Returning(Users.ID).
+        ToSQL()
 
-    // Read
-    var found User
-    db.Model(&User{}).Where("id", "=", 1).First(&found)
-
-    // Query with conditions
-    var users []User
-    db.Model(&User{}).
-        Where("active", "=", true).
-        OrderBy("created_at DESC").
+    selectSQL, _, _ := db.Select().
+        Table(Users).
+        Column(Users.ID, Users.Email, Users.Name).
+        Where(Users.Active.Eq(true)).
+        OrderBy(Users.CreatedAt.Desc()).
         Limit(10).
-        Find(&users)
+        ToSQL()
 
-    // Update
-    db.Update("users").
-        Set("name", "Alice Smith").
-        Where("id", "=", 1).
-        Update()
-
-    // Delete
-    db.Delete("users").Where("id", "=", 1).Delete()
+    _, _, _ = insertSQL, selectSQL, db.Update().
+        Table(Users).
+        Set(Users.Name, "Alice Smith").
+        Where(Users.ID.Eq(int64(1))).
+        ToSQL()
 }
 ```
 
@@ -105,24 +121,26 @@ func main() {
 ## Basic CRUD
 
 ```go
-// Insert
-db.Model(&user).Create()
+u := schema.Alias(Users, "u")
+p := schema.Alias(Posts, "p")
 
-// Find by ID
-db.Model(&User{}).Where("id", "=", 1).First(&user)
+db.Select().
+    Table(p).
+    Column(p.ID, p.Title, u.Email).
+    Join(u, p.UserID.EqCol(u.ID)).
+    Where(u.Active.Eq(true)).
+    OrderBy(p.ID.Desc()).
+    Limit(10)
 
-// Find multiple with conditions
-db.Select("*").From("users").
-    Where("age", ">=", 18).
-    Where("active", "=", true).
-    OrderBy("name ASC").
-    Find(&users)
+db.Insert().
+    Table(Users).
+    Model(&user).
+    Returning(Users.ID)
 
-// Count
- count, _ := db.Model(&User{}).Where("active", "=", true).Count()
-
-// Check existence
-exists, _ := db.Model(&User{}).Where("email", "=", "test@example.com").Exists()
+db.Update().
+    Table(Users).
+    Set(Users.Name, "Alice Smith").
+    Where(Users.ID.Eq(int64(1)))
 ```
 
 ## Transactions
@@ -134,7 +152,11 @@ if err != nil {
 }
 
 // Perform operations within transaction
-err = tx.Model(&post).Create()
+_, err = tx.Insert().
+    Table(Posts).
+    Set(Posts.UserID, user.ID).
+    Set(Posts.Title, "Hello").
+    Exec(ctx)
 if err != nil {
     tx.Rollback()
     return err
@@ -146,18 +168,24 @@ err = tx.Commit()
 ## Schema Definition
 
 ```go
-import "github.com/quiet-circles/rain-orm/pkg/schema"
+import "github.com/hyperlocalise/rain-orm/pkg/schema"
 
-s := schema.NewSchema()
+type UsersTable struct {
+    schema.TableModel
+    ID        *schema.Column[int64]
+    Email     *schema.Column[string]
+    Active    *schema.Column[bool]
+    CreatedAt *schema.Column[time.Time]
+}
 
-s.CreateTable("users", func(t *schema.TableBuilder) {
-    t.Column("id", schema.TypeBigSerial).PrimaryKey()
-    t.Column("email", schema.TypeVarchar).NotNull().Unique()
-    t.Column("name", schema.TypeVarchar).NotNull()
-    t.Column("age", schema.TypeInteger).Nullable()
-    t.Column("active", schema.TypeBoolean).NotNull().Default(true)
-    
-    t.Index("idx_users_email", "email")
+var Users = schema.Define("users", func(t *UsersTable) {
+    t.ID = t.BigSerial("id").PrimaryKey()
+    t.Email = t.VarChar("email", 255).NotNull().Unique()
+    t.Active = t.Boolean("active").NotNull().Default(true)
+    t.CreatedAt = t.TimestampTZ("created_at").NotNull().DefaultNow()
+
+    t.UniqueIndex("users_email_key").On(t.Email)
+    t.Index("users_active_created_idx").On(t.Active, t.CreatedAt.Desc())
 })
 ```
 
