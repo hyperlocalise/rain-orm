@@ -24,3 +24,19 @@ jobs:
 
       - name: Run precommit
         run: make precommit
+
+  integration:
+    name: SQLite Integration Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+
+      - name: Run SQLite integration tests
+        run: go test -race ./pkg/rain -run '^TestSQLiteIntegration'
