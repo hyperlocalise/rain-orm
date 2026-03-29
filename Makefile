@@ -25,7 +25,7 @@ bench: ## run sqlite benchmark suite with allocation metrics
 
 .PHONY: bench-report
 bench-report: ## run sqlite benchmark suite and save an annotated report under artifacts/bench
-	/bin/zsh ./scripts/bench-sqlite-report.sh "$(BENCH_FILTER)"
+	./scripts/bench-sqlite-report.sh "$(BENCH_FILTER)"
 
 .PHONY: test-json
 test-json: ## run tests with JSON output (for CI)
