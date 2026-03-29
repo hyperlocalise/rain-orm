@@ -81,19 +81,20 @@ func closeRows(rows *sql.Rows, errp *error) {
 
 // SelectQuery builds typed SELECT statements.
 type SelectQuery struct {
-	runner   queryRunner
-	dialect  dialect.Dialect
-	table    selectTableSource
-	cols     []schema.Expression
-	where    []schema.Predicate
-	joins    []joinClause
-	order    []schema.OrderExpr
-	groupBy  []schema.Expression
-	having   []schema.Predicate
-	ctes     []cteDefinition
-	distinct bool
-	limit    int
-	offset   int
+	runner        queryRunner
+	dialect       dialect.Dialect
+	table         selectTableSource
+	cols          []schema.Expression
+	where         []schema.Predicate
+	joins         []joinClause
+	order         []schema.OrderExpr
+	groupBy       []schema.Expression
+	having        []schema.Predicate
+	ctes          []cteDefinition
+	distinct      bool
+	limit         int
+	offset        int
+	relationNames []string
 }
 
 // Table sets the table source for the query.
@@ -183,6 +184,12 @@ func (q *SelectQuery) Limit(limit int) *SelectQuery {
 // Offset sets the OFFSET clause.
 func (q *SelectQuery) Offset(offset int) *SelectQuery {
 	q.offset = offset
+	return q
+}
+
+// WithRelations requests one or more named relations to be loaded after scanning base rows.
+func (q *SelectQuery) WithRelations(names ...string) *SelectQuery {
+	q.relationNames = append(q.relationNames, names...)
 	return q
 }
 
@@ -328,7 +335,12 @@ func (q *SelectQuery) Scan(ctx context.Context, dest any) error {
 	}
 	defer closeRows(rows, &err)
 
-	err = scanRows(rows, dest)
+	if len(q.relationNames) == 0 {
+		err = scanRows(rows, dest)
+		return err
+	}
+
+	err = q.scanRowsWithRelations(ctx, rows, dest)
 	return err
 }
 
