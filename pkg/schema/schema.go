@@ -638,6 +638,79 @@ type OrderExpr struct {
 
 func (OrderExpr) indexColumnSpec() {}
 
+// AggregateExpr renders SQL aggregate functions.
+type AggregateExpr struct {
+	Function string
+	Expr     Expression
+	Star     bool
+	Distinct bool
+}
+
+func (AggregateExpr) isExpression() {}
+
+// AliasExpr renames a computed expression in a select list.
+type AliasExpr struct {
+	Expr  Expression
+	Alias string
+}
+
+func (AliasExpr) isExpression() {}
+
+// Count renders COUNT(*) when no expression is provided, or COUNT(expr) when one expression is provided.
+func Count(exprs ...Expression) AggregateExpr {
+	switch len(exprs) {
+	case 0:
+		return AggregateExpr{Function: "COUNT", Star: true}
+	case 1:
+		return AggregateExpr{Function: "COUNT", Expr: exprs[0]}
+	default:
+		panic("schema: Count accepts zero or one expression")
+	}
+}
+
+// Sum renders SUM(expr).
+func Sum(expr Expression) AggregateExpr {
+	if expr == nil {
+		panic("schema: Sum requires a non-nil expression")
+	}
+	return AggregateExpr{Function: "SUM", Expr: expr}
+}
+
+// Avg renders AVG(expr).
+func Avg(expr Expression) AggregateExpr {
+	if expr == nil {
+		panic("schema: Avg requires a non-nil expression")
+	}
+	return AggregateExpr{Function: "AVG", Expr: expr}
+}
+
+// Min renders MIN(expr).
+func Min(expr Expression) AggregateExpr {
+	if expr == nil {
+		panic("schema: Min requires a non-nil expression")
+	}
+	return AggregateExpr{Function: "MIN", Expr: expr}
+}
+
+// Max renders MAX(expr).
+func Max(expr Expression) AggregateExpr {
+	if expr == nil {
+		panic("schema: Max requires a non-nil expression")
+	}
+	return AggregateExpr{Function: "MAX", Expr: expr}
+}
+
+// As aliases an expression in a SELECT list.
+func As(expr Expression, alias string) AliasExpr {
+	if expr == nil {
+		panic("schema: As requires a non-nil expression")
+	}
+	if alias == "" {
+		panic("schema: As requires a non-empty alias")
+	}
+	return AliasExpr{Expr: expr, Alias: alias}
+}
+
 // RawExpr is an escape hatch for raw SQL with bound args.
 type RawExpr struct {
 	SQL  string

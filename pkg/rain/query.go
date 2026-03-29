@@ -1194,6 +1194,29 @@ func (c *compileContext) writeExpression(expr schema.Expression) error {
 			}
 		}
 		c.writeByte(')')
+	case schema.AggregateExpr:
+		c.writeString(value.Function)
+		c.writeByte('(')
+		if value.Distinct {
+			c.writeString("DISTINCT ")
+		}
+		switch {
+		case value.Star:
+			c.writeByte('*')
+		case value.Expr != nil:
+			if err := c.writeExpression(value.Expr); err != nil {
+				return err
+			}
+		default:
+			return fmt.Errorf("rain: aggregate %s requires an expression", value.Function)
+		}
+		c.writeByte(')')
+	case schema.AliasExpr:
+		if err := c.writeExpression(value.Expr); err != nil {
+			return err
+		}
+		c.writeString(" AS ")
+		c.writeQuotedIdentifier(value.Alias)
 	case schema.RawExpr:
 		if err := c.writeRaw(value); err != nil {
 			return err
