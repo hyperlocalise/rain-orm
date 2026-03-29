@@ -88,7 +88,12 @@ func (q *UpdateQuery) ToSQL() (string, []any, error) {
 		return "", nil, err
 	}
 
-	return ctx.String(), ctx.args, ctx.err
+	compiled := ctx.compiledQuery()
+	args, err := compiled.literalArgs()
+	if err != nil {
+		return "", nil, err
+	}
+	return compiled.sql, args, ctx.err
 }
 
 func (q *UpdateQuery) returningClause() returningClause {

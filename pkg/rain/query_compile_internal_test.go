@@ -27,6 +27,13 @@ func TestQueryBuilderAndHelperErrors(t *testing.T) {
 	if err := selectNoRunner.Scan(context.Background(), &internalUserRow{}); !errors.Is(err, ErrNoConnection) {
 		t.Fatalf("expected select scan ErrNoConnection, got %v", err)
 	}
+	if _, err := selectNoRunner.Prepare(context.Background()); !errors.Is(err, ErrNoConnection) {
+		t.Fatalf("expected select prepare ErrNoConnection, got %v", err)
+	}
+	selectUnsupportedPrepare := &SelectQuery{runner: &countingRunner{}, dialect: db.Dialect(), table: tableDefSource{table: users.TableDef()}}
+	if _, err := selectUnsupportedPrepare.Prepare(context.Background()); !errors.Is(err, ErrPrepareNotSupported) {
+		t.Fatalf("expected select prepare ErrPrepareNotSupported, got %v", err)
+	}
 	if _, err := (&SelectQuery{dialect: db.Dialect()}).Count(context.Background()); !errors.Is(err, ErrNoConnection) {
 		t.Fatalf("expected select count ErrNoConnection, got %v", err)
 	}
@@ -127,6 +134,48 @@ func TestCompileContextAndAssignmentsHelpers(t *testing.T) {
 		t.Fatalf("unexpected placeholder SQL: %s", ctx.String())
 	}
 
+	for _, tc := range []struct {
+		name    string
+		dialect string
+		wantSQL string
+	}{
+		{name: "postgres", dialect: "postgres", wantSQL: `"users"."email" = $1 AND "users"."active" = $2 AND "users"."name" = $3`},
+		{name: "mysql", dialect: "mysql", wantSQL: "`users`.`email` = ? AND `users`.`active` = ? AND `users`.`name` = ?"},
+		{name: "sqlite", dialect: "sqlite", wantSQL: `"users"."email" = ? AND "users"."active" = ? AND "users"."name" = ?`},
+	} {
+		t.Run("named placeholder "+tc.name, func(t *testing.T) {
+			ctx := newCompileContext(dialectForTest(t, tc.dialect))
+			expr := schema.And(
+				users.Email.EqExpr(schema.Placeholder("email")),
+				users.Active.EqExpr(schema.Placeholder("active")),
+				users.Name.Eq("alice"),
+			)
+			if err := ctx.writeExpression(expr); err != nil {
+				t.Fatalf("writeExpression failed: %v", err)
+			}
+			if ctx.String() != "("+tc.wantSQL+")" {
+				t.Fatalf("unexpected SQL:\nwant: %s\ngot:  %s", "("+tc.wantSQL+")", ctx.String())
+			}
+			compiled := ctx.compiledQuery()
+			if !compiled.hasNames {
+				t.Fatalf("expected compiled query to track named placeholders")
+			}
+			if _, err := compiled.literalArgs(); !errors.Is(err, ErrPreparedArgsRequired) {
+				t.Fatalf("expected literalArgs placeholder error, got %v", err)
+			}
+			bound, err := compiled.bind(PreparedArgs{
+				"email":  "alice@example.com",
+				"active": true,
+			})
+			if err != nil {
+				t.Fatalf("bind failed: %v", err)
+			}
+			if !reflect.DeepEqual(bound, []any{"alice@example.com", true, "alice"}) {
+				t.Fatalf("unexpected bound args: %#v", bound)
+			}
+		})
+	}
+
 	if err := newCompileContext(dialectForTest(t, "postgres")).writeRaw(schema.Raw("?", 1, 2)); err == nil || !strings.Contains(err.Error(), "unused args") {
 		t.Fatalf("expected raw unused args error, got %v", err)
 	}
@@ -177,6 +226,40 @@ func TestCompileContextAndAssignmentsHelpers(t *testing.T) {
 	}
 	if _, ok := joinPredicates([]schema.Predicate{users.Active.Eq(true), users.Email.Eq("alice@example.com")}).(schema.LogicalExpr); !ok {
 		t.Fatalf("expected multiple predicates to produce logical expression")
+	}
+}
+
+func TestCompiledQueryBindValidation(t *testing.T) {
+	t.Parallel()
+
+	users, _ := defineInternalQueryTables()
+	compiled, err := (&SelectQuery{
+		dialect: dialectForTest(t, "postgres"),
+		table:   tableDefSource{table: users.TableDef()},
+		where: []schema.Predicate{
+			schema.And(
+				users.Email.EqExpr(schema.Placeholder("email")),
+				users.Name.EqExpr(schema.Placeholder("email")),
+			),
+		},
+	}).compile()
+	if err != nil {
+		t.Fatalf("compile failed: %v", err)
+	}
+
+	bound, err := compiled.bind(PreparedArgs{"email": "alice@example.com"})
+	if err != nil {
+		t.Fatalf("bind repeated placeholder failed: %v", err)
+	}
+	if !reflect.DeepEqual(bound, []any{"alice@example.com", "alice@example.com"}) {
+		t.Fatalf("unexpected repeated placeholder binding: %#v", bound)
+	}
+
+	if _, err := compiled.bind(PreparedArgs{}); err == nil || !strings.Contains(err.Error(), "missing prepared arg") {
+		t.Fatalf("expected missing arg error, got %v", err)
+	}
+	if _, err := compiled.bind(PreparedArgs{"email": "alice@example.com", "extra": 1}); err == nil || !strings.Contains(err.Error(), "unexpected prepared arg") {
+		t.Fatalf("expected extra arg error, got %v", err)
 	}
 }
 

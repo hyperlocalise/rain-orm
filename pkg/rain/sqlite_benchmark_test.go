@@ -114,6 +114,34 @@ func BenchmarkSQLiteSelectPointLookup(b *testing.B) {
 	})
 }
 
+func BenchmarkSQLitePreparedSelectPointLookup(b *testing.B) {
+	runSQLiteBenchmarkDatasets(b, func(b *testing.B, fixture *benchmarkFixture, _ benchmarkDataset) {
+		ctx := context.Background()
+		prepared, err := fixture.db.Select().
+			Table(fixture.users).
+			Where(fixture.users.ID.EqExpr(schema.Placeholder("id"))).
+			Prepare(ctx)
+		if err != nil {
+			b.Fatalf("prepare point lookup: %v", err)
+		}
+		b.Cleanup(func() {
+			if err := prepared.Close(); err != nil {
+				b.Fatalf("close prepared point lookup: %v", err)
+			}
+		})
+
+		b.ReportAllocs()
+		b.ResetTimer()
+
+		for range b.N {
+			var row benchmarkUserRow
+			if err := prepared.Scan(ctx, rain.PreparedArgs{"id": fixture.target}, &row); err != nil {
+				b.Fatalf("prepared point lookup scan: %v", err)
+			}
+		}
+	})
+}
+
 func BenchmarkSQLiteSelectFilteredSlice(b *testing.B) {
 	runSQLiteBenchmarkDatasets(b, func(b *testing.B, fixture *benchmarkFixture, dataset benchmarkDataset) {
 		ctx := context.Background()

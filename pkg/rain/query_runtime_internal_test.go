@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/hyperlocalise/rain-orm/pkg/schema"
 )
 
 func TestQueryExecutionPaths(t *testing.T) {
@@ -91,6 +93,179 @@ func TestQueryExecutionPaths(t *testing.T) {
 
 	if _, err := db.Select().Table(users).Where(users.ID.Eq(insertedID)).Count(ctx); !errors.Is(err, sql.ErrNoRows) && err != nil {
 		t.Fatalf("unexpected count error after delete: %v", err)
+	}
+}
+
+func TestPreparedSelectQueryExecutionPaths(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db := openInternalQueryDB(t)
+	users, posts := defineInternalQueryTables()
+	createInternalQuerySchema(t, ctx, db)
+
+	for _, item := range []internalInsertModel{
+		{Email: "alice@example.com", Name: "Alice", Active: true},
+		{Email: "bob@example.com", Name: "Bob", Active: false},
+	} {
+		result, err := db.Insert().Table(users).Model(&item).Exec(ctx)
+		if err != nil {
+			t.Fatalf("insert user %s: %v", item.Email, err)
+		}
+		userID, err := result.LastInsertId()
+		if err != nil {
+			t.Fatalf("last insert id for %s: %v", item.Email, err)
+		}
+		if _, err := db.Insert().Table(posts).Set(posts.UserID, userID).Set(posts.Title, "post-"+item.Name).Exec(ctx); err != nil {
+			t.Fatalf("insert post for %s: %v", item.Email, err)
+		}
+	}
+
+	query := db.Select().
+		Table(users).
+		Where(users.Email.EqExpr(schema.Placeholder("email"))).
+		Where(users.Active.EqExpr(schema.Placeholder("active"))).
+		WithRelations("posts")
+
+	prepared, err := query.Prepare(ctx)
+	if err != nil {
+		t.Fatalf("prepare select failed: %v", err)
+	}
+	defer func() {
+		if err := prepared.Close(); err != nil {
+			t.Fatalf("close prepared query failed: %v", err)
+		}
+	}()
+
+	var rows []internalUserWithPostsRow
+	if err := prepared.Scan(ctx, PreparedArgs{
+		"email":  "alice@example.com",
+		"active": true,
+	}, &rows); err != nil {
+		t.Fatalf("prepared scan failed: %v", err)
+	}
+	if len(rows) != 1 || len(rows[0].Posts) != 1 {
+		t.Fatalf("unexpected prepared scan rows: %#v", rows)
+	}
+
+	count, err := prepared.Count(ctx, PreparedArgs{
+		"email":  "alice@example.com",
+		"active": true,
+	})
+	if err != nil {
+		t.Fatalf("prepared count failed: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected prepared count 1, got %d", count)
+	}
+
+	exists, err := prepared.Exists(ctx, PreparedArgs{
+		"email":  "alice@example.com",
+		"active": true,
+	})
+	if err != nil {
+		t.Fatalf("prepared exists failed: %v", err)
+	}
+	if !exists {
+		t.Fatalf("expected prepared exists to be true")
+	}
+
+	if err := prepared.Scan(ctx, PreparedArgs{"email": "alice@example.com"}, &rows); err == nil || !strings.Contains(err.Error(), "missing prepared arg") {
+		t.Fatalf("expected missing prepared arg error, got %v", err)
+	}
+	if err := prepared.Scan(ctx, PreparedArgs{"email": "alice@example.com", "active": true, "extra": 1}, &rows); err == nil || !strings.Contains(err.Error(), "unexpected prepared arg") {
+		t.Fatalf("expected unexpected prepared arg error, got %v", err)
+	}
+}
+
+func TestPreparedSelectQueryInTransactionLifecycle(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db := openInternalQueryDB(t)
+	users, _ := defineInternalQueryTables()
+	createInternalQuerySchema(t, ctx, db)
+
+	if _, err := db.Insert().Table(users).Model(&internalInsertModel{Email: "tx@example.com", Name: "Tx"}).Exec(ctx); err != nil {
+		t.Fatalf("insert user: %v", err)
+	}
+
+	tx, err := db.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin tx: %v", err)
+	}
+
+	prepared, err := tx.Select().
+		Table(users).
+		Where(users.Email.EqExpr(schema.Placeholder("email"))).
+		Prepare(ctx)
+	if err != nil {
+		t.Fatalf("prepare in tx failed: %v", err)
+	}
+
+	var row internalUserRow
+	if err := prepared.Scan(ctx, PreparedArgs{"email": "tx@example.com"}, &row); err != nil {
+		t.Fatalf("prepared scan in tx failed: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("commit tx: %v", err)
+	}
+	if err := prepared.Scan(ctx, PreparedArgs{"email": "tx@example.com"}, &row); err == nil {
+		t.Fatalf("expected prepared statement on committed tx to fail")
+	}
+	if err := prepared.Close(); err != nil {
+		t.Fatalf("close after tx commit failed: %v", err)
+	}
+	if err := prepared.Close(); err != nil {
+		t.Fatalf("second close failed: %v", err)
+	}
+}
+
+func TestPreparedSelectQueryAllowsScanWhenPreparedCountIsUnsupported(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db := openInternalQueryDB(t)
+	users, _ := defineInternalQueryTables()
+	createInternalQuerySchema(t, ctx, db)
+
+	for _, item := range []internalInsertModel{
+		{Email: "group@example.com", Name: "Group", Active: true},
+		{Email: "group-2@example.com", Name: "Group", Active: true},
+	} {
+		if _, err := db.Insert().Table(users).Model(&item).Exec(ctx); err != nil {
+			t.Fatalf("insert user: %v", err)
+		}
+	}
+
+	query := db.Select().
+		Table(users).
+		Column(users.Name, schema.Count().As("user_count")).
+		Where(users.Active.EqExpr(schema.Placeholder("active"))).
+		GroupBy(users.Name)
+
+	prepared, err := query.Prepare(ctx)
+	if err != nil {
+		t.Fatalf("prepare grouped query failed: %v", err)
+	}
+	defer func() {
+		if err := prepared.Close(); err != nil {
+			t.Fatalf("close grouped prepared query failed: %v", err)
+		}
+	}()
+
+	var rows []struct {
+		Name      string `db:"name"`
+		UserCount int64  `db:"user_count"`
+	}
+	if err := prepared.Scan(ctx, PreparedArgs{"active": true}, &rows); err != nil {
+		t.Fatalf("prepared grouped scan failed: %v", err)
+	}
+	if len(rows) != 1 || rows[0].UserCount != 2 {
+		t.Fatalf("unexpected grouped rows: %#v", rows)
+	}
+	if _, err := prepared.Count(ctx, PreparedArgs{"active": true}); err == nil || !strings.Contains(err.Error(), "aggregate helpers do not support DISTINCT, GROUP BY, or HAVING clauses") {
+		t.Fatalf("expected prepared count grouped-query error, got %v", err)
 	}
 }
 
@@ -491,7 +666,7 @@ func TestRelationLoadingChunksLargeINQueries(t *testing.T) {
 	users, posts := defineInternalQueryTables()
 	createInternalQuerySchema(t, ctx, db)
 
-	for idx := 0; idx < relationBatchSize+5; idx++ {
+	for idx := range relationBatchSize + 5 {
 		result, err := db.Insert().
 			Table(users).
 			Set(users.Email, fmt.Sprintf("user-%d@example.com", idx)).
@@ -533,7 +708,7 @@ func TestRelationElementTypeFromTypeHandlesPointerSlices(t *testing.T) {
 		t.Fatalf("OpenDialect(sqlite): %v", err)
 	}
 
-	parentsType := reflect.TypeOf([]*internalUserWithPostPointersRow{})
+	parentsType := reflect.TypeFor[[]*internalUserWithPostPointersRow]()
 	parentStructType, err := sliceParentStructType(parentsType)
 	if err != nil {
 		t.Fatalf("sliceParentStructType failed: %v", err)
@@ -543,7 +718,7 @@ func TestRelationElementTypeFromTypeHandlesPointerSlices(t *testing.T) {
 	if err != nil {
 		t.Fatalf("relationElementTypeFromType failed: %v", err)
 	}
-	if relatedType != reflect.TypeOf(internalPostOnlyRow{}) {
-		t.Fatalf("expected related type %v, got %v", reflect.TypeOf(internalPostOnlyRow{}), relatedType)
+	if relatedType != reflect.TypeFor[internalPostOnlyRow]() {
+		t.Fatalf("expected related type %v, got %v", reflect.TypeFor[internalPostOnlyRow](), relatedType)
 	}
 }
