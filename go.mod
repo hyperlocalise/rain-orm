@@ -10,7 +10,10 @@ tool (
 	mvdan.cc/gofumpt
 )
 
-require modernc.org/sqlite v1.48.0
+require (
+	github.com/lib/pq v1.11.2
+	modernc.org/sqlite v1.48.0
+)
 
 require (
 	4d63.com/gocheckcompilerdirectives v1.3.0 // indirect

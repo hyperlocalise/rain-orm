@@ -236,6 +236,23 @@ sqlType := d.DataType(schema.ColumnType{DataType: "string", Size: 255})  // VARC
 
 See the [examples/](examples/) directory for complete, runnable examples.
 
+# Integration Tests
+
+SQLite integration coverage runs in CI and can be executed locally with:
+
+```sh
+go test -race ./pkg/rain -run "^TestSQLiteIntegration"
+```
+
+Postgres integration coverage uses environment-driven connection settings and skips automatically when configuration is missing.
+
+```sh
+RAIN_POSTGRES_DSN="postgres://user:pass@localhost:5432/rain_test?sslmode=disable" \
+  go test -race ./pkg/rain -run "^TestPostgresIntegration"
+```
+
+You can also set `RAIN_POSTGRES_HOST`, `RAIN_POSTGRES_PORT` (default `5432`), `RAIN_POSTGRES_USER`, `RAIN_POSTGRES_PASSWORD` (optional), `RAIN_POSTGRES_DB`, and `RAIN_POSTGRES_SSLMODE` (default `disable`) instead of a DSN.
+
 # Performance Benchmarks
 
 Rain includes a SQLite-first benchmark suite for measuring end-to-end ORM performance and memory usage across representative CRUD and join workloads.
