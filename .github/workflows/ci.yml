@@ -28,6 +28,8 @@ jobs:
   integration:
     name: SQLite Integration Tests
     runs-on: ubuntu-latest
+    needs: [precommit]
+    timeout-minutes: 10
 
     steps:
       - name: Checkout code
