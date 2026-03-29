@@ -162,11 +162,12 @@ func mysqlIntegrationDSN() (string, bool) {
 	}
 
 	cfg := mysql.Config{
-		Net:    "tcp",
-		Addr:   net.JoinHostPort(host, port),
-		User:   user,
-		Passwd: strings.TrimSpace(os.Getenv("RAIN_MYSQL_PASSWORD")),
-		DBName: dbName,
+		Net:       "tcp",
+		Addr:      net.JoinHostPort(host, port),
+		User:      user,
+		Passwd:    strings.TrimSpace(os.Getenv("RAIN_MYSQL_PASSWORD")),
+		DBName:    dbName,
+		ParseTime: true,
 	}
 
 	return cfg.FormatDSN(), true
