@@ -9,6 +9,8 @@ import (
 )
 
 func TestInsertUpdateDeleteToSQL(t *testing.T) {
+	t.Parallel()
+
 	db, err := rain.OpenDialect("postgres")
 	if err != nil {
 		t.Fatalf("OpenDialect returned error: %v", err)
@@ -146,6 +148,8 @@ func TestOpenDialectUnknownDialectReturnsError(t *testing.T) {
 }
 
 func TestReturningUnsupportedDialect(t *testing.T) {
+	t.Parallel()
+
 	db, err := rain.OpenDialect("mysql")
 	if err != nil {
 		t.Fatalf("OpenDialect returned error: %v", err)
@@ -182,6 +186,8 @@ func TestReturningUnsupportedDialect(t *testing.T) {
 }
 
 func TestReturningSupportedOperations(t *testing.T) {
+	t.Parallel()
+
 	db, err := rain.OpenDialect("postgres")
 	if err != nil {
 		t.Fatalf("OpenDialect returned error: %v", err)

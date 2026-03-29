@@ -10,6 +10,8 @@ import (
 )
 
 func TestInsertModelAndSetMergeToSQL(t *testing.T) {
+	t.Parallel()
+
 	db, err := rain.OpenDialect("postgres")
 	if err != nil {
 		t.Fatalf("OpenDialect returned error: %v", err)
@@ -36,6 +38,8 @@ func TestInsertModelAndSetMergeToSQL(t *testing.T) {
 }
 
 func TestInsertOmitDefaultBackedZeroValues(t *testing.T) {
+	t.Parallel()
+
 	db, err := rain.OpenDialect("postgres")
 	if err != nil {
 		t.Fatalf("OpenDialect returned error: %v", err)
@@ -60,6 +64,8 @@ func TestInsertOmitDefaultBackedZeroValues(t *testing.T) {
 }
 
 func TestInsertMultiRowModelsToSQL(t *testing.T) {
+	t.Parallel()
+
 	db, err := rain.OpenDialect("postgres")
 	if err != nil {
 		t.Fatalf("OpenDialect returned error: %v", err)
@@ -89,6 +95,8 @@ func TestInsertMultiRowModelsToSQL(t *testing.T) {
 }
 
 func TestInsertMultiRowValuesToSQL(t *testing.T) {
+	t.Parallel()
+
 	db, err := rain.OpenDialect("postgres")
 	if err != nil {
 		t.Fatalf("OpenDialect returned error: %v", err)
@@ -117,6 +125,8 @@ func TestInsertMultiRowValuesToSQL(t *testing.T) {
 }
 
 func TestInsertMultiRowColumnMismatchReturnsError(t *testing.T) {
+	t.Parallel()
+
 	db, err := rain.OpenDialect("postgres")
 	if err != nil {
 		t.Fatalf("OpenDialect returned error: %v", err)
@@ -136,6 +146,8 @@ func TestInsertMultiRowColumnMismatchReturnsError(t *testing.T) {
 }
 
 func TestInsertOnConflictPostgres(t *testing.T) {
+	t.Parallel()
+
 	db, err := rain.OpenDialect("postgres")
 	if err != nil {
 		t.Fatalf("OpenDialect returned error: %v", err)
@@ -187,6 +199,8 @@ func TestInsertOnConflictPostgres(t *testing.T) {
 }
 
 func TestInsertOnConflictSQLite(t *testing.T) {
+	t.Parallel()
+
 	db, err := rain.OpenDialect("sqlite")
 	if err != nil {
 		t.Fatalf("OpenDialect returned error: %v", err)
@@ -216,6 +230,8 @@ func TestInsertOnConflictSQLite(t *testing.T) {
 }
 
 func TestInsertOnConflictUnsupportedDialectReturnsError(t *testing.T) {
+	t.Parallel()
+
 	db, err := rain.OpenDialect("mysql")
 	if err != nil {
 		t.Fatalf("OpenDialect returned error: %v", err)

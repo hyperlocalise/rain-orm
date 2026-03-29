@@ -40,10 +40,6 @@ func TestQueryBuilderAndHelperErrors(t *testing.T) {
 	if _, _, err := db.Insert().Table(users).ToSQL(); err == nil || !strings.Contains(err.Error(), "requires either explicit values or a model") {
 		t.Fatalf("expected insert values error, got %v", err)
 	}
-	if err := (&InsertQuery{dialect: db.Dialect(), table: users.TableDef(), returning: []schema.Expression{users.ID}}).Scan(context.Background(), &internalUserRow{}); !errors.Is(err, ErrNoConnection) {
-		t.Fatalf("expected insert scan ErrNoConnection, got %v", err)
-	}
-
 	insertNoRunner := &InsertQuery{dialect: db.Dialect(), table: users.TableDef(), returning: []schema.Expression{users.ID}}
 	if err := insertNoRunner.Scan(context.Background(), &internalUserRow{}); !errors.Is(err, ErrNoConnection) {
 		t.Fatalf("expected insert returning scan ErrNoConnection, got %v", err)

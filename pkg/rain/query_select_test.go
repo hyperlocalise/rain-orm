@@ -11,6 +11,8 @@ import (
 )
 
 func TestSelectToSQL(t *testing.T) {
+	t.Parallel()
+
 	db, err := rain.OpenDialect("postgres")
 	if err != nil {
 		t.Fatalf("OpenDialect returned error: %v", err)
