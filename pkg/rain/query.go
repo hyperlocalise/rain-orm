@@ -3,6 +3,7 @@ package rain
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
@@ -83,6 +84,7 @@ func closeRows(rows *sql.Rows, errp *error) {
 type SelectQuery struct {
 	runner        queryRunner
 	dialect       dialect.Dialect
+	cache         QueryCache
 	table         selectTableSource
 	cols          []schema.Expression
 	where         []schema.Predicate
@@ -95,6 +97,7 @@ type SelectQuery struct {
 	limit         int
 	offset        int
 	relationNames []string
+	cacheOptions  *queryCacheOptions
 }
 
 // Table sets the table source for the query.
@@ -190,6 +193,12 @@ func (q *SelectQuery) Offset(offset int) *SelectQuery {
 // WithRelations requests one or more named relations to be loaded after scanning base rows.
 func (q *SelectQuery) WithRelations(names ...string) *SelectQuery {
 	q.relationNames = append(q.relationNames, names...)
+	return q
+}
+
+// Cache enables opt-in query caching for this SELECT with TTL and optional metadata.
+func (q *SelectQuery) Cache(options QueryCacheOptions) *SelectQuery {
+	q.cacheOptions = normalizeQueryCacheOptions(options)
 	return q
 }
 
@@ -329,6 +338,20 @@ func (q *SelectQuery) Scan(ctx context.Context, dest any) error {
 		return err
 	}
 
+	cacheKey, cacheOptions, err := q.resolveCacheKey(query, args)
+	if err != nil {
+		return err
+	}
+	if cacheOptions != nil && !cacheOptions.bypass {
+		cached, ok, cacheErr := q.cache.Get(ctx, cacheKey)
+		if cacheErr != nil {
+			return cacheErr
+		}
+		if ok {
+			return json.Unmarshal(cached, dest)
+		}
+	}
+
 	rows, err := q.runner.queryContext(ctx, query, args...)
 	if err != nil {
 		return err
@@ -337,10 +360,13 @@ func (q *SelectQuery) Scan(ctx context.Context, dest any) error {
 
 	if len(q.relationNames) == 0 {
 		err = scanRows(rows, dest)
+	} else {
+		err = q.scanRowsWithRelations(ctx, rows, dest)
+	}
+	if err != nil {
 		return err
 	}
-
-	err = q.scanRowsWithRelations(ctx, rows, dest)
+	err = q.writeCachedResult(ctx, cacheKey, cacheOptions, dest)
 	return err
 }
 
@@ -353,6 +379,24 @@ func (q *SelectQuery) Count(ctx context.Context) (int64, error) {
 	query, args, err := q.toAggregateSQL("COUNT(*)")
 	if err != nil {
 		return 0, err
+	}
+
+	cacheKey, cacheOptions, err := q.resolveCacheKey(query, args)
+	if err != nil {
+		return 0, err
+	}
+	if cacheOptions != nil && !cacheOptions.bypass {
+		cached, ok, cacheErr := q.cache.Get(ctx, cacheKey)
+		if cacheErr != nil {
+			return 0, cacheErr
+		}
+		if ok {
+			var count int64
+			if err := json.Unmarshal(cached, &count); err != nil {
+				return 0, err
+			}
+			return count, nil
+		}
 	}
 
 	rows, err := q.runner.queryContext(ctx, query, args...)
@@ -371,6 +415,10 @@ func (q *SelectQuery) Count(ctx context.Context) (int64, error) {
 	}
 
 	err = rows.Err()
+	if err != nil {
+		return 0, err
+	}
+	err = q.writeCachedResult(ctx, cacheKey, cacheOptions, count)
 	return count, err
 }
 
@@ -391,7 +439,26 @@ func (q *SelectQuery) Exists(ctx context.Context) (bool, error) {
 	ctxCompiler.writeByte(')')
 	ctxCompiler.args = append(ctxCompiler.args, args...)
 
-	rows, err := q.runner.queryContext(ctx, ctxCompiler.String(), ctxCompiler.args...)
+	query := ctxCompiler.String()
+	cacheKey, cacheOptions, err := q.resolveCacheKey(query, ctxCompiler.args)
+	if err != nil {
+		return false, err
+	}
+	if cacheOptions != nil && !cacheOptions.bypass {
+		cached, ok, cacheErr := q.cache.Get(ctx, cacheKey)
+		if cacheErr != nil {
+			return false, cacheErr
+		}
+		if ok {
+			var exists bool
+			if err := json.Unmarshal(cached, &exists); err != nil {
+				return false, err
+			}
+			return exists, nil
+		}
+	}
+
+	rows, err := q.runner.queryContext(ctx, query, ctxCompiler.args...)
 	if err != nil {
 		return false, err
 	}
@@ -407,7 +474,33 @@ func (q *SelectQuery) Exists(ctx context.Context) (bool, error) {
 	}
 
 	err = rows.Err()
+	if err != nil {
+		return false, err
+	}
+	err = q.writeCachedResult(ctx, cacheKey, cacheOptions, exists)
 	return exists, err
+}
+
+func (q *SelectQuery) resolveCacheKey(query string, args []any) (string, *queryCacheOptions, error) {
+	if q.cacheOptions == nil || q.cache == nil {
+		return "", nil, nil
+	}
+	key, err := buildQueryCacheKey(q.dialect.Name(), query, args, q.relationNames, q.cacheOptions)
+	if err != nil {
+		return "", nil, err
+	}
+	return key, q.cacheOptions, nil
+}
+
+func (q *SelectQuery) writeCachedResult(ctx context.Context, key string, options *queryCacheOptions, value any) error {
+	if options == nil || options.bypass {
+		return nil
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
+	return q.cache.Set(ctx, key, encoded, options.ttl, options.tags)
 }
 
 func (q *SelectQuery) toAggregateSQL(selection string) (string, []any, error) {
