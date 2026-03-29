@@ -177,9 +177,9 @@ func defineMySQLTables(suffix string) (*mysqlUsersTable, *mysqlPostsTable) {
 	users := schema.Define("users_"+suffix, func(t *mysqlUsersTable) {
 		t.ID = t.BigSerial("id").PrimaryKey()
 		t.Email = t.VarChar("email", 255).NotNull()
-		t.Name = t.Text("name").NotNull().Default("guest")
+		t.Name = t.VarChar("name", 255).NotNull().Default("guest")
 		t.Active = t.Boolean("active").NotNull().Default(true)
-		t.Nickname = t.Text("nickname").Nullable().Default("buddy")
+		t.Nickname = t.VarChar("nickname", 255).Nullable().Default("buddy")
 		t.CreatedAt = t.TimestampTZ("created_at").NotNull().DefaultNow()
 	})
 
