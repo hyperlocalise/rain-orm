@@ -289,3 +289,84 @@ func TestApplyPendingFailsFastOnDuplicateIdentifiers(t *testing.T) {
 		t.Fatalf("expected duplicate id in error message, got %v", err)
 	}
 }
+
+func TestApplyPendingNonTransactionalAppliesAndTracks(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db := openTestDB(t)
+
+	result, err := ApplyPending(ctx, db, []Migration{
+		{
+			ID:               "202602011400_non_tx_create_users",
+			NonTransactional: true,
+			Up: func(ctx context.Context, exec Executor) error {
+				_, execErr := exec.ExecContext(ctx, `CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT)`)
+				return execErr
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("ApplyPending returned error: %v", err)
+	}
+	if !reflect.DeepEqual(result.AppliedIDs, []string{"202602011400_non_tx_create_users"}) {
+		t.Fatalf("unexpected applied IDs: %v", result.AppliedIDs)
+	}
+	if got := migrationCount(t, ctx, db, DefaultTableName); got != 1 {
+		t.Fatalf("expected one migration record, got %d", got)
+	}
+	if got := userColumns(t, ctx, db); !reflect.DeepEqual(got, []string{"id"}) {
+		t.Fatalf("expected users table to exist, got columns %v", got)
+	}
+}
+
+func TestApplyPendingNonTransactionalLeavesInProgressMarkerOnFinalizeFailure(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db := openTestDB(t)
+	runner := NewRunner(DefaultTableName)
+
+	_, err := runner.ApplyPending(ctx, db, []Migration{
+		{
+			ID:               "202602011410_non_tx_finalize_fail",
+			NonTransactional: true,
+			Up: func(ctx context.Context, exec Executor) error {
+				_, execErr := exec.ExecContext(
+					ctx,
+					`DELETE FROM rain_schema_migrations WHERE id = '202602011410_non_tx_finalize_fail'`,
+				)
+				return execErr
+			},
+		},
+	})
+	if err == nil {
+		t.Fatalf("expected finalize tracking error")
+	}
+	if !strings.Contains(err.Error(), "expected 1 row, got 0") {
+		t.Fatalf("expected finalize rows-affected error, got %v", err)
+	}
+
+	_, markerErr := db.ExecContext(
+		ctx,
+		`INSERT INTO rain_schema_migrations (id, applied_at, runtime_ms, notes, state) VALUES ('manual_in_progress', CURRENT_TIMESTAMP, 0, '', 'in_progress')`,
+	)
+	if markerErr != nil {
+		t.Fatalf("insert manual in-progress marker: %v", markerErr)
+	}
+
+	_, err = runner.ApplyPending(ctx, db, []Migration{
+		{
+			ID: "202602011500_unrelated",
+			Up: func(context.Context, Executor) error {
+				return nil
+			},
+		},
+	})
+	if err == nil {
+		t.Fatalf("expected in-progress marker error")
+	}
+	if !errors.Is(err, ErrInProgressMigration) {
+		t.Fatalf("expected ErrInProgressMigration, got %v", err)
+	}
+}

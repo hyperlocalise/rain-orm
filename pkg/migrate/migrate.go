@@ -23,6 +23,8 @@ var (
 	ErrEmptyMigrationID = errors.New("migrate: migration id is required")
 	// ErrNilMigrationUp is returned when a migration has a nil Up function.
 	ErrNilMigrationUp = errors.New("migrate: migration up function is required")
+	// ErrInProgressMigration is returned when a prior non-transactional migration attempt did not finalize tracking.
+	ErrInProgressMigration = errors.New("migrate: found migration in progress; manual reconciliation required")
 )
 
 // Executor executes SQL statements.
@@ -136,18 +138,24 @@ CREATE TABLE IF NOT EXISTS %s (
   id TEXT PRIMARY KEY,
   applied_at TIMESTAMP NOT NULL,
   runtime_ms INTEGER NOT NULL,
-  notes TEXT NOT NULL DEFAULT ''
+  notes TEXT NOT NULL DEFAULT '',
+  state TEXT NOT NULL DEFAULT 'applied'
 );`, quoteIdentifier(r.tableName))
 
 	if _, err := db.ExecContext(ctx, query); err != nil {
 		return fmt.Errorf("migrate: create migration table %q: %w", r.tableName, err)
 	}
+	addStateQuery := fmt.Sprintf(
+		"ALTER TABLE %s ADD COLUMN state TEXT NOT NULL DEFAULT 'applied'",
+		quoteIdentifier(r.tableName),
+	)
+	_, _ = db.ExecContext(ctx, addStateQuery)
 
 	return nil
 }
 
 func (r *Runner) loadApplied(ctx context.Context, db *sql.DB) (map[string]struct{}, error) {
-	query := fmt.Sprintf("SELECT id FROM %s", quoteIdentifier(r.tableName))
+	query := fmt.Sprintf("SELECT id, state FROM %s", quoteIdentifier(r.tableName))
 
 	rows, err := db.QueryContext(ctx, query)
 	if err != nil {
@@ -157,9 +165,15 @@ func (r *Runner) loadApplied(ctx context.Context, db *sql.DB) (map[string]struct
 
 	applied := make(map[string]struct{})
 	for rows.Next() {
-		var id string
-		if scanErr := rows.Scan(&id); scanErr != nil {
+		var (
+			id    string
+			state string
+		)
+		if scanErr := rows.Scan(&id, &state); scanErr != nil {
 			return nil, fmt.Errorf("migrate: scan applied migration id: %w", scanErr)
+		}
+		if state != "applied" {
+			return nil, fmt.Errorf("%w: id=%q state=%q", ErrInProgressMigration, id, state)
 		}
 		applied[id] = struct{}{}
 	}
@@ -179,17 +193,32 @@ func (r *Runner) applyOne(ctx context.Context, db *sql.DB, migration Migration) 
 		}
 		runtimeMS := time.Since(started).Milliseconds()
 		insertQuery := fmt.Sprintf(
-			"INSERT INTO %s (id, applied_at, runtime_ms, notes) VALUES (?, ?, ?, ?)",
+			"INSERT INTO %s (id, applied_at, runtime_ms, notes, state) VALUES ({{p1}}, {{p2}}, {{p3}}, {{p4}}, {{p5}})",
 			quoteIdentifier(r.tableName),
 		)
-		if _, err := exec.ExecContext(ctx, insertQuery, migration.ID, started, runtimeMS, ""); err != nil {
+		if err := execWithPlaceholderFallback(
+			ctx,
+			exec,
+			insertQuery,
+			migration.ID,
+			started,
+			runtimeMS,
+			"",
+			"applied",
+		); err != nil {
 			return fmt.Errorf("migrate: record migration %q: %w", migration.ID, err)
 		}
 		return nil
 	}
 
 	if migration.NonTransactional {
-		if err := execute(db); err != nil {
+		if err := r.markInProgress(ctx, db, migration.ID, started); err != nil {
+			return err
+		}
+		if err := migration.Up(ctx, db); err != nil {
+			return r.clearInProgressOnFailure(ctx, db, migration.ID, err)
+		}
+		if err := r.finalizeInProgress(ctx, db, migration.ID, started); err != nil {
 			return err
 		}
 		return nil
@@ -217,4 +246,95 @@ func (r *Runner) applyOne(ctx context.Context, db *sql.DB, migration Migration) 
 func quoteIdentifier(name string) string {
 	escaped := strings.ReplaceAll(name, `"`, `""`)
 	return `"` + escaped + `"`
+}
+
+func execWithPlaceholderFallback(ctx context.Context, exec Executor, query string, args ...any) error {
+	_, err := execWithPlaceholderFallbackResult(ctx, exec, query, args...)
+	return err
+}
+
+func execWithPlaceholderFallbackResult(ctx context.Context, exec Executor, query string, args ...any) (sql.Result, error) {
+	dollarQuery := bindNumbered(query)
+	if result, err := exec.ExecContext(ctx, dollarQuery, args...); err == nil {
+		return result, nil
+	}
+
+	questionQuery := bindQuestion(query)
+	result, err := exec.ExecContext(ctx, questionQuery, args...)
+	if err != nil {
+		return nil, err
+	}
+
+	return result, nil
+}
+
+func bindNumbered(template string) string {
+	result := template
+	for i := 1; strings.Contains(result, "{{p"); i++ {
+		marker := fmt.Sprintf("{{p%d}}", i)
+		if !strings.Contains(result, marker) {
+			break
+		}
+		result = strings.ReplaceAll(result, marker, fmt.Sprintf("$%d", i))
+	}
+	return result
+}
+
+func bindQuestion(template string) string {
+	result := template
+	for i := 1; strings.Contains(result, "{{p"); i++ {
+		marker := fmt.Sprintf("{{p%d}}", i)
+		if !strings.Contains(result, marker) {
+			break
+		}
+		result = strings.ReplaceAll(result, marker, "?")
+	}
+	return result
+}
+
+func (r *Runner) markInProgress(ctx context.Context, db *sql.DB, id string, started time.Time) error {
+	query := fmt.Sprintf(
+		"INSERT INTO %s (id, applied_at, runtime_ms, notes, state) VALUES ({{p1}}, {{p2}}, {{p3}}, {{p4}}, {{p5}})",
+		quoteIdentifier(r.tableName),
+	)
+	if err := execWithPlaceholderFallback(ctx, db, query, id, started, int64(0), "non_transactional", "in_progress"); err != nil {
+		return fmt.Errorf("migrate: mark migration %q in progress: %w", id, err)
+	}
+	return nil
+}
+
+func (r *Runner) clearInProgressOnFailure(ctx context.Context, db *sql.DB, id string, originalErr error) error {
+	query := fmt.Sprintf("DELETE FROM %s WHERE id = {{p1}} AND state = {{p2}}", quoteIdentifier(r.tableName))
+	if err := execWithPlaceholderFallback(ctx, db, query, id, "in_progress"); err != nil {
+		return errors.Join(originalErr, fmt.Errorf("migrate: clear in-progress marker for %q: %w", id, err))
+	}
+	return fmt.Errorf("migrate: run migration %q: %w", id, originalErr)
+}
+
+func (r *Runner) finalizeInProgress(ctx context.Context, db *sql.DB, id string, started time.Time) error {
+	query := fmt.Sprintf(
+		"UPDATE %s SET runtime_ms = {{p1}}, notes = {{p2}}, state = {{p3}} WHERE id = {{p4}} AND state = {{p5}}",
+		quoteIdentifier(r.tableName),
+	)
+	result, err := execWithPlaceholderFallbackResult(
+		ctx,
+		db,
+		query,
+		time.Since(started).Milliseconds(),
+		"",
+		"applied",
+		id,
+		"in_progress",
+	)
+	if err != nil {
+		return fmt.Errorf("migrate: finalize migration %q tracking: %w", id, err)
+	}
+	rowsAffected, rowsErr := result.RowsAffected()
+	if rowsErr != nil {
+		return fmt.Errorf("migrate: read finalize rows affected for %q: %w", id, rowsErr)
+	}
+	if rowsAffected != 1 {
+		return fmt.Errorf("migrate: finalize migration %q tracking: expected 1 row, got %d", id, rowsAffected)
+	}
+	return nil
 }
