@@ -232,11 +232,11 @@ func TestSelectAdvancedComposition(t *testing.T) {
 					Table(posts).
 					Column(
 						posts.UserID,
-						schema.As(schema.Count(), "post_count"),
-						schema.As(schema.Sum(posts.ID), "id_sum"),
-						schema.As(schema.Avg(posts.ID), "id_avg"),
-						schema.As(schema.Min(posts.ID), "id_min"),
-						schema.As(schema.Max(posts.ID), "id_max"),
+						schema.Count().As("post_count"),
+						schema.Sum(posts.ID).As("id_sum"),
+						schema.Avg(posts.ID).As("id_avg"),
+						schema.Min(posts.ID).As("id_min"),
+						schema.Max(posts.ID).As("id_max"),
 					).
 					GroupBy(posts.UserID)
 			},
@@ -248,7 +248,7 @@ func TestSelectAdvancedComposition(t *testing.T) {
 			build: func(db *rain.DB) *rain.SelectQuery {
 				return db.Select().
 					Table(posts).
-					Column(posts.UserID, schema.As(schema.Count(), "post_count")).
+					Column(posts.UserID, schema.Count().As("post_count")).
 					Where(posts.Title.Eq("hello")).
 					GroupBy(posts.UserID).
 					Having(schema.ComparisonExpr{Left: schema.Count(), Operator: ">", Right: schema.ValueExpr{Value: 3}})
@@ -262,11 +262,21 @@ func TestSelectAdvancedComposition(t *testing.T) {
 			build: func(db *rain.DB) *rain.SelectQuery {
 				return db.Select().
 					Table(posts).
-					Column(schema.As(schema.Sum(posts.ID), "total_id")).
+					Column(schema.Sum(posts.ID).As("total_id")).
 					Where(schema.ComparisonExpr{Left: schema.Raw("COALESCE(?, 0)", 10), Operator: "<", Right: schema.ValueExpr{Value: 50}})
 			},
 			wantSQL:  "SELECT SUM(`posts`.`id`) AS `total_id` FROM `posts` WHERE COALESCE(?, 0) < ?",
 			wantArgs: []any{10, 50},
+		},
+		{
+			name:    "column alias helper in select postgres",
+			dialect: "postgres",
+			build: func(db *rain.DB) *rain.SelectQuery {
+				return db.Select().
+					Table(users).
+					Column(users.Email.As("user_email"))
+			},
+			wantSQL: `SELECT "users"."email" AS "user_email" FROM "users"`,
 		},
 		{
 			name:    "aggregate distinct star is invalid",
@@ -368,7 +378,7 @@ func TestSelectAdvancedComposition(t *testing.T) {
 			build: func(db *rain.DB) *rain.SelectQuery {
 				postsByUser := db.Select().
 					Table(posts).
-					Column(posts.UserID, schema.Raw("COUNT(*) AS post_count")).
+					Column(posts.UserID, schema.Raw("COUNT(*)").As("post_count")).
 					Where(posts.Title.Eq("hello")).
 					GroupBy(posts.UserID)
 
@@ -381,7 +391,7 @@ func TestSelectAdvancedComposition(t *testing.T) {
 						Right:    schema.ValueExpr{Value: 3},
 					})
 			},
-			wantSQL:  `SELECT pbu.user_id, pbu.post_count FROM (SELECT "posts"."user_id", COUNT(*) AS post_count FROM "posts" WHERE "posts"."title" = $1 GROUP BY "posts"."user_id") AS "pbu" WHERE pbu.post_count > $2`,
+			wantSQL:  `SELECT pbu.user_id, pbu.post_count FROM (SELECT "posts"."user_id", COUNT(*) AS "post_count" FROM "posts" WHERE "posts"."title" = $1 GROUP BY "posts"."user_id") AS "pbu" WHERE pbu.post_count > $2`,
 			wantArgs: []any{"hello", 3},
 		},
 		{
@@ -390,7 +400,7 @@ func TestSelectAdvancedComposition(t *testing.T) {
 			build: func(db *rain.DB) *rain.SelectQuery {
 				userPosts := db.Select().
 					Table(posts).
-					Column(posts.UserID, schema.Raw("COUNT(*) AS post_count")).
+					Column(posts.UserID, schema.Raw("COUNT(*)").As("post_count")).
 					GroupBy(posts.UserID)
 
 				return db.Select().
@@ -402,7 +412,7 @@ func TestSelectAdvancedComposition(t *testing.T) {
 						Right:    schema.Raw("up.user_id"),
 					})
 			},
-			wantSQL: "SELECT `users`.`id`, up.post_count FROM `users` INNER JOIN (SELECT `posts`.`user_id`, COUNT(*) AS post_count FROM `posts` GROUP BY `posts`.`user_id`) AS `up` ON `users`.`id` = up.user_id",
+			wantSQL: "SELECT `users`.`id`, up.post_count FROM `users` INNER JOIN (SELECT `posts`.`user_id`, COUNT(*) AS `post_count` FROM `posts` GROUP BY `posts`.`user_id`) AS `up` ON `users`.`id` = up.user_id",
 		},
 		{
 			name:    "left join subquery postgres",
@@ -410,7 +420,7 @@ func TestSelectAdvancedComposition(t *testing.T) {
 			build: func(db *rain.DB) *rain.SelectQuery {
 				userPosts := db.Select().
 					Table(posts).
-					Column(posts.UserID, schema.Raw("COUNT(*) AS post_count")).
+					Column(posts.UserID, schema.Raw("COUNT(*)").As("post_count")).
 					GroupBy(posts.UserID)
 
 				return db.Select().
@@ -422,7 +432,7 @@ func TestSelectAdvancedComposition(t *testing.T) {
 						Right:    schema.Raw("up.user_id"),
 					})
 			},
-			wantSQL: `SELECT "users"."id", up.post_count FROM "users" LEFT JOIN (SELECT "posts"."user_id", COUNT(*) AS post_count FROM "posts" GROUP BY "posts"."user_id") AS "up" ON "users"."id" = up.user_id`,
+			wantSQL: `SELECT "users"."id", up.post_count FROM "users" LEFT JOIN (SELECT "posts"."user_id", COUNT(*) AS "post_count" FROM "posts" GROUP BY "posts"."user_id") AS "up" ON "users"."id" = up.user_id`,
 		},
 		{
 			name:    "subquery without alias is invalid",

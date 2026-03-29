@@ -399,6 +399,11 @@ func (c *AnyColumn) Desc() OrderExpr {
 	return OrderExpr{Expr: c, Direction: SortDesc}
 }
 
+// As aliases this column in a SELECT list.
+func (c *AnyColumn) As(alias string) AliasExpr {
+	return As(c, alias)
+}
+
 // In compares this column to a set of Go values using SQL IN.
 func (c *AnyColumn) In(values ...any) InExpr {
 	exprs := make([]Expression, 0, len(values))
@@ -583,6 +588,11 @@ func (c *Column[T]) Desc() OrderExpr {
 	return OrderExpr{Expr: c, Direction: SortDesc}
 }
 
+// As aliases this column in a SELECT list.
+func (c *Column[T]) As(alias string) AliasExpr {
+	return As(c, alias)
+}
+
 func (c *Column[T]) isExpression()    {}
 func (c *Column[T]) indexColumnSpec() {}
 
@@ -649,6 +659,11 @@ type AggregateExpr struct {
 }
 
 func (AggregateExpr) isExpression() {}
+
+// As aliases this computed expression in a SELECT list.
+func (a AggregateExpr) As(alias string) AliasExpr {
+	return As(a, alias)
+}
 
 // AliasExpr renames a computed expression in a select list.
 type AliasExpr struct {
@@ -720,6 +735,11 @@ type RawExpr struct {
 }
 
 func (RawExpr) isExpression() {}
+
+// As aliases this raw expression in a SELECT list.
+func (r RawExpr) As(alias string) AliasExpr {
+	return As(r, alias)
+}
 
 // Raw returns a raw SQL expression.
 func Raw(sql string, args ...any) RawExpr {

@@ -51,6 +51,16 @@ type joinedPostRow struct {
 	Email string `db:"email"`
 }
 
+type aliasedJoinRow struct {
+	PostTitle string `db:"post_title"`
+	UserEmail string `db:"user_email"`
+}
+
+type userPostCountRow struct {
+	UserEmail string `db:"user_email"`
+	PostCount int64  `db:"post_count"`
+}
+
 func defineSQLiteTables() (*sqliteUsersTable, *sqlitePostsTable) {
 	users := schema.Define("users", func(t *sqliteUsersTable) {
 		t.ID = t.BigSerial("id").PrimaryKey()
@@ -194,6 +204,40 @@ func TestSQLiteIntegrationInsertDefaultsOverridesAndScan(t *testing.T) {
 	}
 	if len(joined) != 1 || joined[0].Title != "Hello" || joined[0].Email != "defaults@example.com" {
 		t.Fatalf("unexpected joined rows: %#v", joined)
+	}
+
+	var aliasedJoined []aliasedJoinRow
+	if err := db.Select().
+		Table(p).
+		Column(p.Title.As("post_title"), u.Email.As("user_email")).
+		Join(u, p.UserID.EqCol(u.ID)).
+		Where(u.ID.Eq(first.ID)).
+		Scan(ctx, &aliasedJoined); err != nil {
+		t.Fatalf("aliased projection join scan failed: %v", err)
+	}
+	if len(aliasedJoined) != 1 || aliasedJoined[0].PostTitle != "Hello" || aliasedJoined[0].UserEmail != "defaults@example.com" {
+		t.Fatalf("unexpected aliased joined rows: %#v", aliasedJoined)
+	}
+
+	postCounts := db.Select().
+		Table(posts).
+		Column(posts.UserID.As("user_id"), schema.Count().As("post_count")).
+		GroupBy(posts.UserID)
+
+	var counts []userPostCountRow
+	if err := db.Select().
+		Table(users).
+		Column(users.Email.As("user_email"), schema.Raw("pc.post_count").As("post_count")).
+		JoinSubquery(postCounts, "pc", schema.ComparisonExpr{
+			Left:     users.ID,
+			Operator: "=",
+			Right:    schema.Raw("pc.user_id"),
+		}).
+		Scan(ctx, &counts); err != nil {
+		t.Fatalf("aliased subquery projection scan failed: %v", err)
+	}
+	if len(counts) != 1 || counts[0].UserEmail != "defaults@example.com" || counts[0].PostCount != 1 {
+		t.Fatalf("unexpected post count rows: %#v", counts)
 	}
 }
 
