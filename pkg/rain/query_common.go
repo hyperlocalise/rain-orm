@@ -16,6 +16,11 @@ type queryRunner interface {
 	queryContext(context.Context, string, ...any) (*sql.Rows, error)
 }
 
+type preparingQueryRunner interface {
+	queryRunner
+	prepareContext(context.Context, string) (*sql.Stmt, error)
+}
+
 type joinClause struct {
 	kind  string
 	table selectTableSource

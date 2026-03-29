@@ -135,6 +135,14 @@ func (db *DB) queryContext(ctx context.Context, query string, args ...any) (*sql
 	return db.Query(ctx, query, args...)
 }
 
+func (db *DB) prepareContext(ctx context.Context, query string) (*sql.Stmt, error) {
+	if db.db == nil {
+		return nil, ErrNoConnection
+	}
+
+	return db.db.PrepareContext(ctx, query)
+}
+
 // QueryRow executes a query that returns a single row.
 func (db *DB) QueryRow(ctx context.Context, query string, args ...any) *sql.Row {
 	if db.db == nil {
@@ -283,6 +291,14 @@ func (tx *Tx) queryContext(ctx context.Context, query string, args ...any) (*sql
 	}
 
 	return tx.tx.QueryContext(ctx, query, args...)
+}
+
+func (tx *Tx) prepareContext(ctx context.Context, query string) (*sql.Stmt, error) {
+	if tx.tx == nil {
+		return nil, ErrNoConnection
+	}
+
+	return tx.tx.PrepareContext(ctx, query)
 }
 
 func runInRootTx(tx *Tx, fn func(*Tx) error) error {

@@ -136,11 +136,15 @@ func (q *SelectQuery) Cache(options QueryCacheOptions) *SelectQuery {
 
 // ToSQL compiles the query into SQL and args.
 func (q *SelectQuery) ToSQL() (string, []any, error) {
-	ctx := newCompileContext(q.dialect)
-	if err := q.writeSQL(ctx); err != nil {
+	compiled, err := q.compile()
+	if err != nil {
 		return "", nil, err
 	}
-	return ctx.String(), ctx.args, nil
+	args, err := compiled.literalArgs()
+	if err != nil {
+		return "", nil, err
+	}
+	return compiled.sql, args, nil
 }
 
 func (q *SelectQuery) writeSQL(ctx *compileContext) error {
@@ -265,10 +269,15 @@ func (q *SelectQuery) Scan(ctx context.Context, dest any) error {
 		return ErrNoConnection
 	}
 
-	query, args, err := q.ToSQL()
+	compiled, err := q.compile()
 	if err != nil {
 		return err
 	}
+	args, err := compiled.literalArgs()
+	if err != nil {
+		return err
+	}
+	query := compiled.sql
 
 	cacheKey, cacheOptions, err := q.resolveCacheKey(query, args)
 	if err != nil {
@@ -360,19 +369,20 @@ func (q *SelectQuery) Exists(ctx context.Context) (bool, error) {
 		return false, ErrNoConnection
 	}
 
-	sqlText, args, err := q.ToSQL()
+	compiled, err := q.compile()
+	if err != nil {
+		return false, err
+	}
+	existsQuery, err := wrapExistsCompiled(compiled)
+	if err != nil {
+		return false, err
+	}
+	args, err := existsQuery.literalArgs()
 	if err != nil {
 		return false, err
 	}
 
-	ctxCompiler := newCompileContext(q.dialect)
-	ctxCompiler.writeString("SELECT EXISTS(")
-	ctxCompiler.writeString(sqlText)
-	ctxCompiler.writeByte(')')
-	ctxCompiler.args = append(ctxCompiler.args, args...)
-
-	query := ctxCompiler.String()
-	cacheKey, cacheOptions, err := q.resolveCacheKey(query, ctxCompiler.args)
+	cacheKey, cacheOptions, err := q.resolveCacheKey(existsQuery.sql, args)
 	if err != nil {
 		return false, err
 	}
@@ -390,7 +400,7 @@ func (q *SelectQuery) Exists(ctx context.Context) (bool, error) {
 		}
 	}
 
-	rows, err := q.runner.queryContext(ctx, query, ctxCompiler.args...)
+	rows, err := q.runner.queryContext(ctx, existsQuery.sql, args...)
 	if err != nil {
 		return false, err
 	}
@@ -436,14 +446,38 @@ func (q *SelectQuery) writeCachedResult(ctx context.Context, key string, options
 }
 
 func (q *SelectQuery) toAggregateSQL(selection string) (string, []any, error) {
+	compiled, err := q.compileAggregate(selection)
+	if err != nil {
+		return "", nil, err
+	}
+	args, err := compiled.literalArgs()
+	if err != nil {
+		return "", nil, err
+	}
+	return compiled.sql, args, nil
+}
+
+func (q *SelectQuery) compile() (compiledQuery, error) {
 	if q.table == nil {
-		return "", nil, errors.New("rain: select query requires a table")
+		return compiledQuery{}, errors.New("rain: select query requires a table")
+	}
+
+	ctx := newCompileContext(q.dialect)
+	if err := q.writeSQL(ctx); err != nil {
+		return compiledQuery{}, err
+	}
+	return ctx.compiledQuery(), nil
+}
+
+func (q *SelectQuery) compileAggregate(selection string) (compiledQuery, error) {
+	if q.table == nil {
+		return compiledQuery{}, errors.New("rain: select query requires a table")
 	}
 	if len(q.ctes) > 0 {
-		return "", nil, errors.New("rain: aggregate helpers do not support WITH clauses")
+		return compiledQuery{}, errors.New("rain: aggregate helpers do not support WITH clauses")
 	}
 	if q.distinct || len(q.groupBy) > 0 || len(q.having) > 0 {
-		return "", nil, errors.New("rain: aggregate helpers do not support DISTINCT, GROUP BY, or HAVING clauses")
+		return compiledQuery{}, errors.New("rain: aggregate helpers do not support DISTINCT, GROUP BY, or HAVING clauses")
 	}
 
 	ctx := newCompileContext(q.dialect)
@@ -451,7 +485,7 @@ func (q *SelectQuery) toAggregateSQL(selection string) (string, []any, error) {
 	ctx.writeString(selection)
 	ctx.writeString(" FROM ")
 	if err := q.table.writeSQL(ctx); err != nil {
-		return "", nil, err
+		return compiledQuery{}, err
 	}
 
 	for _, join := range q.joins {
@@ -459,20 +493,38 @@ func (q *SelectQuery) toAggregateSQL(selection string) (string, []any, error) {
 		ctx.writeString(join.kind)
 		ctx.writeByte(' ')
 		if err := join.table.writeSQL(ctx); err != nil {
-			return "", nil, err
+			return compiledQuery{}, err
 		}
 		ctx.writeString(" ON ")
 		if err := ctx.writePredicate(join.on); err != nil {
-			return "", nil, err
+			return compiledQuery{}, err
 		}
 	}
 
 	if len(q.where) > 0 {
 		ctx.writeString(" WHERE ")
 		if err := ctx.writePredicate(joinPredicates(q.where)); err != nil {
-			return "", nil, err
+			return compiledQuery{}, err
 		}
 	}
 
-	return ctx.String(), ctx.args, ctx.err
+	return ctx.compiledQuery(), ctx.err
+}
+
+func (q *SelectQuery) compileExists() (compiledQuery, error) {
+	compiled, err := q.compile()
+	if err != nil {
+		return compiledQuery{}, err
+	}
+	return wrapExistsCompiled(compiled)
+}
+
+func wrapExistsCompiled(compiled compiledQuery) (compiledQuery, error) {
+	existsQuery := compiledQuery{
+		sql:      "SELECT EXISTS(" + compiled.sql + ")",
+		argPlan:  make([]compiledArg, len(compiled.argPlan)),
+		hasNames: compiled.hasNames,
+	}
+	copy(existsQuery.argPlan, compiled.argPlan)
+	return existsQuery, nil
 }

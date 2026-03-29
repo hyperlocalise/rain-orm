@@ -9,22 +9,107 @@ import (
 	"github.com/hyperlocalise/rain-orm/pkg/schema"
 )
 
+type compiledArgKind uint8
+
+const (
+	compiledArgLiteral compiledArgKind = iota
+	compiledArgNamedPlaceholder
+)
+
+type compiledArg struct {
+	kind  compiledArgKind
+	value any
+	name  string
+}
+
+type compiledQuery struct {
+	sql      string
+	argPlan  []compiledArg
+	hasNames bool
+}
+
+func (q compiledQuery) literalArgs() ([]any, error) {
+	if q.hasNames {
+		return nil, ErrPreparedArgsRequired
+	}
+
+	args := make([]any, 0, len(q.argPlan))
+	for _, arg := range q.argPlan {
+		args = append(args, arg.value)
+	}
+	return args, nil
+}
+
+func (q compiledQuery) bind(args PreparedArgs) ([]any, error) {
+	if !q.hasNames {
+		bound := make([]any, 0, len(q.argPlan))
+		for _, arg := range q.argPlan {
+			bound = append(bound, arg.value)
+		}
+		if len(args) > 0 {
+			return nil, fmt.Errorf("rain: unexpected prepared args for query without placeholders")
+		}
+		return bound, nil
+	}
+
+	seen := make(map[string]struct{}, len(args))
+	bound := make([]any, 0, len(q.argPlan))
+	for _, arg := range q.argPlan {
+		if arg.kind == compiledArgLiteral {
+			bound = append(bound, arg.value)
+			continue
+		}
+		value, ok := args[arg.name]
+		if !ok {
+			return nil, fmt.Errorf("rain: missing prepared arg %q", arg.name)
+		}
+		seen[arg.name] = struct{}{}
+		bound = append(bound, value)
+	}
+	for name := range args {
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		return nil, fmt.Errorf("rain: unexpected prepared arg %q", name)
+	}
+	return bound, nil
+}
+
 type compileContext struct {
 	builder strings.Builder
 	dialect dialect.Dialect
-	args    []any
+	argPlan []compiledArg
 	err     error
 }
 
 func newCompileContext(d dialect.Dialect) *compileContext {
 	return &compileContext{
 		dialect: d,
-		args:    make([]any, 0, 8),
+		argPlan: make([]compiledArg, 0, 8),
 	}
 }
 
 func (c *compileContext) String() string {
 	return c.builder.String()
+}
+
+func (c *compileContext) compiledQuery() compiledQuery {
+	compiled := compiledQuery{
+		sql:     c.String(),
+		argPlan: make([]compiledArg, len(c.argPlan)),
+	}
+	copy(compiled.argPlan, c.argPlan)
+	for _, arg := range compiled.argPlan {
+		if arg.kind == compiledArgNamedPlaceholder {
+			compiled.hasNames = true
+			break
+		}
+	}
+	return compiled
+}
+
+func (c *compileContext) nextPlaceholderIndex() int {
+	return len(c.argPlan) + 1
 }
 
 func (c *compileContext) writeByte(ch byte) {
@@ -93,8 +178,16 @@ func (c *compileContext) writeExpressionInContext(expr schema.Expression, contex
 	case schema.ColumnReference:
 		c.writeColumn(value)
 	case schema.ValueExpr:
-		c.args = append(c.args, value.Value)
-		c.writeString(c.dialect.Placeholder(len(c.args)))
+		index := c.nextPlaceholderIndex()
+		c.argPlan = append(c.argPlan, compiledArg{kind: compiledArgLiteral, value: value.Value})
+		c.writeString(c.dialect.Placeholder(index))
+	case schema.PlaceholderExpr:
+		if strings.TrimSpace(value.Name) == "" {
+			return errors.New("rain: placeholder name cannot be empty")
+		}
+		index := c.nextPlaceholderIndex()
+		c.argPlan = append(c.argPlan, compiledArg{kind: compiledArgNamedPlaceholder, name: value.Name})
+		c.writeString(c.dialect.Placeholder(index))
 	case schema.ComparisonExpr:
 		if err := c.writeExpression(value.Left); err != nil {
 			return err
@@ -197,8 +290,9 @@ func (c *compileContext) writeRaw(raw schema.RawExpr) error {
 		if argIndex >= len(raw.Args) {
 			return errors.New("rain: raw SQL placeholder count does not match args")
 		}
-		c.args = append(c.args, raw.Args[argIndex])
-		c.writeString(c.dialect.Placeholder(len(c.args)))
+		index := c.nextPlaceholderIndex()
+		c.argPlan = append(c.argPlan, compiledArg{kind: compiledArgLiteral, value: raw.Args[argIndex]})
+		c.writeString(c.dialect.Placeholder(index))
 		argIndex++
 	}
 	if argIndex != len(raw.Args) {

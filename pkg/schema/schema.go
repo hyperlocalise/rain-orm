@@ -636,9 +636,19 @@ func (c *Column[T]) Eq(value T) ComparisonExpr {
 	return ComparisonExpr{Left: c, Operator: "=", Right: ValueExpr{Value: value}}
 }
 
+// EqExpr compares this column to another SQL expression.
+func (c *Column[T]) EqExpr(expr Expression) ComparisonExpr {
+	return ComparisonExpr{Left: c, Operator: "=", Right: expr}
+}
+
 // Ne compares this column to a Go value.
 func (c *Column[T]) Ne(value T) ComparisonExpr {
 	return ComparisonExpr{Left: c, Operator: "<>", Right: ValueExpr{Value: value}}
+}
+
+// NeExpr compares this column to another SQL expression.
+func (c *Column[T]) NeExpr(expr Expression) ComparisonExpr {
+	return ComparisonExpr{Left: c, Operator: "<>", Right: expr}
 }
 
 // Gt compares this column to a Go value.
@@ -646,9 +656,19 @@ func (c *Column[T]) Gt(value T) ComparisonExpr {
 	return ComparisonExpr{Left: c, Operator: ">", Right: ValueExpr{Value: value}}
 }
 
+// GtExpr compares this column to another SQL expression.
+func (c *Column[T]) GtExpr(expr Expression) ComparisonExpr {
+	return ComparisonExpr{Left: c, Operator: ">", Right: expr}
+}
+
 // Gte compares this column to a Go value.
 func (c *Column[T]) Gte(value T) ComparisonExpr {
 	return ComparisonExpr{Left: c, Operator: ">=", Right: ValueExpr{Value: value}}
+}
+
+// GteExpr compares this column to another SQL expression.
+func (c *Column[T]) GteExpr(expr Expression) ComparisonExpr {
+	return ComparisonExpr{Left: c, Operator: ">=", Right: expr}
 }
 
 // Lt compares this column to a Go value.
@@ -656,9 +676,19 @@ func (c *Column[T]) Lt(value T) ComparisonExpr {
 	return ComparisonExpr{Left: c, Operator: "<", Right: ValueExpr{Value: value}}
 }
 
+// LtExpr compares this column to another SQL expression.
+func (c *Column[T]) LtExpr(expr Expression) ComparisonExpr {
+	return ComparisonExpr{Left: c, Operator: "<", Right: expr}
+}
+
 // Lte compares this column to a Go value.
 func (c *Column[T]) Lte(value T) ComparisonExpr {
 	return ComparisonExpr{Left: c, Operator: "<=", Right: ValueExpr{Value: value}}
+}
+
+// LteExpr compares this column to another SQL expression.
+func (c *Column[T]) LteExpr(expr Expression) ComparisonExpr {
+	return ComparisonExpr{Left: c, Operator: "<=", Right: expr}
 }
 
 // EqCol compares this column to another column.
@@ -710,6 +740,21 @@ type ValueExpr struct {
 }
 
 func (ValueExpr) isExpression() {}
+
+// PlaceholderExpr references a named runtime value for prepared query execution.
+type PlaceholderExpr struct {
+	Name string
+}
+
+func (PlaceholderExpr) isExpression() {}
+
+// Placeholder references a named runtime value in a prepared query.
+func Placeholder(name string) PlaceholderExpr {
+	if name == "" {
+		panic("schema: Placeholder requires a non-empty name")
+	}
+	return PlaceholderExpr{Name: name}
+}
 
 // ComparisonExpr compares two expressions.
 type ComparisonExpr struct {
@@ -1124,6 +1169,8 @@ func cloneExpressionForTable(expr Expression, table *TableDef) Expression {
 		}
 		return cloned
 	case ValueExpr:
+		return value
+	case PlaceholderExpr:
 		return value
 	case ComparisonExpr:
 		return ComparisonExpr{
