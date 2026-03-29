@@ -6,7 +6,9 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"math/rand"
 	"strings"
+	"sync"
 	"sync/atomic"
 
 	"github.com/hyperlocalise/rain-orm/pkg/dialect"
@@ -21,11 +23,30 @@ var ErrNestedTxNotSupported = errors.New("rain: nested transactions are not supp
 // ErrNestedTxControlNotAllowed is returned when nested callbacks attempt to commit or roll back the outer transaction directly.
 var ErrNestedTxControlNotAllowed = errors.New("rain: nested RunInTx callbacks cannot call Commit or Rollback directly")
 
+// ReplicaSelector chooses which read replica should serve a SELECT query.
+type ReplicaSelector func(replicas []*DB) *DB
+
+type dbSharedState struct {
+	queryCache QueryCache
+}
+
+type replicaRoute struct {
+	primary  *DB
+	replicas []*DB
+	selector ReplicaSelector
+	all      []*DB
+
+	closeOnce sync.Once
+	closeErr  error
+}
+
 // DB represents a database connection pool.
 type DB struct {
-	db         *sql.DB
-	dialect    dialect.Dialect
-	queryCache QueryCache
+	db                *sql.DB
+	dialect           dialect.Dialect
+	shared            *dbSharedState
+	replicaRoute      *replicaRoute
+	forcePrimaryReads bool
 }
 
 // Open creates a database handle for the selected dialect.
@@ -46,6 +67,7 @@ func Open(driver, dsn string) (*DB, error) {
 	return &DB{
 		db:      db,
 		dialect: d,
+		shared:  &dbSharedState{},
 	}, nil
 }
 
@@ -58,11 +80,74 @@ func OpenDialect(driver string) (*DB, error) {
 
 	return &DB{
 		dialect: d,
+		shared:  &dbSharedState{},
+	}, nil
+}
+
+// WithReplicas returns a DB handle that routes SELECT queries to read replicas while
+// keeping writes, raw SQL, and transactions on the primary handle.
+func WithReplicas(primary *DB, replicas []*DB, selector ReplicaSelector) (*DB, error) {
+	if primary == nil {
+		return nil, errors.New("rain: read replicas require a non-nil primary database")
+	}
+	if len(replicas) == 0 {
+		return nil, errors.New("rain: read replicas require at least one replica database")
+	}
+
+	shared := resolveReplicaSharedState(primary, replicas)
+	validatedReplicas := make([]*DB, 0, len(replicas))
+	seen := make(map[*DB]struct{}, len(replicas)+1)
+	underlying := make([]*DB, 0, len(replicas)+1)
+
+	seen[primary] = struct{}{}
+	underlying = append(underlying, primary)
+
+	for idx, replica := range replicas {
+		if replica == nil {
+			return nil, fmt.Errorf("rain: read replica %d is nil", idx+1)
+		}
+		if replica.Dialect().Name() != primary.Dialect().Name() {
+			return nil, fmt.Errorf(
+				"rain: read replica %d uses dialect %q, expected %q",
+				idx+1,
+				replica.Dialect().Name(),
+				primary.Dialect().Name(),
+			)
+		}
+		replica.shared = shared
+		validatedReplicas = append(validatedReplicas, replica)
+		if _, ok := seen[replica]; ok {
+			continue
+		}
+		seen[replica] = struct{}{}
+		underlying = append(underlying, replica)
+	}
+
+	if selector == nil {
+		selector = randomReplicaSelector
+	}
+
+	primary.shared = shared
+	route := &replicaRoute{
+		primary:  primary,
+		replicas: validatedReplicas,
+		selector: selector,
+		all:      underlying,
+	}
+
+	return &DB{
+		db:           primary.db,
+		dialect:      primary.dialect,
+		shared:       shared,
+		replicaRoute: route,
 	}, nil
 }
 
 // Close closes the database connection.
 func (db *DB) Close() error {
+	if db.replicaRoute != nil {
+		return db.replicaRoute.close()
+	}
 	if db.db == nil {
 		return nil
 	}
@@ -75,38 +160,53 @@ func (db *DB) Dialect() dialect.Dialect {
 	return db.dialect
 }
 
+// Primary returns a DB view that forces reads to use the primary handle.
+func (db *DB) Primary() *DB {
+	if db == nil || db.replicaRoute == nil {
+		return db
+	}
+
+	return &DB{
+		db:                db.replicaRoute.primary.db,
+		dialect:           db.replicaRoute.primary.dialect,
+		shared:            db.shared,
+		replicaRoute:      db.replicaRoute,
+		forcePrimaryReads: true,
+	}
+}
+
 // Select starts a typed SELECT query builder.
 func (db *DB) Select() *SelectQuery {
-	return &SelectQuery{runner: db, dialect: db.dialect, cache: db.queryCache}
+	return &SelectQuery{runner: db.selectRunner(), dialect: db.dialect, cache: db.queryCache()}
 }
 
 // WithQueryCache sets the shared SELECT query cache backend on DB.
 func (db *DB) WithQueryCache(cache QueryCache) *DB {
-	db.queryCache = cache
+	db.ensureSharedState().queryCache = cache
 	return db
 }
 
 // InvalidateQueryCache removes cached query entries associated with any provided tag.
 func (db *DB) InvalidateQueryCache(ctx context.Context, tags ...string) error {
-	if db.queryCache == nil {
+	if db.queryCache() == nil {
 		return nil
 	}
-	return db.queryCache.InvalidateTags(ctx, tags...)
+	return db.queryCache().InvalidateTags(ctx, tags...)
 }
 
 // Insert starts a typed INSERT query builder.
 func (db *DB) Insert() *InsertQuery {
-	return &InsertQuery{runner: db, dialect: db.dialect}
+	return &InsertQuery{runner: db.primaryRunner(), dialect: db.dialect}
 }
 
 // Update starts a typed UPDATE query builder.
 func (db *DB) Update() *UpdateQuery {
-	return &UpdateQuery{runner: db, dialect: db.dialect}
+	return &UpdateQuery{runner: db.primaryRunner(), dialect: db.dialect}
 }
 
 // Delete starts a typed DELETE query builder.
 func (db *DB) Delete() *DeleteQuery {
-	return &DeleteQuery{runner: db, dialect: db.dialect}
+	return &DeleteQuery{runner: db.primaryRunner(), dialect: db.dialect}
 }
 
 // Exec executes raw SQL against the database.
@@ -146,16 +246,17 @@ func (db *DB) QueryRow(ctx context.Context, query string, args ...any) *sql.Row 
 
 // Begin starts a new transaction.
 func (db *DB) Begin(ctx context.Context) (*Tx, error) {
-	if db.db == nil {
+	primary := db.primaryHandle()
+	if primary.db == nil {
 		return nil, ErrNoConnection
 	}
 
-	tx, err := db.db.BeginTx(ctx, nil)
+	tx, err := primary.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
 	}
 
-	return &Tx{tx: tx, dialect: db.dialect, savepointSeq: new(int64), canControlTx: true, queryCache: db.queryCache}, nil
+	return &Tx{tx: tx, dialect: db.dialect, savepointSeq: new(int64), canControlTx: true, queryCache: db.queryCache()}, nil
 }
 
 // RunInTx executes fn in a transaction, rolling back on error and committing on success.
@@ -322,4 +423,107 @@ func (tx *Tx) rollbackSavepoint(ctx context.Context, savepoint string) error {
 	}
 
 	return nil
+}
+
+func (db *DB) ensureSharedState() *dbSharedState {
+	if db.shared == nil {
+		db.shared = &dbSharedState{}
+	}
+	return db.shared
+}
+
+func resolveReplicaSharedState(primary *DB, replicas []*DB) *dbSharedState {
+	var shared *dbSharedState
+	if primary != nil && primary.shared != nil {
+		shared = primary.shared
+	}
+	if shared == nil {
+		for _, replica := range replicas {
+			if replica != nil && replica.shared != nil {
+				shared = replica.shared
+				break
+			}
+		}
+	}
+	if shared == nil {
+		shared = &dbSharedState{}
+	}
+	if shared.queryCache != nil {
+		return shared
+	}
+	if primary != nil && primary.queryCache() != nil {
+		shared.queryCache = primary.queryCache()
+		return shared
+	}
+	for _, replica := range replicas {
+		if replica != nil && replica.queryCache() != nil {
+			shared.queryCache = replica.queryCache()
+			return shared
+		}
+	}
+	return shared
+}
+
+func (db *DB) queryCache() QueryCache {
+	if db.shared == nil {
+		return nil
+	}
+	return db.shared.queryCache
+}
+
+func (db *DB) primaryHandle() *DB {
+	if db == nil || db.replicaRoute == nil {
+		return db
+	}
+	return db.replicaRoute.primary
+}
+
+func (db *DB) primaryRunner() queryRunner {
+	return db.primaryHandle()
+}
+
+func (db *DB) selectRunner() queryRunner {
+	if db == nil || db.replicaRoute == nil || db.forcePrimaryReads {
+		return db.primaryRunner()
+	}
+	return db.replicaRoute.pickReplica()
+}
+
+func randomReplicaSelector(replicas []*DB) *DB {
+	if len(replicas) == 0 {
+		return nil
+	}
+	return replicas[rand.Intn(len(replicas))]
+}
+
+func (r *replicaRoute) pickReplica() *DB {
+	if r == nil || len(r.replicas) == 0 {
+		return nil
+	}
+	chosen := r.selector(r.replicas)
+	for _, replica := range r.replicas {
+		if replica == chosen {
+			return replica
+		}
+	}
+	return randomReplicaSelector(r.replicas)
+}
+
+func (r *replicaRoute) close() error {
+	if r == nil {
+		return nil
+	}
+	r.closeOnce.Do(func() {
+		var errs []error
+		for _, handle := range r.all {
+			if handle == nil || handle.db == nil {
+				continue
+			}
+			if err := handle.db.Close(); err != nil {
+				errs = append(errs, err)
+			}
+		}
+		r.closeErr = errors.Join(errs...)
+	})
+	return r.closeErr
 }

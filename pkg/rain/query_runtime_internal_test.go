@@ -173,7 +173,7 @@ func TestSelectQueryCacheArgsAndManualInvalidation(t *testing.T) {
 
 	counter := &countingRunner{base: db}
 	queryFor := func(email string) *SelectQuery {
-		return (&SelectQuery{runner: counter, dialect: db.Dialect(), cache: db.queryCache}).
+		return (&SelectQuery{runner: counter, dialect: db.Dialect(), cache: db.queryCache()}).
 			Table(users).
 			Where(users.Email.Eq(email)).
 			Cache(QueryCacheOptions{TTL: 5 * time.Minute, Tags: []string{"users"}})
@@ -269,7 +269,7 @@ func TestSelectAggregateCacheForCountAndExists(t *testing.T) {
 	}
 
 	counter := &countingRunner{base: db}
-	query := (&SelectQuery{runner: counter, dialect: db.Dialect(), cache: db.queryCache}).
+	query := (&SelectQuery{runner: counter, dialect: db.Dialect(), cache: db.queryCache()}).
 		Table(users).
 		Where(users.Email.Eq("agg@example.com")).
 		Cache(QueryCacheOptions{TTL: time.Minute, Tags: []string{"users"}})
