@@ -399,6 +399,15 @@ func (c *AnyColumn) Desc() OrderExpr {
 	return OrderExpr{Expr: c, Direction: SortDesc}
 }
 
+// In compares this column to a set of Go values using SQL IN.
+func (c *AnyColumn) In(values ...any) InExpr {
+	exprs := make([]Expression, 0, len(values))
+	for _, value := range values {
+		exprs = append(exprs, ValueExpr{Value: value})
+	}
+	return InExpr{Left: c, Values: exprs}
+}
+
 func (c *AnyColumn) isExpression()    {}
 func (c *AnyColumn) indexColumnSpec() {}
 
@@ -545,6 +554,15 @@ func (c *Column[T]) EqCol(other ColumnReference) ComparisonExpr {
 	return ComparisonExpr{Left: c, Operator: "=", Right: other}
 }
 
+// In compares this column to a set of Go values using SQL IN.
+func (c *Column[T]) In(values ...T) InExpr {
+	exprs := make([]Expression, 0, len(values))
+	for _, value := range values {
+		exprs = append(exprs, ValueExpr{Value: value})
+	}
+	return InExpr{Left: c, Values: exprs}
+}
+
 // IsNull creates an IS NULL predicate.
 func (c *Column[T]) IsNull() NullCheckExpr {
 	return NullCheckExpr{Expr: c, Negated: false}
@@ -584,6 +602,15 @@ type ComparisonExpr struct {
 
 func (ComparisonExpr) isExpression() {}
 func (ComparisonExpr) isPredicate()  {}
+
+// InExpr renders an IN predicate.
+type InExpr struct {
+	Left   Expression
+	Values []Expression
+}
+
+func (InExpr) isExpression() {}
+func (InExpr) isPredicate()  {}
 
 // NullCheckExpr renders IS NULL or IS NOT NULL.
 type NullCheckExpr struct {

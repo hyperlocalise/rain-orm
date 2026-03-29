@@ -72,6 +72,8 @@ func TestSchemaInternalHelpersAndExpressions(t *testing.T) {
 	lt := users.ID.Lt(12)
 	lte := users.ID.Lte(13)
 	eqCol := users.ID.EqCol(users.ID)
+	in := users.ID.In(1, 2, 3)
+	anyIn := anyEmail.In("alice@example.com", "bob@example.com")
 	isNull := users.Email.IsNull()
 	isNotNull := users.Email.IsNotNull()
 	raw := Raw("LOWER(?)", users.Email)
@@ -80,6 +82,9 @@ func TestSchemaInternalHelpersAndExpressions(t *testing.T) {
 
 	if eq.Operator != "=" || ne.Operator != "<>" || gt.Operator != ">" || gte.Operator != ">=" || lt.Operator != "<" || lte.Operator != "<=" || eqCol.Operator != "=" {
 		t.Fatalf("unexpected comparison operator values")
+	}
+	if len(in.Values) != 3 || len(anyIn.Values) != 2 {
+		t.Fatalf("unexpected IN expression values")
 	}
 	if isNull.Negated || !isNotNull.Negated {
 		t.Fatalf("unexpected null-check negation flags")
@@ -94,6 +99,8 @@ func TestSchemaInternalHelpersAndExpressions(t *testing.T) {
 	ValueExpr{Value: 1}.isExpression()
 	eq.isExpression()
 	eq.isPredicate()
+	in.isExpression()
+	in.isPredicate()
 	isNull.isExpression()
 	isNull.isPredicate()
 	andExpr.isExpression()

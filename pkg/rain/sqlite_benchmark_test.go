@@ -36,6 +36,17 @@ type benchmarkJoinRow struct {
 	Email string `db:"email"`
 }
 
+type benchmarkUserWithPostsRow struct {
+	ID    int64                  `db:"id"`
+	Posts []benchmarkPostOnlyRow `rain:"relation:posts"`
+}
+
+type benchmarkPostOnlyRow struct {
+	ID     int64  `db:"id"`
+	UserID int64  `db:"user_id"`
+	Title  string `db:"title"`
+}
+
 var benchmarkDatasets = []benchmarkDataset{
 	{name: "small", users: 100, posts: 1000},
 	{name: "medium", users: 1000, posts: 10000},
@@ -162,6 +173,30 @@ func BenchmarkSQLiteSelectJoinScan(b *testing.B) {
 				Limit(expectedRows).
 				Scan(ctx, &rows); err != nil {
 				b.Fatalf("join scan: %v", err)
+			}
+		}
+	})
+}
+
+func BenchmarkSQLiteSelectWithRelations(b *testing.B) {
+	runSQLiteBenchmarkDatasets(b, func(b *testing.B, fixture *benchmarkFixture, dataset benchmarkDataset) {
+		ctx := context.Background()
+		limit := min(dataset.users/10, 100)
+		if limit < 1 {
+			limit = 1
+		}
+		b.ReportAllocs()
+		b.ResetTimer()
+
+		for range b.N {
+			rows := make([]benchmarkUserWithPostsRow, 0, limit)
+			if err := fixture.db.Select().
+				Table(fixture.users).
+				OrderBy(fixture.users.ID.Asc()).
+				Limit(limit).
+				WithRelations("posts").
+				Scan(ctx, &rows); err != nil {
+				b.Fatalf("relation scan: %v", err)
 			}
 		}
 	})

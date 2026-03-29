@@ -428,6 +428,32 @@ func TestSelectAdvancedComposition(t *testing.T) {
 	}
 }
 
+func TestSelectInPredicateToSQL(t *testing.T) {
+	t.Parallel()
+
+	db, err := rain.OpenDialect("postgres")
+	if err != nil {
+		t.Fatalf("OpenDialect returned error: %v", err)
+	}
+	users, _ := defineTables()
+
+	sqlText, args, err := db.Select().
+		Table(users).
+		Where(users.ID.In(int64(3), int64(5), int64(8))).
+		ToSQL()
+	if err != nil {
+		t.Fatalf("ToSQL returned error: %v", err)
+	}
+
+	wantSQL := `SELECT * FROM "users" WHERE "users"."id" IN ($1, $2, $3)`
+	if sqlText != wantSQL {
+		t.Fatalf("unexpected SQL:\nwant: %s\ngot:  %s", wantSQL, sqlText)
+	}
+	if !reflect.DeepEqual(args, []any{int64(3), int64(5), int64(8)}) {
+		t.Fatalf("unexpected args: %#v", args)
+	}
+}
+
 func TestInsertUpdateDeleteToSQL(t *testing.T) {
 	db, err := rain.OpenDialect("postgres")
 	if err != nil {
