@@ -94,7 +94,7 @@ func WithReplicas(primary *DB, replicas []*DB, selector ReplicaSelector) (*DB, e
 		return nil, errors.New("rain: read replicas require at least one replica database")
 	}
 
-	shared := primary.ensureSharedState()
+	shared := resolveReplicaSharedState(primary, replicas)
 	validatedReplicas := make([]*DB, 0, len(replicas))
 	seen := make(map[*DB]struct{}, len(replicas)+1)
 	underlying := make([]*DB, 0, len(replicas)+1)
@@ -430,6 +430,38 @@ func (db *DB) ensureSharedState() *dbSharedState {
 		db.shared = &dbSharedState{}
 	}
 	return db.shared
+}
+
+func resolveReplicaSharedState(primary *DB, replicas []*DB) *dbSharedState {
+	var shared *dbSharedState
+	if primary != nil && primary.shared != nil {
+		shared = primary.shared
+	}
+	if shared == nil {
+		for _, replica := range replicas {
+			if replica != nil && replica.shared != nil {
+				shared = replica.shared
+				break
+			}
+		}
+	}
+	if shared == nil {
+		shared = &dbSharedState{}
+	}
+	if shared.queryCache != nil {
+		return shared
+	}
+	if primary != nil && primary.queryCache() != nil {
+		shared.queryCache = primary.queryCache()
+		return shared
+	}
+	for _, replica := range replicas {
+		if replica != nil && replica.queryCache() != nil {
+			shared.queryCache = replica.queryCache()
+			return shared
+		}
+	}
+	return shared
 }
 
 func (db *DB) queryCache() QueryCache {

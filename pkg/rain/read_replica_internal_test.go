@@ -489,6 +489,37 @@ func TestWithReplicasSharesQueryCacheAndPrimaryView(t *testing.T) {
 	}
 }
 
+func TestWithReplicasPreservesPreconfiguredReplicaCache(t *testing.T) {
+	t.Parallel()
+
+	primary, err := OpenDialect("sqlite")
+	if err != nil {
+		t.Fatalf("OpenDialect(sqlite): %v", err)
+	}
+	replica, err := OpenDialect("sqlite")
+	if err != nil {
+		t.Fatalf("OpenDialect(sqlite): %v", err)
+	}
+
+	replicaCache := NewMemoryQueryCache()
+	replica.WithQueryCache(replicaCache)
+
+	routed, err := WithReplicas(primary, []*DB{replica}, nil)
+	if err != nil {
+		t.Fatalf("WithReplicas: %v", err)
+	}
+
+	if routed.Select().cache != replicaCache {
+		t.Fatalf("expected routed Select cache to preserve preconfigured replica cache")
+	}
+	if routed.Primary().Select().cache != replicaCache {
+		t.Fatalf("expected primary view Select cache to preserve preconfigured replica cache")
+	}
+	if primary.Select().cache != replicaCache {
+		t.Fatalf("expected primary handle Select cache to preserve preconfigured replica cache")
+	}
+}
+
 func TestWithReplicasCloseDeduplicatesUnderlyingHandles(t *testing.T) {
 	t.Parallel()
 
