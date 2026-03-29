@@ -220,6 +220,215 @@ func TestQueryExecutionPaths(t *testing.T) {
 	}
 }
 
+func TestSelectQueryCacheHitMissExpiryAndBypass(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db := openInternalQueryDB(t)
+	users, _ := defineInternalQueryTables()
+	createInternalQuerySchema(t, ctx, db)
+
+	cache := NewMemoryQueryCache()
+	cache.now = func() time.Time { return time.Date(2026, 3, 29, 12, 0, 0, 0, time.UTC) }
+	db.WithQueryCache(cache)
+
+	if _, err := db.Insert().Table(users).Model(&internalInsertModel{Email: "cache@example.com", Name: "Cache"}).Exec(ctx); err != nil {
+		t.Fatalf("insert user: %v", err)
+	}
+
+	counter := &countingRunner{base: db}
+	q := (&SelectQuery{runner: counter, dialect: db.Dialect(), cache: cache}).
+		Table(users).
+		Where(users.Email.Eq("cache@example.com")).
+		Cache(QueryCacheOptions{TTL: time.Minute, Tags: []string{"users"}})
+
+	var first []internalUserRow
+	if err := q.Scan(ctx, &first); err != nil {
+		t.Fatalf("first scan: %v", err)
+	}
+	if counter.queryCount != 1 {
+		t.Fatalf("expected first query to hit DB once, got %d", counter.queryCount)
+	}
+
+	var second []internalUserRow
+	if err := q.Scan(ctx, &second); err != nil {
+		t.Fatalf("second scan: %v", err)
+	}
+	if counter.queryCount != 1 {
+		t.Fatalf("expected second query to hit cache, got query count %d", counter.queryCount)
+	}
+	if !reflect.DeepEqual(first, second) {
+		t.Fatalf("cached scan mismatch:\nfirst=%#v\nsecond=%#v", first, second)
+	}
+
+	cache.now = func() time.Time { return time.Date(2026, 3, 29, 12, 2, 0, 0, time.UTC) }
+	var third []internalUserRow
+	if err := q.Scan(ctx, &third); err != nil {
+		t.Fatalf("third scan after expiry: %v", err)
+	}
+	if counter.queryCount != 2 {
+		t.Fatalf("expected expiry to force DB query, got %d", counter.queryCount)
+	}
+
+	var bypassed []internalUserRow
+	if err := q.Cache(QueryCacheOptions{TTL: time.Minute, Tags: []string{"users"}, Bypass: true}).Scan(ctx, &bypassed); err != nil {
+		t.Fatalf("bypass scan: %v", err)
+	}
+	if counter.queryCount != 3 {
+		t.Fatalf("expected bypass to force DB query, got %d", counter.queryCount)
+	}
+}
+
+func TestSelectQueryCacheArgsAndManualInvalidation(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db := openInternalQueryDB(t)
+	users, _ := defineInternalQueryTables()
+	createInternalQuerySchema(t, ctx, db)
+	db.WithQueryCache(NewMemoryQueryCache())
+
+	for _, item := range []internalInsertModel{
+		{Email: "alice@example.com", Name: "Alice"},
+		{Email: "bob@example.com", Name: "Bob"},
+	} {
+		if _, err := db.Insert().Table(users).Model(&item).Exec(ctx); err != nil {
+			t.Fatalf("insert user %s: %v", item.Email, err)
+		}
+	}
+
+	counter := &countingRunner{base: db}
+	queryFor := func(email string) *SelectQuery {
+		return (&SelectQuery{runner: counter, dialect: db.Dialect(), cache: db.queryCache}).
+			Table(users).
+			Where(users.Email.Eq(email)).
+			Cache(QueryCacheOptions{TTL: 5 * time.Minute, Tags: []string{"users"}})
+	}
+
+	var alice []internalUserRow
+	if err := queryFor("alice@example.com").Scan(ctx, &alice); err != nil {
+		t.Fatalf("alice query first run: %v", err)
+	}
+	if err := queryFor("alice@example.com").Scan(ctx, &alice); err != nil {
+		t.Fatalf("alice query second run: %v", err)
+	}
+	if counter.queryCount != 1 {
+		t.Fatalf("expected repeated identical args to hit cache, query count %d", counter.queryCount)
+	}
+
+	var bob []internalUserRow
+	if err := queryFor("bob@example.com").Scan(ctx, &bob); err != nil {
+		t.Fatalf("bob query first run: %v", err)
+	}
+	if counter.queryCount != 2 {
+		t.Fatalf("expected different args to use different entry, query count %d", counter.queryCount)
+	}
+
+	if err := db.InvalidateQueryCache(ctx, "users"); err != nil {
+		t.Fatalf("invalidate tag: %v", err)
+	}
+	if err := queryFor("alice@example.com").Scan(ctx, &alice); err != nil {
+		t.Fatalf("alice query after invalidation: %v", err)
+	}
+	if counter.queryCount != 3 {
+		t.Fatalf("expected invalidation miss, query count %d", counter.queryCount)
+	}
+}
+
+func TestSelectQueryCacheDisabledKeepsNormalBehavior(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db := openInternalQueryDB(t)
+	users, _ := defineInternalQueryTables()
+	createInternalQuerySchema(t, ctx, db)
+	if _, err := db.Insert().Table(users).Model(&internalInsertModel{Email: "nocache@example.com", Name: "No Cache"}).Exec(ctx); err != nil {
+		t.Fatalf("insert user: %v", err)
+	}
+
+	counter := &countingRunner{base: db}
+	q := (&SelectQuery{runner: counter, dialect: db.Dialect()}).
+		Table(users).
+		Where(users.Email.Eq("nocache@example.com")).
+		Cache(QueryCacheOptions{TTL: time.Minute, Tags: []string{"users"}})
+
+	var rows []internalUserRow
+	if err := q.Scan(ctx, &rows); err != nil {
+		t.Fatalf("first uncached scan: %v", err)
+	}
+	if err := q.Scan(ctx, &rows); err != nil {
+		t.Fatalf("second uncached scan: %v", err)
+	}
+	if counter.queryCount != 2 {
+		t.Fatalf("expected uncached behavior without backend, query count %d", counter.queryCount)
+	}
+}
+
+func TestBuildQueryCacheKeyIsStableForEquivalentArgs(t *testing.T) {
+	t.Parallel()
+
+	opts := normalizeQueryCacheOptions(QueryCacheOptions{TTL: time.Minute, Tags: []string{"users", "lookup"}, Namespace: "by-id"})
+	keyOne, err := buildQueryCacheKey("sqlite", "SELECT * FROM users WHERE id = ?", []any{int64(1)}, nil, opts)
+	if err != nil {
+		t.Fatalf("build key one: %v", err)
+	}
+	keyTwo, err := buildQueryCacheKey("sqlite", "SELECT * FROM users WHERE id = ?", []any{int64(1)}, nil, opts)
+	if err != nil {
+		t.Fatalf("build key two: %v", err)
+	}
+	if keyOne != keyTwo {
+		t.Fatalf("expected stable key, got %q and %q", keyOne, keyTwo)
+	}
+}
+
+func TestSelectAggregateCacheForCountAndExists(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db := openInternalQueryDB(t)
+	users, _ := defineInternalQueryTables()
+	createInternalQuerySchema(t, ctx, db)
+	db.WithQueryCache(NewMemoryQueryCache())
+
+	if _, err := db.Insert().Table(users).Model(&internalInsertModel{Email: "agg@example.com", Name: "Agg"}).Exec(ctx); err != nil {
+		t.Fatalf("insert user: %v", err)
+	}
+
+	counter := &countingRunner{base: db}
+	query := (&SelectQuery{runner: counter, dialect: db.Dialect(), cache: db.queryCache}).
+		Table(users).
+		Where(users.Email.Eq("agg@example.com")).
+		Cache(QueryCacheOptions{TTL: time.Minute, Tags: []string{"users"}})
+
+	count, err := query.Count(ctx)
+	if err != nil {
+		t.Fatalf("count first: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected count 1, got %d", count)
+	}
+	if _, err := query.Count(ctx); err != nil {
+		t.Fatalf("count second: %v", err)
+	}
+	if counter.queryCount != 1 {
+		t.Fatalf("expected second count to hit cache, query count %d", counter.queryCount)
+	}
+
+	exists, err := query.Exists(ctx)
+	if err != nil {
+		t.Fatalf("exists first: %v", err)
+	}
+	if !exists {
+		t.Fatalf("expected exists=true")
+	}
+	if _, err := query.Exists(ctx); err != nil {
+		t.Fatalf("exists second: %v", err)
+	}
+	if counter.queryCount != 2 {
+		t.Fatalf("expected second exists to hit cache, query count %d", counter.queryCount)
+	}
+}
+
 func TestQueryBuilderAndHelperErrors(t *testing.T) {
 	t.Parallel()
 

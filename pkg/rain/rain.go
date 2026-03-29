@@ -23,8 +23,9 @@ var ErrNestedTxControlNotAllowed = errors.New("rain: nested RunInTx callbacks ca
 
 // DB represents a database connection pool.
 type DB struct {
-	db      *sql.DB
-	dialect dialect.Dialect
+	db         *sql.DB
+	dialect    dialect.Dialect
+	queryCache QueryCache
 }
 
 // Open creates a database handle for the selected dialect.
@@ -76,7 +77,21 @@ func (db *DB) Dialect() dialect.Dialect {
 
 // Select starts a typed SELECT query builder.
 func (db *DB) Select() *SelectQuery {
-	return &SelectQuery{runner: db, dialect: db.dialect}
+	return &SelectQuery{runner: db, dialect: db.dialect, cache: db.queryCache}
+}
+
+// WithQueryCache sets the shared SELECT query cache backend on DB.
+func (db *DB) WithQueryCache(cache QueryCache) *DB {
+	db.queryCache = cache
+	return db
+}
+
+// InvalidateQueryCache removes cached query entries associated with any provided tag.
+func (db *DB) InvalidateQueryCache(ctx context.Context, tags ...string) error {
+	if db.queryCache == nil {
+		return nil
+	}
+	return db.queryCache.InvalidateTags(ctx, tags...)
 }
 
 // Insert starts a typed INSERT query builder.
@@ -140,7 +155,7 @@ func (db *DB) Begin(ctx context.Context) (*Tx, error) {
 		return nil, err
 	}
 
-	return &Tx{tx: tx, dialect: db.dialect, savepointSeq: new(int64), canControlTx: true}, nil
+	return &Tx{tx: tx, dialect: db.dialect, savepointSeq: new(int64), canControlTx: true, queryCache: db.queryCache}, nil
 }
 
 // RunInTx executes fn in a transaction, rolling back on error and committing on success.
@@ -160,6 +175,7 @@ type Tx struct {
 
 	savepointSeq *int64
 	canControlTx bool
+	queryCache   QueryCache
 }
 
 // Commit commits the transaction.
@@ -208,6 +224,7 @@ func (tx *Tx) RunInTx(ctx context.Context, fn func(*Tx) error) error {
 		dialect:      tx.dialect,
 		savepointSeq: tx.savepointSeq,
 		canControlTx: false,
+		queryCache:   tx.queryCache,
 	}
 
 	if err := fn(nestedTx); err != nil {
@@ -226,7 +243,15 @@ func (tx *Tx) RunInTx(ctx context.Context, fn func(*Tx) error) error {
 
 // Select starts a typed SELECT query builder in the transaction.
 func (tx *Tx) Select() *SelectQuery {
-	return &SelectQuery{runner: tx, dialect: tx.dialect}
+	return &SelectQuery{runner: tx, dialect: tx.dialect, cache: tx.queryCache}
+}
+
+// InvalidateQueryCache removes cached query entries associated with any provided tag.
+func (tx *Tx) InvalidateQueryCache(ctx context.Context, tags ...string) error {
+	if tx.queryCache == nil {
+		return nil
+	}
+	return tx.queryCache.InvalidateTags(ctx, tags...)
 }
 
 // Insert starts a typed INSERT query builder in the transaction.

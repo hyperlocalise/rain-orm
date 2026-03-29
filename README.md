@@ -174,6 +174,41 @@ if err != nil {
 `RunInTx` commits when the callback returns `nil` and rolls back when it returns an error. Nested `RunInTx` calls use savepoints on dialects that support them.
 Inside a nested callback, call patterns should return errors instead of calling `Commit`/`Rollback` directly.
 
+## Opt-in Query Cache (v1)
+
+Rain supports opt-in caching for `SELECT` helpers (`Scan`, `Count`, and `Exists`). Caching is disabled unless you set a cache backend on `DB`.
+
+```go
+cache := rain.NewMemoryQueryCache()
+db.WithQueryCache(cache)
+
+var users []User
+err := db.Select().
+    Table(Users).
+    Where(Users.Active.Eq(true)).
+    Cache(rain.QueryCacheOptions{
+        TTL:  2 * time.Minute,
+        Tags: []string{"users", "lookup"},
+    }).
+    Scan(ctx, &users)
+```
+
+### Invalidation (manual in v1)
+
+Use cache tags and invalidate them explicitly:
+
+```go
+if err := db.InvalidateQueryCache(ctx, "users"); err != nil {
+    return err
+}
+```
+
+Notes:
+- Cache is opt-in per query.
+- TTL is required (zero or negative TTL disables caching for that query).
+- Tags are optional, but recommended for manual invalidation.
+- Cache is a convenience for read-mostly workloads, not a substitute for fixing inefficient query shapes.
+
 ## Schema Definition
 
 ```go
