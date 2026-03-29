@@ -253,6 +253,15 @@ RAIN_POSTGRES_DSN="postgres://user:pass@localhost:5432/rain_test?sslmode=disable
 
 You can also set `RAIN_POSTGRES_HOST`, `RAIN_POSTGRES_PORT` (default `5432`), `RAIN_POSTGRES_USER`, `RAIN_POSTGRES_PASSWORD` (optional), `RAIN_POSTGRES_DB`, and `RAIN_POSTGRES_SSLMODE` (default `disable`) instead of a DSN.
 
+MySQL integration coverage also uses environment-driven connection settings and skips automatically when configuration is missing.
+
+```sh
+RAIN_MYSQL_DSN="user:pass@tcp(localhost:3306)/rain_test" \
+  go test -race ./pkg/rain -run "^TestMySQLIntegration"
+```
+
+You can also set `RAIN_MYSQL_HOST`, `RAIN_MYSQL_PORT` (default `3306`), `RAIN_MYSQL_USER`, `RAIN_MYSQL_PASSWORD` (optional), and `RAIN_MYSQL_DB` instead of a DSN.
+
 # Performance Benchmarks
 
 Rain includes a SQLite-first benchmark suite for measuring end-to-end ORM performance and memory usage across representative CRUD and join workloads.

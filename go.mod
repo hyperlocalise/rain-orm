@@ -11,6 +11,7 @@ tool (
 )
 
 require (
+	github.com/go-sql-driver/mysql v1.7.1
 	github.com/jackc/pgx/v5 v5.5.4
 	modernc.org/sqlite v1.48.0
 )
