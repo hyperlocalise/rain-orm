@@ -271,33 +271,33 @@ func TestSQLiteIntegrationDialectTypeRendering(t *testing.T) {
 	}
 }
 
-func openSQLiteTestDB(t *testing.T) *rain.DB {
-	t.Helper()
+func openSQLiteTestDB(tb testing.TB) *rain.DB {
+	tb.Helper()
 
-	dbPath := filepath.Join(t.TempDir(), "rain.sqlite")
+	dbPath := filepath.Join(tb.TempDir(), "rain.sqlite")
 	db, err := rain.Open("sqlite", dbPath)
 	if err != nil {
-		t.Fatalf("open sqlite db: %v", err)
+		tb.Fatalf("open sqlite db: %v", err)
 	}
-	t.Cleanup(func() {
+	tb.Cleanup(func() {
 		_ = db.Close()
 	})
 
 	return db
 }
 
-func createSQLiteSchema(t *testing.T, ctx context.Context, db *rain.DB) {
-	t.Helper()
+func createSQLiteSchema(tb testing.TB, ctx context.Context, db *rain.DB) {
+	tb.Helper()
 
 	users, posts := defineSQLiteTables()
 
 	for _, table := range []schema.TableReference{users, posts} {
 		statement, err := db.CreateTableSQL(table)
 		if err != nil {
-			t.Fatalf("compile schema for %q: %v", table.TableDef().Name, err)
+			tb.Fatalf("compile schema for %q: %v", table.TableDef().Name, err)
 		}
 		if _, err := db.Exec(ctx, statement); err != nil {
-			t.Fatalf("exec schema statement %q: %v", statement, err)
+			tb.Fatalf("exec schema statement %q: %v", statement, err)
 		}
 	}
 }
