@@ -21,7 +21,7 @@ test: ## run tests with coverage
 
 .PHONY: bench
 bench: ## run sqlite benchmark suite with allocation metrics
-	go test -run '^$$' -bench . -benchmem ./pkg/rain
+	go test -run '^$$' -bench . -benchmem -count=3 ./pkg/rain
 
 .PHONY: test-json
 test-json: ## run tests with JSON output (for CI)
