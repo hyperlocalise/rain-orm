@@ -168,6 +168,50 @@ func TestScanRowsDiscardsUnknownColumnsAndLeavesMissingFields(t *testing.T) {
 	}
 }
 
+func TestScanRowsSupportsPointerSliceDestinations(t *testing.T) {
+	t.Parallel()
+
+	db := openModelInternalDB(t)
+	if _, err := db.Exec(`
+		CREATE TABLE pointer_rows (
+			id INTEGER NOT NULL,
+			name TEXT
+		)
+	`); err != nil {
+		t.Fatalf("create table: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO pointer_rows(id, name) VALUES (1, 'alice'), (2, 'bob')`); err != nil {
+		t.Fatalf("insert rows: %v", err)
+	}
+
+	type row struct {
+		ID   int64  `db:"id"`
+		Name string `db:"name"`
+	}
+
+	rows, err := db.Query(`SELECT id, name FROM pointer_rows ORDER BY id`)
+	if err != nil {
+		t.Fatalf("query rows: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = rows.Close()
+	})
+
+	var scanned []*row
+	if err := scanRows(rows, &scanned); err != nil {
+		t.Fatalf("scan rows: %v", err)
+	}
+	if len(scanned) != 2 {
+		t.Fatalf("expected 2 rows, got %d", len(scanned))
+	}
+	if scanned[0] == nil || scanned[0].ID != 1 || scanned[0].Name != "alice" {
+		t.Fatalf("unexpected first row: %#v", scanned[0])
+	}
+	if scanned[1] == nil || scanned[1].ID != 2 || scanned[1].Name != "bob" {
+		t.Fatalf("unexpected second row: %#v", scanned[1])
+	}
+}
+
 func TestScanRowsUnsupportedNullableTypeReturnsClearError(t *testing.T) {
 	t.Parallel()
 

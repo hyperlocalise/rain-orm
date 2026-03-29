@@ -22,6 +22,15 @@ type modelMeta struct {
 	byRelation map[string]modelField
 }
 
+type scanColumnPlan struct {
+	discard    bool
+	fieldIndex []int
+}
+
+type rowScanPlan struct {
+	columns []scanColumnPlan
+}
+
 var modelMetaCache sync.Map
 
 func lookupModelMeta(model any) (*modelMeta, reflect.Value, error) {
@@ -41,9 +50,12 @@ func lookupModelMeta(model any) (*modelMeta, reflect.Value, error) {
 		return nil, reflect.Value{}, fmt.Errorf("rain: model must be a struct or pointer to struct")
 	}
 
-	typ := value.Type()
+	return lookupModelMetaForType(value.Type()), value, nil
+}
+
+func lookupModelMetaForType(typ reflect.Type) *modelMeta {
 	if cached, ok := modelMetaCache.Load(typ); ok {
-		return cached.(*modelMeta), value, nil
+		return cached.(*modelMeta)
 	}
 
 	meta := &modelMeta{
@@ -53,7 +65,7 @@ func lookupModelMeta(model any) (*modelMeta, reflect.Value, error) {
 	buildModelMeta(meta, typ, nil)
 	actual, _ := modelMetaCache.LoadOrStore(typ, meta)
 
-	return actual.(*modelMeta), value, nil
+	return actual.(*modelMeta)
 }
 
 func buildModelMeta(meta *modelMeta, typ reflect.Type, prefix []int) {
@@ -117,25 +129,44 @@ func scanRows(rows *sql.Rows, dest any) error {
 	target := value.Elem()
 	switch target.Kind() {
 	case reflect.Struct:
+		plan, err := newRowScanPlan(rows, target.Type())
+		if err != nil {
+			return err
+		}
+		targets := make([]any, len(plan.columns))
+		finalizers := make([]func() error, len(plan.columns))
 		if !rows.Next() {
 			if err := rows.Err(); err != nil {
 				return err
 			}
 			return sql.ErrNoRows
 		}
-		if err := scanCurrentRow(rows, target); err != nil {
+		if err := scanCurrentRowWithPlan(rows, target, plan, targets, finalizers); err != nil {
 			return err
 		}
 		return rows.Err()
 	case reflect.Slice:
 		elemType := target.Type().Elem()
+		structType, pointerElems, err := sliceElementStructType(elemType)
+		if err != nil {
+			return err
+		}
+		plan, err := newRowScanPlan(rows, structType)
+		if err != nil {
+			return err
+		}
+		targets := make([]any, len(plan.columns))
+		finalizers := make([]func() error, len(plan.columns))
 		for rows.Next() {
-			elemPtr := reflect.New(elemType)
-			elemValue := elemPtr.Elem()
-			if err := scanCurrentRow(rows, elemValue); err != nil {
+			elemPtr := reflect.New(structType)
+			if err := scanCurrentRowWithPlan(rows, elemPtr.Elem(), plan, targets, finalizers); err != nil {
 				return err
 			}
-			target.Set(reflect.Append(target, elemValue))
+			if pointerElems {
+				target.Set(reflect.Append(target, elemPtr))
+				continue
+			}
+			target.Set(reflect.Append(target, elemPtr.Elem()))
 		}
 		return rows.Err()
 	default:
@@ -143,28 +174,50 @@ func scanRows(rows *sql.Rows, dest any) error {
 	}
 }
 
-func scanCurrentRow(rows *sql.Rows, target reflect.Value) error {
+func sliceElementStructType(elemType reflect.Type) (reflect.Type, bool, error) {
+	if elemType.Kind() == reflect.Struct {
+		return elemType, false, nil
+	}
+	if elemType.Kind() == reflect.Pointer && elemType.Elem().Kind() == reflect.Struct {
+		return elemType.Elem(), true, nil
+	}
+	return nil, false, fmt.Errorf("rain: destination slice element must be a struct or pointer to struct")
+}
+
+func newRowScanPlan(rows *sql.Rows, modelType reflect.Type) (*rowScanPlan, error) {
 	cols, err := rows.Columns()
 	if err != nil {
-		return err
+		return nil, err
 	}
-
-	meta, _, err := lookupModelMeta(target.Addr().Interface())
-	if err != nil {
-		return err
-	}
-
-	targets := make([]any, len(cols))
-	finalizers := make([]func() error, len(cols))
+	meta := lookupModelMetaForType(modelType)
+	plan := &rowScanPlan{columns: make([]scanColumnPlan, len(cols))}
 	for idx, name := range cols {
 		fieldInfo, ok := meta.byColumn[name]
 		if !ok {
+			plan.columns[idx] = scanColumnPlan{discard: true}
+			continue
+		}
+		plan.columns[idx] = scanColumnPlan{fieldIndex: fieldInfo.index}
+	}
+	return plan, nil
+}
+
+func scanCurrentRowWithPlan(
+	rows *sql.Rows,
+	target reflect.Value,
+	plan *rowScanPlan,
+	targets []any,
+	finalizers []func() error,
+) error {
+	for idx, column := range plan.columns {
+		finalizers[idx] = nil
+		if column.discard {
 			var discard any
 			targets[idx] = &discard
 			continue
 		}
 
-		field, err := fieldByIndexAlloc(target, fieldInfo.index)
+		field, err := fieldByIndexAlloc(target, column.fieldIndex)
 		if err != nil {
 			return err
 		}

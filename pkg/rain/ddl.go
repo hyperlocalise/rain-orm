@@ -23,6 +23,18 @@ func (db *DB) CreateTableSQL(table schema.TableReference) (string, error) {
 	return createTableSQL(db.dialect, table.TableDef())
 }
 
+// CreateIndexesSQL compiles schema index metadata into CREATE INDEX statements.
+func (db *DB) CreateIndexesSQL(table schema.TableReference) ([]string, error) {
+	if db == nil || db.dialect == nil {
+		return nil, errors.New("rain: create indexes requires a configured dialect")
+	}
+	if table == nil || table.TableDef() == nil {
+		return nil, errors.New("rain: create indexes requires a non-nil table")
+	}
+
+	return createIndexesSQL(db.dialect, table.TableDef())
+}
+
 func createTableSQL(d dialect.Dialect, table *schema.TableDef) (string, error) {
 	if d == nil {
 		return "", errors.New("rain: create table requires a configured dialect")
@@ -70,6 +82,51 @@ func createTableSQL(d dialect.Dialect, table *schema.TableDef) (string, error) {
 	builder.WriteByte(')')
 
 	return builder.String(), nil
+}
+
+func createIndexesSQL(d dialect.Dialect, table *schema.TableDef) ([]string, error) {
+	if d == nil {
+		return nil, errors.New("rain: create indexes requires a configured dialect")
+	}
+	if table == nil {
+		return nil, errors.New("rain: create indexes requires a non-nil table")
+	}
+
+	statements := make([]string, 0, len(table.Indexes))
+	for _, index := range table.Indexes {
+		if len(index.Columns) == 0 {
+			return nil, fmt.Errorf("rain: index %q on table %q must reference at least one column", index.Name, table.Name)
+		}
+
+		var builder strings.Builder
+		builder.WriteString("CREATE ")
+		if index.Unique {
+			builder.WriteString("UNIQUE ")
+		}
+		builder.WriteString("INDEX ")
+		builder.WriteString(d.QuoteIdentifier(index.Name))
+		builder.WriteString(" ON ")
+		builder.WriteString(d.QuoteIdentifier(table.Name))
+		builder.WriteString(" (")
+		for idx, column := range index.Columns {
+			if idx > 0 {
+				builder.WriteString(", ")
+			}
+			builder.WriteString(d.QuoteIdentifier(column.Column.ColumnDef().Name))
+			if column.Direction != "" {
+				builder.WriteByte(' ')
+				builder.WriteString(string(column.Direction))
+			}
+		}
+		builder.WriteByte(')')
+		if strings.TrimSpace(index.Where) != "" {
+			builder.WriteString(" WHERE ")
+			builder.WriteString(index.Where)
+		}
+		statements = append(statements, builder.String())
+	}
+
+	return statements, nil
 }
 
 func columnDefinitionSQL(d dialect.Dialect, column *schema.ColumnDef, inlinePrimaryKey bool) (string, error) {
