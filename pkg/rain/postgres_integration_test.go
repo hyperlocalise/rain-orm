@@ -2,6 +2,7 @@ package rain_test
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"os"
 	"strconv"
@@ -11,7 +12,7 @@ import (
 
 	"github.com/hyperlocalise/rain-orm/pkg/rain"
 	"github.com/hyperlocalise/rain-orm/pkg/schema"
-	_ "github.com/lib/pq"
+	"github.com/jackc/pgx/v5/stdlib"
 )
 
 type postgresUsersTable struct {
@@ -38,6 +39,18 @@ type postgresInsertModel struct {
 	Nickname *string `db:"nickname"`
 }
 
+func registerPostgresDriverForTests(tb testing.TB) {
+	tb.Helper()
+
+	for _, name := range sql.Drivers() {
+		if name == "postgres" {
+			return
+		}
+	}
+
+	sql.Register("postgres", stdlib.GetDefaultDriver())
+}
+
 type postgresUserRow struct {
 	ID        int64      `db:"id"`
 	Email     string     `db:"email"`
@@ -56,6 +69,7 @@ func TestPostgresIntegrationInsertSelectAndJoin(t *testing.T) {
 	}
 
 	ctx := context.Background()
+	registerPostgresDriverForTests(t)
 	db, err := rain.Open("postgres", dsn)
 	if err != nil {
 		t.Fatalf("open postgres db: %v", err)
