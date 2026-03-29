@@ -217,3 +217,23 @@ func TestRelationMetadataRegistration(t *testing.T) {
 		t.Fatalf("unexpected relation metadata: %#v", relation)
 	}
 }
+
+func TestComputedExpressionHelpers(t *testing.T) {
+	users := schema.Define("users", func(tu *usersTable) {
+		tu.ID = tu.BigSerial("id").PrimaryKey()
+		tu.Email = tu.VarChar("email", 255).NotNull()
+		tu.Active = tu.Boolean("active").NotNull().Default(true)
+		tu.CreatedAt = tu.TimestampTZ("created_at").NotNull().DefaultNow()
+	})
+
+	if got := schema.Count(); !got.Star || got.Function != "COUNT" {
+		t.Fatalf("expected COUNT(*) aggregate helper, got %#v", got)
+	}
+	if got := schema.Sum(users.ID); got.Function != "SUM" || got.Expr == nil {
+		t.Fatalf("expected SUM aggregate helper, got %#v", got)
+	}
+	aliased := schema.As(schema.Max(users.ID), "max_id")
+	if aliased.Alias != "max_id" {
+		t.Fatalf("expected alias max_id, got %q", aliased.Alias)
+	}
+}

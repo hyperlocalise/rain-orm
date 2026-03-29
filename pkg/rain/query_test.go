@@ -225,6 +225,85 @@ func TestSelectAdvancedComposition(t *testing.T) {
 			wantSQL: "SELECT `posts`.`user_id`, COUNT(*) FROM `posts` GROUP BY `posts`.`user_id`",
 		},
 		{
+			name:    "aggregate helpers in select postgres",
+			dialect: "postgres",
+			build: func(db *rain.DB) *rain.SelectQuery {
+				return db.Select().
+					Table(posts).
+					Column(
+						posts.UserID,
+						schema.As(schema.Count(), "post_count"),
+						schema.As(schema.Sum(posts.ID), "id_sum"),
+						schema.As(schema.Avg(posts.ID), "id_avg"),
+						schema.As(schema.Min(posts.ID), "id_min"),
+						schema.As(schema.Max(posts.ID), "id_max"),
+					).
+					GroupBy(posts.UserID)
+			},
+			wantSQL: `SELECT "posts"."user_id", COUNT(*) AS "post_count", SUM("posts"."id") AS "id_sum", AVG("posts"."id") AS "id_avg", MIN("posts"."id") AS "id_min", MAX("posts"."id") AS "id_max" FROM "posts" GROUP BY "posts"."user_id"`,
+		},
+		{
+			name:    "alias helper in where placeholder ordering postgres",
+			dialect: "postgres",
+			build: func(db *rain.DB) *rain.SelectQuery {
+				return db.Select().
+					Table(posts).
+					Column(posts.UserID, schema.As(schema.Count(), "post_count")).
+					Where(posts.Title.Eq("hello")).
+					GroupBy(posts.UserID).
+					Having(schema.ComparisonExpr{Left: schema.Count(), Operator: ">", Right: schema.ValueExpr{Value: 3}})
+			},
+			wantSQL:  `SELECT "posts"."user_id", COUNT(*) AS "post_count" FROM "posts" WHERE "posts"."title" = $1 GROUP BY "posts"."user_id" HAVING COUNT(*) > $2`,
+			wantArgs: []any{"hello", 3},
+		},
+		{
+			name:    "aggregate helper mixed with raw placeholders mysql",
+			dialect: "mysql",
+			build: func(db *rain.DB) *rain.SelectQuery {
+				return db.Select().
+					Table(posts).
+					Column(schema.As(schema.Sum(posts.ID), "total_id")).
+					Where(schema.ComparisonExpr{Left: schema.Raw("COALESCE(?, 0)", 10), Operator: "<", Right: schema.ValueExpr{Value: 50}})
+			},
+			wantSQL:  "SELECT SUM(`posts`.`id`) AS `total_id` FROM `posts` WHERE COALESCE(?, 0) < ?",
+			wantArgs: []any{10, 50},
+		},
+		{
+			name:    "aggregate distinct star is invalid",
+			dialect: "postgres",
+			build: func(db *rain.DB) *rain.SelectQuery {
+				return db.Select().
+					Table(posts).
+					Column(schema.AggregateExpr{
+						Function: "COUNT",
+						Distinct: true,
+						Star:     true,
+					})
+			},
+			wantErr: "cannot combine DISTINCT with *",
+		},
+		{
+			name:    "aggregate missing function is invalid",
+			dialect: "postgres",
+			build: func(db *rain.DB) *rain.SelectQuery {
+				return db.Select().
+					Table(posts).
+					Column(schema.AggregateExpr{Expr: posts.ID})
+			},
+			wantErr: "function name cannot be empty",
+		},
+		{
+			name:    "alias in group by is invalid",
+			dialect: "postgres",
+			build: func(db *rain.DB) *rain.SelectQuery {
+				return db.Select().
+					Table(posts).
+					Column(posts.UserID).
+					GroupBy(schema.As(posts.UserID, "uid"))
+			},
+			wantErr: "aliased expressions are only supported in SELECT columns",
+		},
+		{
 			name:    "group by with having postgres",
 			dialect: "postgres",
 			build: func(db *rain.DB) *rain.SelectQuery {

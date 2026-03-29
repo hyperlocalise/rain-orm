@@ -66,6 +66,17 @@ func main() {
 		Limit(10).
 		ToSQL()
 
+	aggSQL, aggArgs, _ := db.Select().
+		Table(p).
+		Column(
+			p.UserID,
+			schema.As(schema.Count(), "post_count"),
+			schema.As(schema.Max(p.ID), "last_post_id"),
+		).
+		GroupBy(p.UserID).
+		Having(schema.ComparisonExpr{Left: schema.Count(), Operator: ">", Right: schema.ValueExpr{Value: 1}}).
+		ToSQL()
+
 	insertSQL, insertArgs, _ := db.Insert().
 		Table(Users).
 		Model(&User{Email: "alice@example.com", Name: "Alice", Active: true}).
@@ -84,6 +95,7 @@ func main() {
 		ToSQL()
 
 	fmt.Println(selectSQL, selectArgs)
+	fmt.Println(aggSQL, aggArgs)
 	fmt.Println(insertSQL, insertArgs)
 	fmt.Println(updateSQL, updateArgs)
 	fmt.Println(deleteSQL, deleteArgs)
