@@ -698,7 +698,6 @@ func TestSQLiteIntegrationRichAdvancedSelectsAndPreparedQueries(t *testing.T) {
 	if err := preparedTx.Close(); err != nil {
 		t.Fatalf("close tx prepared query failed: %v", err)
 	}
-
 }
 
 func TestSQLiteIntegrationRichRelationsAndTransactions(t *testing.T) {
