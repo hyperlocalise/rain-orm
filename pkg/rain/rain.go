@@ -7,12 +7,19 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync/atomic"
 
 	"github.com/hyperlocalise/rain-orm/pkg/dialect"
 )
 
 // ErrNoConnection is returned when execution is requested without a live database handle.
 var ErrNoConnection = errors.New("rain: no database connection configured")
+
+// ErrNestedTxNotSupported is returned when nested transactions are requested on a dialect without savepoint support.
+var ErrNestedTxNotSupported = errors.New("rain: nested transactions are not supported by this dialect")
+
+// ErrNestedTxControlNotAllowed is returned when nested callbacks attempt to commit or roll back the outer transaction directly.
+var ErrNestedTxControlNotAllowed = errors.New("rain: nested RunInTx callbacks cannot call Commit or Rollback directly")
 
 // DB represents a database connection pool.
 type DB struct {
@@ -133,17 +140,34 @@ func (db *DB) Begin(ctx context.Context) (*Tx, error) {
 		return nil, err
 	}
 
-	return &Tx{tx: tx, dialect: db.dialect}, nil
+	return &Tx{tx: tx, dialect: db.dialect, savepointSeq: new(int64), canControlTx: true}, nil
+}
+
+// RunInTx executes fn in a transaction, rolling back on error and committing on success.
+func (db *DB) RunInTx(ctx context.Context, fn func(*Tx) error) error {
+	tx, err := db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+
+	return runInRootTx(tx, fn)
 }
 
 // Tx represents a database transaction.
 type Tx struct {
 	tx      *sql.Tx
 	dialect dialect.Dialect
+
+	savepointSeq *int64
+	canControlTx bool
 }
 
 // Commit commits the transaction.
 func (tx *Tx) Commit() error {
+	if !tx.canControlTx {
+		return ErrNestedTxControlNotAllowed
+	}
+
 	if tx.tx == nil {
 		return ErrNoConnection
 	}
@@ -153,11 +177,51 @@ func (tx *Tx) Commit() error {
 
 // Rollback rolls the transaction back.
 func (tx *Tx) Rollback() error {
+	if !tx.canControlTx {
+		return ErrNestedTxControlNotAllowed
+	}
+
 	if tx.tx == nil {
 		return ErrNoConnection
 	}
 
 	return tx.tx.Rollback()
+}
+
+// RunInTx executes fn in a nested transaction using a savepoint.
+func (tx *Tx) RunInTx(ctx context.Context, fn func(*Tx) error) error {
+	if !dialect.HasFeature(tx.dialect.Features(), dialect.FeatureSavepoint) {
+		return ErrNestedTxNotSupported
+	}
+
+	if tx.tx == nil {
+		return ErrNoConnection
+	}
+
+	savepoint := tx.nextSavepointName()
+	if _, err := tx.execContext(ctx, "SAVEPOINT "+savepoint); err != nil {
+		return fmt.Errorf("rain: create savepoint %q: %w", savepoint, err)
+	}
+
+	nestedTx := &Tx{
+		tx:           tx.tx,
+		dialect:      tx.dialect,
+		savepointSeq: tx.savepointSeq,
+		canControlTx: false,
+	}
+
+	if err := fn(nestedTx); err != nil {
+		if rbErr := tx.rollbackSavepoint(ctx, savepoint); rbErr != nil {
+			return errors.Join(err, rbErr)
+		}
+		return err
+	}
+
+	if _, err := tx.execContext(ctx, "RELEASE SAVEPOINT "+savepoint); err != nil {
+		return fmt.Errorf("rain: release savepoint %q: %w", savepoint, err)
+	}
+
+	return nil
 }
 
 // Select starts a typed SELECT query builder in the transaction.
@@ -194,4 +258,43 @@ func (tx *Tx) queryContext(ctx context.Context, query string, args ...any) (*sql
 	}
 
 	return tx.tx.QueryContext(ctx, query, args...)
+}
+
+func runInRootTx(tx *Tx, fn func(*Tx) error) error {
+	if err := fn(tx); err != nil {
+		if rbErr := tx.Rollback(); rbErr != nil && !errors.Is(rbErr, sql.ErrTxDone) {
+			return errors.Join(err, fmt.Errorf("rain: rollback transaction: %w", rbErr))
+		}
+		return err
+	}
+
+	if err := tx.Commit(); err != nil {
+		if rbErr := tx.Rollback(); rbErr != nil && !errors.Is(rbErr, sql.ErrTxDone) {
+			return errors.Join(fmt.Errorf("rain: commit transaction: %w", err), fmt.Errorf("rain: rollback after commit failure: %w", rbErr))
+		}
+		return fmt.Errorf("rain: commit transaction: %w", err)
+	}
+
+	return nil
+}
+
+func (tx *Tx) nextSavepointName() string {
+	if tx.savepointSeq == nil {
+		panic("rain: savepointSeq is nil — Tx must be created via DB.Begin()")
+	}
+	n := atomic.AddInt64(tx.savepointSeq, 1)
+
+	return fmt.Sprintf("rain_sp_%d", n)
+}
+
+func (tx *Tx) rollbackSavepoint(ctx context.Context, savepoint string) error {
+	if _, err := tx.execContext(ctx, "ROLLBACK TO SAVEPOINT "+savepoint); err != nil {
+		return fmt.Errorf("rain: rollback to savepoint %q: %w", savepoint, err)
+	}
+
+	if _, err := tx.execContext(ctx, "RELEASE SAVEPOINT "+savepoint); err != nil {
+		return fmt.Errorf("rain: release savepoint %q after rollback: %w", savepoint, err)
+	}
+
+	return nil
 }

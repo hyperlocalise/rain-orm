@@ -147,24 +147,32 @@ db.Update().
 ## Transactions
 
 ```go
-tx, err := db.Begin(ctx)
+err := db.RunInTx(ctx, func(tx *rain.Tx) error {
+    _, err := tx.Insert().
+        Table(Posts).
+        Set(Posts.UserID, user.ID).
+        Set(Posts.Title, "Hello").
+        Exec(ctx)
+    if err != nil {
+        return err
+    }
+
+    return tx.RunInTx(ctx, func(nested *rain.Tx) error {
+        _, nestedErr := nested.Update().
+            Table(Users).
+            Set(Users.Active, true).
+            Where(Users.ID.Eq(user.ID)).
+            Exec(ctx)
+        return nestedErr
+    })
+})
 if err != nil {
     return err
 }
-
-// Perform operations within transaction
-_, err = tx.Insert().
-    Table(Posts).
-    Set(Posts.UserID, user.ID).
-    Set(Posts.Title, "Hello").
-    Exec(ctx)
-if err != nil {
-    tx.Rollback()
-    return err
-}
-
-err = tx.Commit()
 ```
+
+`RunInTx` commits when the callback returns `nil` and rolls back when it returns an error. Nested `RunInTx` calls use savepoints on dialects that support them.
+Inside a nested callback, call patterns should return errors instead of calling `Commit`/`Rollback` directly.
 
 ## Schema Definition
 

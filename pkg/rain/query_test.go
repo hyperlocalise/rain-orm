@@ -501,12 +501,13 @@ func TestDialectFeatures(t *testing.T) {
 				dialect.FeatureOffset |
 				dialect.FeatureUpsert |
 				dialect.FeatureCTE |
-				dialect.FeatureDefaultPlaceholder,
+				dialect.FeatureDefaultPlaceholder |
+				dialect.FeatureSavepoint,
 		},
 		{
 			name:     "mysql",
 			dialect:  "mysql",
-			features: dialect.FeatureOffset | dialect.FeatureUpsert,
+			features: dialect.FeatureOffset | dialect.FeatureUpsert | dialect.FeatureSavepoint,
 			missing: []dialect.Feature{
 				dialect.FeatureInsertReturning,
 				dialect.FeatureUpdateReturning,
@@ -522,7 +523,8 @@ func TestDialectFeatures(t *testing.T) {
 				dialect.FeatureUpdateReturning |
 				dialect.FeatureDeleteReturning |
 				dialect.FeatureOffset |
-				dialect.FeatureUpsert,
+				dialect.FeatureUpsert |
+				dialect.FeatureSavepoint,
 			missing: []dialect.Feature{
 				dialect.FeatureCTE,
 				dialect.FeatureDefaultPlaceholder,
