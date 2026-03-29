@@ -65,7 +65,9 @@ func defineSQLiteTables() (*sqliteUsersTable, *sqlitePostsTable) {
 		t.ID = t.BigSerial("id").PrimaryKey()
 		t.UserID = t.BigInt("user_id").NotNull().References(users.ID)
 		t.Title = t.Text("title").NotNull()
+		t.BelongsTo("author", t.UserID, users.ID)
 	})
+	users.HasMany("posts", users.ID, posts.UserID)
 
 	return users, posts
 }

@@ -96,6 +96,7 @@ func (q *SelectQuery) loadRelation(ctx context.Context, parents reflect.Value, r
 	}
 
 	sourceKeys := make(map[typedKey]any, parents.Len())
+	orderedSourceKeys := make([]any, 0, parents.Len())
 	for idx := 0; idx < parents.Len(); idx++ {
 		parent := parents.Index(idx)
 		keyValue, ok, err := relationColumnValue(parent, relation.SourceColumn.Name)
@@ -105,7 +106,12 @@ func (q *SelectQuery) loadRelation(ctx context.Context, parents reflect.Value, r
 		if !ok {
 			continue
 		}
-		sourceKeys[toTypedKey(keyValue)] = keyValue
+		key := toTypedKey(keyValue)
+		if _, exists := sourceKeys[key]; exists {
+			continue
+		}
+		sourceKeys[key] = keyValue
+		orderedSourceKeys = append(orderedSourceKeys, keyValue)
 	}
 	if len(sourceKeys) == 0 {
 		return nil
@@ -116,29 +122,24 @@ func (q *SelectQuery) loadRelation(ctx context.Context, parents reflect.Value, r
 	if err != nil {
 		return err
 	}
-	// TODO: replace per-key queries with a single IN-clause query
-	// (see docs/adr/2026-03-28-typed-relations-design.md).
-	for _, sourceKey := range sourceKeys {
-		query := &SelectQuery{runner: q.runner, dialect: q.dialect, table: tableDefSource{table: relation.TargetTable}}
-		relatedRows := reflect.New(reflect.SliceOf(relatedElemType))
-		if err := query.Where(schema.ComparisonExpr{Left: schema.Ref(relation.TargetColumn), Operator: "=", Right: schema.ValueExpr{Value: sourceKey}}).
-			Scan(ctx, relatedRows.Interface()); err != nil {
-			if err == sql.ErrNoRows {
-				continue
-			}
+	query := &SelectQuery{runner: q.runner, dialect: q.dialect, table: tableDefSource{table: relation.TargetTable}}
+	relatedRows := reflect.New(reflect.SliceOf(relatedElemType))
+	if err := query.Where(schema.Ref(relation.TargetColumn).In(orderedSourceKeys...)).
+		Scan(ctx, relatedRows.Interface()); err != nil {
+		if err != sql.ErrNoRows {
 			return err
 		}
-		for rowIdx := 0; rowIdx < relatedRows.Elem().Len(); rowIdx++ {
-			related := relatedRows.Elem().Index(rowIdx)
-			targetValue, ok, err := relationColumnValue(related, relation.TargetColumn.Name)
-			if err != nil {
-				return err
-			}
-			if !ok {
-				continue
-			}
-			relatedByTargetKey[toTypedKey(targetValue)] = append(relatedByTargetKey[toTypedKey(targetValue)], related)
+	}
+	for rowIdx := 0; rowIdx < relatedRows.Elem().Len(); rowIdx++ {
+		related := relatedRows.Elem().Index(rowIdx)
+		targetValue, ok, err := relationColumnValue(related, relation.TargetColumn.Name)
+		if err != nil {
+			return err
 		}
+		if !ok {
+			continue
+		}
+		relatedByTargetKey[toTypedKey(targetValue)] = append(relatedByTargetKey[toTypedKey(targetValue)], related)
 	}
 
 	for idx := 0; idx < parents.Len(); idx++ {

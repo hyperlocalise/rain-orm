@@ -67,6 +67,24 @@ type internalPostOnlyRow struct {
 	Title  string `db:"title"`
 }
 
+type countingRunner struct {
+	base        queryRunner
+	queryCount  int
+	execCount   int
+	lastQueries []string
+}
+
+func (r *countingRunner) execContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
+	r.execCount++
+	return r.base.execContext(ctx, query, args...)
+}
+
+func (r *countingRunner) queryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
+	r.queryCount++
+	r.lastQueries = append(r.lastQueries, query)
+	return r.base.queryContext(ctx, query, args...)
+}
+
 func defineInternalQueryTables() (*internalQueryUsersTable, *internalQueryPostsTable) {
 	users := schema.Define("users", func(t *internalQueryUsersTable) {
 		t.ID = t.BigSerial("id").PrimaryKey()
@@ -379,6 +397,62 @@ func TestSelectWithRelations(t *testing.T) {
 	}
 }
 
+func TestRelationLoadingBatchesQueriesPerRelation(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db := openInternalQueryDB(t)
+	users, posts := defineInternalQueryTables()
+	createInternalQuerySchema(t, ctx, db)
+
+	aliceResult, err := db.Insert().Table(users).Set(users.Email, "alice@example.com").Set(users.Name, "Alice").Exec(ctx)
+	if err != nil {
+		t.Fatalf("insert alice failed: %v", err)
+	}
+	aliceID, err := aliceResult.LastInsertId()
+	if err != nil {
+		t.Fatalf("alice last insert id failed: %v", err)
+	}
+	bobResult, err := db.Insert().Table(users).Set(users.Email, "bob@example.com").Set(users.Name, "Bob").Exec(ctx)
+	if err != nil {
+		t.Fatalf("insert bob failed: %v", err)
+	}
+	bobID, err := bobResult.LastInsertId()
+	if err != nil {
+		t.Fatalf("bob last insert id failed: %v", err)
+	}
+
+	for _, row := range []struct {
+		userID int64
+		title  string
+	}{
+		{userID: aliceID, title: "Alice 1"},
+		{userID: aliceID, title: "Alice 2"},
+		{userID: bobID, title: "Bob 1"},
+	} {
+		if _, err := db.Insert().Table(posts).Set(posts.UserID, row.userID).Set(posts.Title, row.title).Exec(ctx); err != nil {
+			t.Fatalf("insert post %q failed: %v", row.title, err)
+		}
+	}
+
+	runner := &countingRunner{base: db}
+	query := &SelectQuery{runner: runner, dialect: db.Dialect()}
+
+	var rows []internalUserWithPostsRow
+	if err := query.Table(users).WithRelations("posts").Scan(ctx, &rows); err != nil {
+		t.Fatalf("relation batch scan failed: %v", err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("expected 2 users, got %d", len(rows))
+	}
+	if runner.queryCount != 2 {
+		t.Fatalf("expected 2 query executions (base + relation batch), got %d", runner.queryCount)
+	}
+	if len(runner.lastQueries) != 2 || !strings.Contains(runner.lastQueries[1], `IN (`) {
+		t.Fatalf("expected relation load query with IN clause, got %#v", runner.lastQueries)
+	}
+}
+
 func TestCompileContextAndAssignmentsHelpers(t *testing.T) {
 	t.Parallel()
 
@@ -405,6 +479,9 @@ func TestCompileContextAndAssignmentsHelpers(t *testing.T) {
 	}
 	if err := newCompileContext(dialectForTest(t, "postgres")).writeRaw(schema.Raw("? ?", 1)); err == nil || !strings.Contains(err.Error(), "placeholder count") {
 		t.Fatalf("expected raw placeholder mismatch error, got %v", err)
+	}
+	if err := newCompileContext(dialectForTest(t, "postgres")).writeExpression(users.ID.In()); err == nil || !strings.Contains(err.Error(), "requires at least one value") {
+		t.Fatalf("expected empty IN error, got %v", err)
 	}
 	if err := newCompileContext(dialectForTest(t, "postgres")).writeExpression(nil); err == nil || !strings.Contains(err.Error(), "unsupported expression type") {
 		t.Fatalf("expected unsupported expression error, got %v", err)

@@ -1155,6 +1155,23 @@ func (c *compileContext) writeExpression(expr schema.Expression) error {
 		if err := c.writeExpression(value.Right); err != nil {
 			return err
 		}
+	case schema.InExpr:
+		if len(value.Values) == 0 {
+			return errors.New("rain: IN predicate requires at least one value")
+		}
+		if err := c.writeExpression(value.Left); err != nil {
+			return err
+		}
+		c.writeString(" IN (")
+		for idx, item := range value.Values {
+			if idx > 0 {
+				c.writeString(", ")
+			}
+			if err := c.writeExpression(item); err != nil {
+				return err
+			}
+		}
+		c.writeByte(')')
 	case schema.NullCheckExpr:
 		if err := c.writeExpression(value.Expr); err != nil {
 			return err
