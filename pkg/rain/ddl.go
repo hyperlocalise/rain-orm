@@ -44,11 +44,18 @@ func createTableSQL(d dialect.Dialect, table *schema.TableDef) (string, error) {
 	}
 
 	var definitions []string
+	tablePrimaryKey, err := tablePrimaryKeyConstraint(table)
+	if err != nil {
+		return "", err
+	}
 	primaryKeys := primaryKeyColumns(table)
-	inlinePrimaryKey := len(primaryKeys) == 1
+	if tablePrimaryKey != nil && len(primaryKeys) > 0 {
+		return "", fmt.Errorf("rain: table %q cannot mix column and table primary keys", table.Name)
+	}
+	inlinePrimaryKey := tablePrimaryKey == nil && len(primaryKeys) == 1
 
 	for _, column := range table.Columns {
-		definition, err := columnDefinitionSQL(d, column, inlinePrimaryKey && primaryKeys[0] == column)
+		definition, err := columnDefinitionSQL(d, table, column, inlinePrimaryKey && primaryKeys[0] == column)
 		if err != nil {
 			return "", err
 		}
@@ -65,6 +72,14 @@ func createTableSQL(d dialect.Dialect, table *schema.TableDef) (string, error) {
 			return "", err
 		}
 		definitions = append(definitions, constraint)
+	}
+
+	for _, constraint := range table.Constraints {
+		definition, err := constraintDefinitionSQL(d, table, constraint)
+		if err != nil {
+			return "", err
+		}
+		definitions = append(definitions, definition)
 	}
 
 	var builder strings.Builder
@@ -129,7 +144,59 @@ func createIndexesSQL(d dialect.Dialect, table *schema.TableDef) ([]string, erro
 	return statements, nil
 }
 
-func columnDefinitionSQL(d dialect.Dialect, column *schema.ColumnDef, inlinePrimaryKey bool) (string, error) {
+func constraintDefinitionSQL(d dialect.Dialect, table *schema.TableDef, constraint schema.ConstraintDef) (string, error) {
+	if strings.TrimSpace(constraint.Name) == "" {
+		return "", fmt.Errorf("rain: constraint on table %q requires a non-empty name", table.Name)
+	}
+
+	prefix := "CONSTRAINT " + d.QuoteIdentifier(constraint.Name) + " "
+	switch constraint.Type {
+	case schema.ConstraintPrimaryKey:
+		if len(constraint.Columns) == 0 {
+			return "", fmt.Errorf("rain: primary key constraint %q on table %q must reference at least one column", constraint.Name, table.Name)
+		}
+		return prefix + primaryKeyConstraintSQL(d, constraint.Columns), nil
+	case schema.ConstraintUnique:
+		if len(constraint.Columns) == 0 {
+			return "", fmt.Errorf("rain: unique constraint %q on table %q must reference at least one column", constraint.Name, table.Name)
+		}
+		return prefix + uniqueConstraintSQL(d, constraint.Columns), nil
+	case schema.ConstraintCheck:
+		if constraint.Check == nil {
+			return "", fmt.Errorf("rain: check constraint %q on table %q requires a predicate", constraint.Name, table.Name)
+		}
+		checkSQL, err := predicateDDLSQL(d, table, constraint.Check)
+		if err != nil {
+			return "", fmt.Errorf("rain: check constraint %q on table %q: %w", constraint.Name, table.Name, err)
+		}
+		return prefix + "CHECK (" + checkSQL + ")", nil
+	case schema.ConstraintForeignKey:
+		if len(constraint.Columns) == 0 || len(constraint.ReferencedCols) == 0 || constraint.ReferencedTable == nil {
+			return "", fmt.Errorf("rain: foreign key constraint %q on table %q requires source and referenced columns", constraint.Name, table.Name)
+		}
+		if len(constraint.Columns) != len(constraint.ReferencedCols) {
+			return "", fmt.Errorf("rain: foreign key constraint %q on table %q must reference the same number of source and target columns", constraint.Name, table.Name)
+		}
+		if err := validateForeignKeyAction(constraint.OnDelete); err != nil {
+			return "", fmt.Errorf("rain: foreign key constraint %q on table %q: %w", constraint.Name, table.Name, err)
+		}
+		if err := validateForeignKeyAction(constraint.OnUpdate); err != nil {
+			return "", fmt.Errorf("rain: foreign key constraint %q on table %q: %w", constraint.Name, table.Name, err)
+		}
+		definition := foreignKeyColumnsConstraintSQL(d, constraint.Columns, constraint.ReferencedTable, constraint.ReferencedCols)
+		if action := foreignKeyActionSQL(constraint.OnDelete); action != "" {
+			definition += " ON DELETE " + action
+		}
+		if action := foreignKeyActionSQL(constraint.OnUpdate); action != "" {
+			definition += " ON UPDATE " + action
+		}
+		return prefix + definition, nil
+	default:
+		return "", fmt.Errorf("rain: unsupported constraint type %q on table %q", constraint.Type, table.Name)
+	}
+}
+
+func columnDefinitionSQL(d dialect.Dialect, table *schema.TableDef, column *schema.ColumnDef, inlinePrimaryKey bool) (string, error) {
 	var parts []string
 	parts = append(parts, d.QuoteIdentifier(column.Name))
 
@@ -142,7 +209,7 @@ func columnDefinitionSQL(d dialect.Dialect, column *schema.ColumnDef, inlinePrim
 	if inlinePrimaryKey {
 		parts = append(parts, "PRIMARY KEY")
 	}
-	if column.AutoIncrement && usesAutoIncrementKeyword(d, column) {
+	if column.AutoIncrement && shouldEmitAutoIncrementKeyword(d, table, column, inlinePrimaryKey) {
 		parts = append(parts, d.AutoIncrementKeyword())
 	}
 	if !column.Nullable && !inlinePrimaryKey {
@@ -183,8 +250,11 @@ func columnTypeSQL(d dialect.Dialect, column *schema.ColumnDef) (string, error) 
 	return typeSQL, nil
 }
 
-func usesAutoIncrementKeyword(d dialect.Dialect, column *schema.ColumnDef) bool {
+func shouldEmitAutoIncrementKeyword(d dialect.Dialect, table *schema.TableDef, column *schema.ColumnDef, inlinePrimaryKey bool) bool {
 	if !column.AutoIncrement {
+		return false
+	}
+	if !inlinePrimaryKey {
 		return false
 	}
 	if column.Type.DataType != schema.TypeBigSerial {
@@ -260,12 +330,29 @@ func foreignKeyConstraintSQL(d dialect.Dialect, foreignKey schema.ForeignKeyDef)
 		return "", errors.New("rain: foreign key requires source and referenced columns")
 	}
 
-	return fmt.Sprintf(
-		"FOREIGN KEY (%s) REFERENCES %s (%s)",
-		d.QuoteIdentifier(foreignKey.Column.Name),
-		d.QuoteIdentifier(foreignKey.ReferencedTable.Name),
-		d.QuoteIdentifier(foreignKey.ReferencedColumn.Name),
-	), nil
+	definition := foreignKeyColumnsConstraintSQL(
+		d,
+		[]*schema.ColumnDef{foreignKey.Column},
+		foreignKey.ReferencedTable,
+		[]*schema.ColumnDef{foreignKey.ReferencedColumn},
+	)
+	if err := validateForeignKeyAction(foreignKey.OnDelete); err != nil {
+		return "", fmt.Errorf("rain: foreign key %q: %w", foreignKey.Column.Name, err)
+	}
+	if err := validateForeignKeyAction(foreignKey.OnUpdate); err != nil {
+		return "", fmt.Errorf("rain: foreign key %q: %w", foreignKey.Column.Name, err)
+	}
+	if action := foreignKeyActionSQL(foreignKey.OnDelete); action != "" {
+		definition += " ON DELETE " + action
+	}
+	if action := foreignKeyActionSQL(foreignKey.OnUpdate); action != "" {
+		definition += " ON UPDATE " + action
+	}
+	if foreignKey.Name != "" {
+		definition = "CONSTRAINT " + d.QuoteIdentifier(foreignKey.Name) + " " + definition
+	}
+
+	return definition, nil
 }
 
 func primaryKeyConstraintSQL(d dialect.Dialect, columns []*schema.ColumnDef) string {
@@ -274,6 +361,74 @@ func primaryKeyConstraintSQL(d dialect.Dialect, columns []*schema.ColumnDef) str
 		quoted = append(quoted, d.QuoteIdentifier(column.Name))
 	}
 	return fmt.Sprintf("PRIMARY KEY (%s)", strings.Join(quoted, ", "))
+}
+
+func uniqueConstraintSQL(d dialect.Dialect, columns []*schema.ColumnDef) string {
+	quoted := make([]string, 0, len(columns))
+	for _, column := range columns {
+		quoted = append(quoted, d.QuoteIdentifier(column.Name))
+	}
+	return fmt.Sprintf("UNIQUE (%s)", strings.Join(quoted, ", "))
+}
+
+func foreignKeyColumnsConstraintSQL(d dialect.Dialect, columns []*schema.ColumnDef, referencedTable *schema.TableDef, referencedCols []*schema.ColumnDef) string {
+	return fmt.Sprintf(
+		"FOREIGN KEY (%s) REFERENCES %s (%s)",
+		quotedColumnsSQL(d, columns),
+		d.QuoteIdentifier(referencedTable.Name),
+		quotedColumnsSQL(d, referencedCols),
+	)
+}
+
+func quotedColumnsSQL(d dialect.Dialect, columns []*schema.ColumnDef) string {
+	quoted := make([]string, 0, len(columns))
+	for _, column := range columns {
+		quoted = append(quoted, d.QuoteIdentifier(column.Name))
+	}
+	return strings.Join(quoted, ", ")
+}
+
+func foreignKeyActionSQL(action schema.ForeignKeyAction) string {
+	switch action {
+	case "":
+		return ""
+	case schema.ForeignKeyActionNoAction,
+		schema.ForeignKeyActionRestrict,
+		schema.ForeignKeyActionCascade,
+		schema.ForeignKeyActionSetNull,
+		schema.ForeignKeyActionSetDefault:
+		return string(action)
+	default:
+		return ""
+	}
+}
+
+func validateForeignKeyAction(action schema.ForeignKeyAction) error {
+	switch action {
+	case "",
+		schema.ForeignKeyActionNoAction,
+		schema.ForeignKeyActionRestrict,
+		schema.ForeignKeyActionCascade,
+		schema.ForeignKeyActionSetNull,
+		schema.ForeignKeyActionSetDefault:
+		return nil
+	default:
+		return fmt.Errorf("unsupported foreign key action %q", action)
+	}
+}
+
+func tablePrimaryKeyConstraint(table *schema.TableDef) (*schema.ConstraintDef, error) {
+	var primaryKey *schema.ConstraintDef
+	for idx := range table.Constraints {
+		if table.Constraints[idx].Type != schema.ConstraintPrimaryKey {
+			continue
+		}
+		if primaryKey != nil {
+			return nil, fmt.Errorf("rain: table %q cannot declare more than one table primary key", table.Name)
+		}
+		primaryKey = &table.Constraints[idx]
+	}
+	return primaryKey, nil
 }
 
 func primaryKeyColumns(table *schema.TableDef) []*schema.ColumnDef {
@@ -301,4 +456,118 @@ func isTimestampColumn(columnType schema.ColumnType) bool {
 
 func quoteStringLiteral(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", "''") + "'"
+}
+
+func predicateDDLSQL(d dialect.Dialect, table *schema.TableDef, predicate schema.Predicate) (string, error) {
+	return expressionDDLSQL(d, table, predicate)
+}
+
+func expressionDDLSQL(d dialect.Dialect, table *schema.TableDef, expr schema.Expression) (string, error) {
+	switch value := expr.(type) {
+	case schema.ColumnReference:
+		column := value.ColumnDef()
+		if column == nil {
+			return "", errors.New("column expression requires metadata")
+		}
+		if column.Table != table {
+			return "", fmt.Errorf("column %q must belong to table %q", column.Name, table.Name)
+		}
+		return d.QuoteIdentifier(column.Name), nil
+	case schema.ValueExpr:
+		return literalDDLSQL(d, value.Value)
+	case schema.ComparisonExpr:
+		left, err := expressionDDLSQL(d, table, value.Left)
+		if err != nil {
+			return "", err
+		}
+		right, err := expressionDDLSQL(d, table, value.Right)
+		if err != nil {
+			return "", err
+		}
+		return left + " " + value.Operator + " " + right, nil
+	case schema.InExpr:
+		if len(value.Values) == 0 {
+			return "", errors.New("IN predicate requires at least one value")
+		}
+		left, err := expressionDDLSQL(d, table, value.Left)
+		if err != nil {
+			return "", err
+		}
+		items := make([]string, 0, len(value.Values))
+		for _, item := range value.Values {
+			rendered, err := expressionDDLSQL(d, table, item)
+			if err != nil {
+				return "", err
+			}
+			items = append(items, rendered)
+		}
+		return left + " IN (" + strings.Join(items, ", ") + ")", nil
+	case schema.NullCheckExpr:
+		inner, err := expressionDDLSQL(d, table, value.Expr)
+		if err != nil {
+			return "", err
+		}
+		if value.Negated {
+			return inner + " IS NOT NULL", nil
+		}
+		return inner + " IS NULL", nil
+	case schema.LogicalExpr:
+		parts := make([]string, 0, len(value.Exprs))
+		for _, part := range value.Exprs {
+			rendered, err := predicateDDLSQL(d, table, part)
+			if err != nil {
+				return "", err
+			}
+			parts = append(parts, rendered)
+		}
+		return "(" + strings.Join(parts, " "+value.Operator+" ") + ")", nil
+	case schema.RawExpr:
+		if len(value.Args) != 0 {
+			return "", errors.New("raw SQL CHECK expressions cannot contain args")
+		}
+		return value.SQL, nil
+	default:
+		return "", fmt.Errorf("unsupported DDL expression type %T", expr)
+	}
+}
+
+func literalDDLSQL(d dialect.Dialect, value any) (string, error) {
+	switch typed := value.(type) {
+	case nil:
+		return "NULL", nil
+	case bool:
+		return d.BooleanLiteral(typed), nil
+	case string:
+		return quoteStringLiteral(typed), nil
+	case int:
+		return strconv.Itoa(typed), nil
+	case int8:
+		return strconv.FormatInt(int64(typed), 10), nil
+	case int16:
+		return strconv.FormatInt(int64(typed), 10), nil
+	case int32:
+		return strconv.FormatInt(int64(typed), 10), nil
+	case int64:
+		return strconv.FormatInt(typed, 10), nil
+	case uint:
+		return strconv.FormatUint(uint64(typed), 10), nil
+	case uint8:
+		return strconv.FormatUint(uint64(typed), 10), nil
+	case uint16:
+		return strconv.FormatUint(uint64(typed), 10), nil
+	case uint32:
+		return strconv.FormatUint(uint64(typed), 10), nil
+	case uint64:
+		return strconv.FormatUint(typed, 10), nil
+	case float32:
+		return strconv.FormatFloat(float64(typed), 'f', -1, 32), nil
+	case float64:
+		return strconv.FormatFloat(typed, 'f', -1, 64), nil
+	case time.Time:
+		return quoteStringLiteral(typed.UTC().Format(time.RFC3339Nano)), nil
+	case []byte:
+		return quoteStringLiteral(string(typed)), nil
+	default:
+		return "", fmt.Errorf("unsupported DDL literal type %T", value)
+	}
 }

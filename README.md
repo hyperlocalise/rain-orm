@@ -18,7 +18,7 @@ A type-safe, SQL-like ORM for Go inspired by DrizzleORM — lightweight, fast, a
 # Features
 
 - **Type-safe query builder** — Chain methods with compile-time safety
-- **Schema-first design** — Define tables and indexes with typed Go schema handles
+- **Schema-first design** — Define tables, constraints, and indexes with typed Go schema handles
 - **Multiple dialect support** — PostgreSQL, MySQL, SQLite (extensible)
 - **Fluent API** — DrizzleORM-inspired SQL-like syntax
 - **Transaction support** — First-class transaction handling
@@ -232,6 +232,7 @@ type UsersTable struct {
     schema.TableModel
     ID        *schema.Column[int64]
     Email     *schema.Column[string]
+    OrgID     *schema.Column[int64]
     Active    *schema.Column[bool]
     CreatedAt *schema.Column[time.Time]
 }
@@ -239,9 +240,12 @@ type UsersTable struct {
 var Users = schema.Define("users", func(t *UsersTable) {
     t.ID = t.BigSerial("id").PrimaryKey()
     t.Email = t.VarChar("email", 255).NotNull().Unique()
+    t.OrgID = t.BigInt("org_id").NotNull()
     t.Active = t.Boolean("active").NotNull().Default(true)
     t.CreatedAt = t.TimestampTZ("created_at").NotNull().DefaultNow()
 
+    t.Unique("users_org_email_key").On(t.OrgID, t.Email)
+    t.Check("users_active_email_check", schema.Or(t.Active.Eq(true), t.Email.IsNotNull()))
     t.UniqueIndex("users_email_key").On(t.Email)
     t.Index("users_active_created_idx").On(t.Active, t.CreatedAt.Desc())
 })
@@ -261,9 +265,9 @@ if err != nil {
 }
 ```
 
-Rain can compile `CREATE TABLE` SQL directly from schema metadata, including dialect-specific type rendering, defaults, foreign keys, and enum `CHECK` constraints.
+Rain can compile `CREATE TABLE` SQL directly from schema metadata, including dialect-specific type rendering, defaults, primary and unique constraints, foreign keys, and enum or custom `CHECK` constraints.
 
-Indexes compile separately:
+Standalone indexes compile separately from table constraints:
 
 ```go
 indexSQL, err := ddl.CreateIndexesSQL(Users)
