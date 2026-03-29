@@ -18,6 +18,9 @@ var ErrNoConnection = errors.New("rain: no database connection configured")
 // ErrNestedTxNotSupported is returned when nested transactions are requested on a dialect without savepoint support.
 var ErrNestedTxNotSupported = errors.New("rain: nested transactions are not supported by this dialect")
 
+// ErrNestedTxControlNotAllowed is returned when nested callbacks attempt to commit or roll back the outer transaction directly.
+var ErrNestedTxControlNotAllowed = errors.New("rain: nested RunInTx callbacks cannot call Commit or Rollback directly")
+
 // DB represents a database connection pool.
 type DB struct {
 	db      *sql.DB
@@ -137,7 +140,7 @@ func (db *DB) Begin(ctx context.Context) (*Tx, error) {
 		return nil, err
 	}
 
-	return &Tx{tx: tx, dialect: db.dialect, savepointSeq: new(int64)}, nil
+	return &Tx{tx: tx, dialect: db.dialect, savepointSeq: new(int64), canControlTx: true}, nil
 }
 
 // RunInTx executes fn in a transaction, rolling back on error and committing on success.
@@ -156,10 +159,15 @@ type Tx struct {
 	dialect dialect.Dialect
 
 	savepointSeq *int64
+	canControlTx bool
 }
 
 // Commit commits the transaction.
 func (tx *Tx) Commit() error {
+	if !tx.canControlTx {
+		return ErrNestedTxControlNotAllowed
+	}
+
 	if tx.tx == nil {
 		return ErrNoConnection
 	}
@@ -169,6 +177,10 @@ func (tx *Tx) Commit() error {
 
 // Rollback rolls the transaction back.
 func (tx *Tx) Rollback() error {
+	if !tx.canControlTx {
+		return ErrNestedTxControlNotAllowed
+	}
+
 	if tx.tx == nil {
 		return ErrNoConnection
 	}
@@ -191,7 +203,14 @@ func (tx *Tx) RunInTx(ctx context.Context, fn func(*Tx) error) error {
 		return fmt.Errorf("rain: create savepoint %q: %w", savepoint, err)
 	}
 
-	if err := fn(tx); err != nil {
+	nestedTx := &Tx{
+		tx:           tx.tx,
+		dialect:      tx.dialect,
+		savepointSeq: tx.savepointSeq,
+		canControlTx: false,
+	}
+
+	if err := fn(nestedTx); err != nil {
 		if rbErr := tx.rollbackSavepoint(ctx, savepoint); rbErr != nil {
 			return errors.Join(err, rbErr)
 		}
@@ -260,10 +279,10 @@ func runInRootTx(tx *Tx, fn func(*Tx) error) error {
 }
 
 func (tx *Tx) nextSavepointName() string {
-	n := int64(1)
-	if tx.savepointSeq != nil {
-		n = atomic.AddInt64(tx.savepointSeq, 1)
+	if tx.savepointSeq == nil {
+		panic("rain: savepointSeq is nil — Tx must be created via DB.Begin()")
 	}
+	n := atomic.AddInt64(tx.savepointSeq, 1)
 
 	return fmt.Sprintf("rain_sp_%d", n)
 }

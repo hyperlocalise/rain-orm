@@ -220,3 +220,44 @@ func TestTxRunInTxReturnsErrorWhenSavepointsUnsupported(t *testing.T) {
 		t.Fatalf("expected ErrNestedTxNotSupported, got %v", err)
 	}
 }
+
+func TestTxRunInTxNestedHandleCannotCommitOrRollback(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db := openTxHelperDB(t)
+	createTxHelperSchema(t, ctx, db)
+
+	err := db.RunInTx(ctx, func(tx *Tx) error {
+		return tx.RunInTx(ctx, func(nested *Tx) error {
+			if commitErr := nested.Commit(); !errors.Is(commitErr, ErrNestedTxControlNotAllowed) {
+				t.Fatalf("expected ErrNestedTxControlNotAllowed from Commit, got %v", commitErr)
+			}
+			if rollbackErr := nested.Rollback(); !errors.Is(rollbackErr, ErrNestedTxControlNotAllowed) {
+				t.Fatalf("expected ErrNestedTxControlNotAllowed from Rollback, got %v", rollbackErr)
+			}
+			_, execErr := nested.execContext(ctx, `INSERT INTO tx_helper_users (email) VALUES (?)`, "nested-safe@example.com")
+			return execErr
+		})
+	})
+	if err != nil {
+		t.Fatalf("RunInTx returned error: %v", err)
+	}
+
+	if got := countTxHelperRows(t, ctx, db); got != 1 {
+		t.Fatalf("expected 1 row after nested callback, got %d", got)
+	}
+}
+
+func TestNextSavepointNamePanicsWhenSequenceMissing(t *testing.T) {
+	t.Parallel()
+
+	tx := &Tx{}
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatalf("expected panic when savepoint sequence is missing")
+		}
+	}()
+
+	_ = tx.nextSavepointName()
+}

@@ -171,6 +171,7 @@ if err != nil {
 ```
 
 `RunInTx` commits when the callback returns `nil` and rolls back when it returns an error. Nested `RunInTx` calls use savepoints on dialects that support them.
+Inside a nested callback, call patterns should return errors instead of calling `Commit`/`Rollback` directly.
 
 ## Schema Definition
 
