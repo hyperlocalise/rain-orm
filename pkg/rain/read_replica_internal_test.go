@@ -3,6 +3,8 @@ package rain
 import (
 	"context"
 	"path/filepath"
+	"strconv"
+	"sync"
 	"testing"
 
 	"github.com/hyperlocalise/rain-orm/pkg/schema"
@@ -188,6 +190,42 @@ func TestWithReplicasCustomSelectorAndPrimaryView(t *testing.T) {
 	}
 }
 
+func TestWithReplicasFallsBackWhenSelectorReturnsUnknownHandle(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	users, posts := defineInternalQueryTables()
+	primary := openReplicaTestDB(t, "primary-selector-fallback")
+	replica := openReplicaTestDB(t, "replica-selector-fallback")
+	unknown := openReplicaTestDB(t, "unknown-selector-fallback")
+
+	for _, db := range []*DB{primary, replica, unknown} {
+		createInternalQuerySchemaForTables(t, ctx, db, users, posts)
+	}
+
+	insertReplicaTestUser(t, ctx, primary, users, "primary@example.com", "Primary")
+	insertReplicaTestUser(t, ctx, replica, users, "replica-a@example.com", "Replica A")
+	insertReplicaTestUser(t, ctx, replica, users, "replica-b@example.com", "Replica B")
+	insertReplicaTestUser(t, ctx, unknown, users, "unknown@example.com", "Unknown")
+
+	routed, err := WithReplicas(primary, []*DB{replica}, func(_ []*DB) *DB {
+		return unknown
+	})
+	if err != nil {
+		t.Fatalf("WithReplicas: %v", err)
+	}
+
+	for range 8 {
+		count, err := routed.Select().Table(users).Count(ctx)
+		if err != nil {
+			t.Fatalf("Count: %v", err)
+		}
+		if count != 2 {
+			t.Fatalf("expected fallback to configured replica count 2, got %d", count)
+		}
+	}
+}
+
 func TestWithReplicasRelationLoadingUsesSelectedReplica(t *testing.T) {
 	t.Parallel()
 
@@ -280,11 +318,11 @@ func TestWithReplicasWritesUsePrimary(t *testing.T) {
 	}
 
 	primaryCount, err := primary.Select().Table(users).Count(ctx)
-	if err != nil && primaryCount != 0 {
+	if err != nil {
 		t.Fatalf("primary count after delete: %v", err)
 	}
 	replicaCount, err := replica.Select().Table(users).Count(ctx)
-	if err != nil && replicaCount != 0 {
+	if err != nil {
 		t.Fatalf("replica count after delete: %v", err)
 	}
 	if primaryCount != 0 || replicaCount != 0 {
@@ -429,6 +467,26 @@ func TestWithReplicasSharesQueryCacheAndPrimaryView(t *testing.T) {
 	if replica.Select().cache != cache {
 		t.Fatalf("expected replica handle Select cache to be shared")
 	}
+
+	primaryView := routed.Primary()
+	if primaryView == nil {
+		t.Fatalf("expected Primary view")
+	}
+	if primaryView == routed {
+		t.Fatalf("expected Primary to return a distinct view")
+	}
+	if primaryView.Primary() == primaryView {
+		t.Fatalf("expected repeated Primary calls to return a fresh primary view")
+	}
+	if !primaryView.forcePrimaryReads {
+		t.Fatalf("expected primary view to force primary reads")
+	}
+	if primaryView.replicaRoute != routed.replicaRoute {
+		t.Fatalf("expected primary view to share replica route")
+	}
+	if primaryView.shared != routed.shared {
+		t.Fatalf("expected primary view to share query cache state")
+	}
 }
 
 func TestWithReplicasCloseDeduplicatesUnderlyingHandles(t *testing.T) {
@@ -457,4 +515,89 @@ func TestWithReplicasCloseDeduplicatesUnderlyingHandles(t *testing.T) {
 	if err := routed.Close(); err != nil {
 		t.Fatalf("second Close: %v", err)
 	}
+}
+
+func TestWithReplicasCloseSharesDedupAcrossViews(t *testing.T) {
+	t.Parallel()
+
+	primary, err := OpenDialect("sqlite")
+	if err != nil {
+		t.Fatalf("OpenDialect(sqlite): %v", err)
+	}
+	replica, err := OpenDialect("sqlite")
+	if err != nil {
+		t.Fatalf("OpenDialect(sqlite): %v", err)
+	}
+
+	routed, err := WithReplicas(primary, []*DB{replica}, nil)
+	if err != nil {
+		t.Fatalf("WithReplicas: %v", err)
+	}
+
+	primaryView := routed.Primary()
+	if err := primaryView.Close(); err != nil {
+		t.Fatalf("Primary().Close: %v", err)
+	}
+	if err := routed.Close(); err != nil {
+		t.Fatalf("Close after Primary().Close: %v", err)
+	}
+}
+
+func TestWithReplicasConcurrentReadsStayOnReplicas(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	users, posts := defineInternalQueryTables()
+	primary := openReplicaTestDB(t, "primary-concurrent")
+	replica1 := openReplicaTestDB(t, "replica-concurrent-1")
+	replica2 := openReplicaTestDB(t, "replica-concurrent-2")
+
+	for _, db := range []*DB{primary, replica1, replica2} {
+		createInternalQuerySchemaForTables(t, ctx, db, users, posts)
+	}
+
+	insertReplicaTestUser(t, ctx, primary, users, "primary@example.com", "Primary")
+	insertReplicaTestUser(t, ctx, replica1, users, "replica1-a@example.com", "Replica 1A")
+	insertReplicaTestUser(t, ctx, replica1, users, "replica1-b@example.com", "Replica 1B")
+	insertReplicaTestUser(t, ctx, replica2, users, "replica2-a@example.com", "Replica 2A")
+	insertReplicaTestUser(t, ctx, replica2, users, "replica2-b@example.com", "Replica 2B")
+	insertReplicaTestUser(t, ctx, replica2, users, "replica2-c@example.com", "Replica 2C")
+
+	routed, err := WithReplicas(primary, []*DB{replica1, replica2}, nil)
+	if err != nil {
+		t.Fatalf("WithReplicas: %v", err)
+	}
+
+	errCh := make(chan error, 32)
+	var wg sync.WaitGroup
+	for range 32 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			count, err := routed.Select().Table(users).Count(ctx)
+			if err != nil {
+				errCh <- err
+				return
+			}
+			if count != 2 && count != 3 {
+				errCh <- &replicaCountError{count: count}
+			}
+		}()
+	}
+	wg.Wait()
+	close(errCh)
+
+	for err := range errCh {
+		if err != nil {
+			t.Fatalf("concurrent routed read failed: %v", err)
+		}
+	}
+}
+
+type replicaCountError struct {
+	count int64
+}
+
+func (e *replicaCountError) Error() string {
+	return "unexpected replica count: " + strconv.FormatInt(e.count, 10)
 }

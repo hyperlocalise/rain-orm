@@ -99,10 +99,8 @@ func WithReplicas(primary *DB, replicas []*DB, selector ReplicaSelector) (*DB, e
 	seen := make(map[*DB]struct{}, len(replicas)+1)
 	underlying := make([]*DB, 0, len(replicas)+1)
 
-	if _, ok := seen[primary]; !ok {
-		seen[primary] = struct{}{}
-		underlying = append(underlying, primary)
-	}
+	seen[primary] = struct{}{}
+	underlying = append(underlying, primary)
 
 	for idx, replica := range replicas {
 		if replica == nil {
@@ -179,12 +177,7 @@ func (db *DB) Primary() *DB {
 
 // Select starts a typed SELECT query builder.
 func (db *DB) Select() *SelectQuery {
-	runner := db.selectRunner()
-	cache := db.queryCache()
-	if routed, ok := runner.(*DB); ok {
-		return &SelectQuery{runner: routed, dialect: db.dialect, cache: cache}
-	}
-	return &SelectQuery{runner: runner, dialect: db.dialect, cache: cache}
+	return &SelectQuery{runner: db.selectRunner(), dialect: db.dialect, cache: db.queryCache()}
 }
 
 // WithQueryCache sets the shared SELECT query cache backend on DB.
