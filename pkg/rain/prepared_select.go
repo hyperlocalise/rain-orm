@@ -11,6 +11,9 @@ import (
 // ErrPreparedArgsRequired is returned when a query with named placeholders is executed without prepared binding.
 var ErrPreparedArgsRequired = errors.New("rain: query contains named placeholders; call Prepare and execute with PreparedArgs")
 
+// ErrPrepareNotSupported is returned when the current query runner cannot prepare statements.
+var ErrPrepareNotSupported = errors.New("rain: query runner does not support prepared statements")
+
 // PreparedArgs provides runtime values for a prepared query's named placeholders.
 type PreparedArgs map[string]any
 
@@ -36,7 +39,7 @@ func (q *SelectQuery) Prepare(ctx context.Context) (*PreparedSelectQuery, error)
 
 	runner, ok := q.runner.(preparingQueryRunner)
 	if !ok {
-		return nil, ErrNoConnection
+		return nil, ErrPrepareNotSupported
 	}
 
 	selectQuery, err := q.compile()

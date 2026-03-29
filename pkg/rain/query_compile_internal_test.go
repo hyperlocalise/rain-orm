@@ -30,6 +30,10 @@ func TestQueryBuilderAndHelperErrors(t *testing.T) {
 	if _, err := selectNoRunner.Prepare(context.Background()); !errors.Is(err, ErrNoConnection) {
 		t.Fatalf("expected select prepare ErrNoConnection, got %v", err)
 	}
+	selectUnsupportedPrepare := &SelectQuery{runner: &countingRunner{}, dialect: db.Dialect(), table: tableDefSource{table: users.TableDef()}}
+	if _, err := selectUnsupportedPrepare.Prepare(context.Background()); !errors.Is(err, ErrPrepareNotSupported) {
+		t.Fatalf("expected select prepare ErrPrepareNotSupported, got %v", err)
+	}
 	if _, err := (&SelectQuery{dialect: db.Dialect()}).Count(context.Background()); !errors.Is(err, ErrNoConnection) {
 		t.Fatalf("expected select count ErrNoConnection, got %v", err)
 	}

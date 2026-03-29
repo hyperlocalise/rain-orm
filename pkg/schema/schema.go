@@ -4,6 +4,7 @@ package schema
 import (
 	"fmt"
 	"reflect"
+	"strings"
 	"time"
 )
 
@@ -750,7 +751,7 @@ func (PlaceholderExpr) isExpression() {}
 
 // Placeholder references a named runtime value in a prepared query.
 func Placeholder(name string) PlaceholderExpr {
-	if name == "" {
+	if strings.TrimSpace(name) == "" {
 		panic("schema: Placeholder requires a non-empty name")
 	}
 	return PlaceholderExpr{Name: name}
