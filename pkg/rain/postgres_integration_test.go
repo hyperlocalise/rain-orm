@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -44,10 +45,8 @@ type postgresInsertModel struct {
 func registerPostgresDriverForTests(tb testing.TB) {
 	tb.Helper()
 
-	for _, name := range sql.Drivers() {
-		if name == "postgres" {
-			return
-		}
+	if slices.Contains(sql.Drivers(), "postgres") {
+		return
 	}
 
 	sql.Register("postgres", stdlib.GetDefaultDriver())
