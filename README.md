@@ -11,6 +11,7 @@ A type-safe, SQL-like ORM for Go inspired by DrizzleORM — lightweight, fast, a
    * [Project Layout](#project-layout)
    * [Quick Start](#quick-start)
    * [Examples](#examples)
+   * [Performance Benchmarks](#performance-benchmarks)
    * [Makefile Targets](#makefile-targets)
    * [Contribute](#contribute)
 
@@ -227,10 +228,41 @@ sqlType := d.DataType(schema.ColumnType{DataType: "string", Size: 255})  // VARC
 
 See the [examples/](examples/) directory for complete, runnable examples.
 
+# Performance Benchmarks
+
+Rain includes a SQLite-first benchmark suite for measuring end-to-end ORM performance and memory usage across representative CRUD and join workloads.
+
+Run the full suite:
+
+```sh
+make bench
+```
+
+Run a single workload:
+
+```sh
+go test -run '^$' -bench 'BenchmarkSQLiteSelectJoinScan' -benchmem ./pkg/rain
+```
+
+Run one workload for one dataset size:
+
+```sh
+go test -run '^$' -bench 'BenchmarkSQLiteSelectJoinScan/medium$' -benchmem ./pkg/rain
+```
+
+Compare two runs over time by saving the benchmark output and diffing the benchmark lines from the same machine and environment. Use the built-in Go metrics as the primary signals:
+
+- `ns/op` shows the average execution time per benchmark iteration.
+- `B/op` shows the average bytes allocated per iteration.
+- `allocs/op` shows the average number of heap allocations per iteration.
+
+The suite seeds deterministic `small`, `medium`, and `large` SQLite datasets before measurements start so setup cost does not pollute the reported ORM metrics.
+
 # Makefile Targets
 
 ```sh
 $> make
+bench                          run sqlite benchmark suite with allocation metrics
 bootstrap                      download tool and module dependencies
 build                          build the library (verifies compilation)
 clean                          clean up test artifacts
