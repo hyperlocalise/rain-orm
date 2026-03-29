@@ -639,6 +639,8 @@ type OrderExpr struct {
 func (OrderExpr) indexColumnSpec() {}
 
 // AggregateExpr renders SQL aggregate functions.
+//
+// Function must be non-empty. Distinct must not be combined with Star.
 type AggregateExpr struct {
 	Function string
 	Expr     Expression

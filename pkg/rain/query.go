@@ -246,7 +246,7 @@ func (q *SelectQuery) writeSQL(ctx *compileContext) error {
 			if idx > 0 {
 				ctx.writeString(", ")
 			}
-			if err := ctx.writeExpression(column); err != nil {
+			if err := ctx.writeSelectExpression(column); err != nil {
 				return err
 			}
 		}
@@ -1138,7 +1138,19 @@ func (c *compileContext) writePredicate(predicate schema.Predicate) error {
 	return c.writeExpression(predicate)
 }
 
+type expressionContext struct {
+	allowAlias bool
+}
+
 func (c *compileContext) writeExpression(expr schema.Expression) error {
+	return c.writeExpressionInContext(expr, expressionContext{})
+}
+
+func (c *compileContext) writeSelectExpression(expr schema.Expression) error {
+	return c.writeExpressionInContext(expr, expressionContext{allowAlias: true})
+}
+
+func (c *compileContext) writeExpressionInContext(expr schema.Expression, context expressionContext) error {
 	switch value := expr.(type) {
 	case schema.ColumnReference:
 		c.writeColumn(value)
@@ -1195,6 +1207,12 @@ func (c *compileContext) writeExpression(expr schema.Expression) error {
 		}
 		c.writeByte(')')
 	case schema.AggregateExpr:
+		if value.Function == "" {
+			return errors.New("rain: aggregate function name cannot be empty")
+		}
+		if value.Distinct && value.Star {
+			return fmt.Errorf("rain: aggregate %s cannot combine DISTINCT with *", value.Function)
+		}
 		c.writeString(value.Function)
 		c.writeByte('(')
 		if value.Distinct {
@@ -1212,7 +1230,10 @@ func (c *compileContext) writeExpression(expr schema.Expression) error {
 		}
 		c.writeByte(')')
 	case schema.AliasExpr:
-		if err := c.writeExpression(value.Expr); err != nil {
+		if !context.allowAlias {
+			return errors.New("rain: aliased expressions are only supported in SELECT columns")
+		}
+		if err := c.writeExpressionInContext(value.Expr, expressionContext{}); err != nil {
 			return err
 		}
 		c.writeString(" AS ")

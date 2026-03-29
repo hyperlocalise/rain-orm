@@ -269,6 +269,41 @@ func TestSelectAdvancedComposition(t *testing.T) {
 			wantArgs: []any{10, 50},
 		},
 		{
+			name:    "aggregate distinct star is invalid",
+			dialect: "postgres",
+			build: func(db *rain.DB) *rain.SelectQuery {
+				return db.Select().
+					Table(posts).
+					Column(schema.AggregateExpr{
+						Function: "COUNT",
+						Distinct: true,
+						Star:     true,
+					})
+			},
+			wantErr: "cannot combine DISTINCT with *",
+		},
+		{
+			name:    "aggregate missing function is invalid",
+			dialect: "postgres",
+			build: func(db *rain.DB) *rain.SelectQuery {
+				return db.Select().
+					Table(posts).
+					Column(schema.AggregateExpr{Expr: posts.ID})
+			},
+			wantErr: "function name cannot be empty",
+		},
+		{
+			name:    "alias in group by is invalid",
+			dialect: "postgres",
+			build: func(db *rain.DB) *rain.SelectQuery {
+				return db.Select().
+					Table(posts).
+					Column(posts.UserID).
+					GroupBy(schema.As(posts.UserID, "uid"))
+			},
+			wantErr: "aliased expressions are only supported in SELECT columns",
+		},
+		{
 			name:    "group by with having postgres",
 			dialect: "postgres",
 			build: func(db *rain.DB) *rain.SelectQuery {
