@@ -216,6 +216,36 @@ Rain can compile `CREATE TABLE` SQL directly from schema metadata, including dia
 
 This is intentionally limited to schema-to-DDL compilation. Rain does not generate migration diffs or manage migration history.
 
+## Migrations (forward-only v1)
+
+Rain includes a small `pkg/migrate` runner for applying ordered migrations in apps and tests.
+
+```go
+import (
+    "context"
+    "database/sql"
+
+    "github.com/hyperlocalise/rain-orm/pkg/migrate"
+)
+
+func applyMigrations(ctx context.Context, db *sql.DB) error {
+    migrations := []migrate.Migration{
+        {
+            ID: "202603010900_create_users",
+            Up: func(ctx context.Context, exec migrate.Executor) error {
+                _, err := exec.ExecContext(ctx, `CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT NOT NULL)`)
+                return err
+            },
+        },
+    }
+
+    _, err := migrate.ApplyPending(ctx, db, migrations)
+    return err
+}
+```
+
+`ApplyPending` creates a migration tracking table (`rain_schema_migrations`) if needed, applies pending migrations in deterministic ID order, records applied IDs and timing metadata, and skips already-applied migrations. In v1, migration execution is forward-only: `Down` callbacks are accepted for future compatibility but are not run by the runner.
+
 ## Database Dialects
 
 ```go
