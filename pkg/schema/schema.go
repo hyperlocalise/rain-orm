@@ -99,6 +99,7 @@ type TableDef struct {
 	Alias       string
 	Columns     []*ColumnDef
 	Indexes     []IndexDef
+	Constraints []ConstraintDef
 	ForeignKeys []ForeignKeyDef
 	Relations   []RelationDef
 
@@ -126,6 +127,41 @@ type ForeignKeyDef struct {
 	Column           *ColumnDef
 	ReferencedTable  *TableDef
 	ReferencedColumn *ColumnDef
+	OnDelete         ForeignKeyAction
+	OnUpdate         ForeignKeyAction
+}
+
+// ConstraintType identifies a portable table constraint kind.
+type ConstraintType string
+
+const (
+	ConstraintPrimaryKey ConstraintType = "primary_key"
+	ConstraintUnique     ConstraintType = "unique"
+	ConstraintCheck      ConstraintType = "check"
+	ConstraintForeignKey ConstraintType = "foreign_key"
+)
+
+// ForeignKeyAction identifies a portable foreign-key action.
+type ForeignKeyAction string
+
+const (
+	ForeignKeyActionNoAction   ForeignKeyAction = "NO ACTION"
+	ForeignKeyActionRestrict   ForeignKeyAction = "RESTRICT"
+	ForeignKeyActionCascade    ForeignKeyAction = "CASCADE"
+	ForeignKeyActionSetNull    ForeignKeyAction = "SET NULL"
+	ForeignKeyActionSetDefault ForeignKeyAction = "SET DEFAULT"
+)
+
+// ConstraintDef stores portable table-level constraint metadata.
+type ConstraintDef struct {
+	Name            string
+	Type            ConstraintType
+	Columns         []*ColumnDef
+	Check           Predicate
+	ReferencedTable *TableDef
+	ReferencedCols  []*ColumnDef
+	OnDelete        ForeignKeyAction
+	OnUpdate        ForeignKeyAction
 }
 
 // RelationType identifies how two tables are related.
@@ -162,6 +198,11 @@ type IndexColumn struct {
 // IndexColumnSpec is implemented by values that can be bound to an index.
 type IndexColumnSpec interface {
 	indexColumnSpec()
+}
+
+// ConstraintColumnSpec is implemented by values that can be bound to a table constraint.
+type ConstraintColumnSpec interface {
+	constraintColumnSpec()
 }
 
 // TableModel is embedded in user-defined table structs.
@@ -342,6 +383,70 @@ func (t *TableModel) UniqueIndex(name string) *IndexBuilder {
 	return &IndexBuilder{table: t.def, index: len(t.def.Indexes) - 1}
 }
 
+// PrimaryKey declares a table-level primary key constraint.
+func (t *TableModel) PrimaryKey(name string) *ConstraintBuilder {
+	if t.def == nil {
+		panic("schema: table model is not initialized")
+	}
+	if name == "" {
+		panic("schema: constraint name cannot be empty")
+	}
+	constraint := ConstraintDef{Name: name, Type: ConstraintPrimaryKey}
+	t.def.Constraints = append(t.def.Constraints, constraint)
+
+	return &ConstraintBuilder{table: t.def, constraint: len(t.def.Constraints) - 1}
+}
+
+// Unique declares a table-level unique constraint.
+func (t *TableModel) Unique(name string) *ConstraintBuilder {
+	if t.def == nil {
+		panic("schema: table model is not initialized")
+	}
+	if name == "" {
+		panic("schema: constraint name cannot be empty")
+	}
+	constraint := ConstraintDef{Name: name, Type: ConstraintUnique}
+	t.def.Constraints = append(t.def.Constraints, constraint)
+
+	return &ConstraintBuilder{table: t.def, constraint: len(t.def.Constraints) - 1}
+}
+
+// Check declares a table-level CHECK constraint.
+func (t *TableModel) Check(name string, predicate Predicate) {
+	if t.def == nil {
+		panic("schema: table model is not initialized")
+	}
+	if name == "" {
+		panic("schema: constraint name cannot be empty")
+	}
+	if predicate == nil {
+		panic("schema: check constraint requires a predicate")
+	}
+	if logical, ok := predicate.(LogicalExpr); ok && len(logical.Exprs) == 0 {
+		panic("schema: check constraint logical expression must contain at least one predicate")
+	}
+
+	t.def.Constraints = append(t.def.Constraints, ConstraintDef{
+		Name:  name,
+		Type:  ConstraintCheck,
+		Check: predicate,
+	})
+}
+
+// ForeignKey declares a table-level foreign key constraint.
+func (t *TableModel) ForeignKey(name string) *ForeignKeyBuilder {
+	if t.def == nil {
+		panic("schema: table model is not initialized")
+	}
+	if name == "" {
+		panic("schema: constraint name cannot be empty")
+	}
+	constraint := ConstraintDef{Name: name, Type: ConstraintForeignKey}
+	t.def.Constraints = append(t.def.Constraints, constraint)
+
+	return &ForeignKeyBuilder{table: t.def, constraint: len(t.def.Constraints) - 1}
+}
+
 // Define creates a typed table handle backed by schema metadata.
 func Define[T any](name string, fn func(*T)) *T {
 	handle := new(T)
@@ -349,6 +454,7 @@ func Define[T any](name string, fn func(*T)) *T {
 		Name:            name,
 		Columns:         make([]*ColumnDef, 0, 8),
 		Indexes:         make([]IndexDef, 0, 4),
+		Constraints:     make([]ConstraintDef, 0, 4),
 		ForeignKeys:     make([]ForeignKeyDef, 0, 4),
 		Relations:       make([]RelationDef, 0, 4),
 		columnsByName:   make(map[string]*ColumnDef, 8),
@@ -413,8 +519,9 @@ func (c *AnyColumn) In(values ...any) InExpr {
 	return InExpr{Left: c, Values: exprs}
 }
 
-func (c *AnyColumn) isExpression()    {}
-func (c *AnyColumn) indexColumnSpec() {}
+func (c *AnyColumn) isExpression()         {}
+func (c *AnyColumn) indexColumnSpec()      {}
+func (c *AnyColumn) constraintColumnSpec() {}
 
 // Column represents a typed column handle.
 type Column[T any] struct {
@@ -593,8 +700,9 @@ func (c *Column[T]) As(alias string) AliasExpr {
 	return As(c, alias)
 }
 
-func (c *Column[T]) isExpression()    {}
-func (c *Column[T]) indexColumnSpec() {}
+func (c *Column[T]) isExpression()         {}
+func (c *Column[T]) indexColumnSpec()      {}
+func (c *Column[T]) constraintColumnSpec() {}
 
 // ValueExpr wraps a Go value for SQL rendering.
 type ValueExpr struct {
@@ -783,6 +891,62 @@ func (b *IndexBuilder) On(columns ...IndexColumnSpec) *IndexBuilder {
 	return b
 }
 
+// ConstraintBuilder configures a table constraint backed by columns.
+type ConstraintBuilder struct {
+	table      *TableDef
+	constraint int
+}
+
+// On binds columns to the table constraint.
+func (b *ConstraintBuilder) On(columns ...ConstraintColumnSpec) *ConstraintBuilder {
+	b.table.Constraints[b.constraint].Columns = resolveConstraintColumns(b.table, columns...)
+	return b
+}
+
+// ForeignKeyBuilder configures a table-level foreign key constraint.
+type ForeignKeyBuilder struct {
+	table      *TableDef
+	constraint int
+}
+
+// On binds source columns to the foreign key.
+func (b *ForeignKeyBuilder) On(columns ...ConstraintColumnSpec) *ForeignKeyBuilder {
+	b.table.Constraints[b.constraint].Columns = resolveConstraintColumns(b.table, columns...)
+	return b
+}
+
+// References binds referenced columns to the foreign key.
+func (b *ForeignKeyBuilder) References(columns ...ConstraintColumnSpec) *ForeignKeyBuilder {
+	resolved := resolveConstraintColumns(nil, columns...)
+	constraint := &b.table.Constraints[b.constraint]
+	if len(resolved) == 0 {
+		panic("schema: foreign key requires at least one referenced column")
+	}
+
+	referencedTable := resolved[0].Table
+	for _, column := range resolved[1:] {
+		if column.Table != referencedTable {
+			panic("schema: foreign key referenced columns must belong to the same table")
+		}
+	}
+
+	constraint.ReferencedTable = referencedTable
+	constraint.ReferencedCols = resolved
+	return b
+}
+
+// OnDelete sets the ON DELETE action for the foreign key.
+func (b *ForeignKeyBuilder) OnDelete(action ForeignKeyAction) *ForeignKeyBuilder {
+	b.table.Constraints[b.constraint].OnDelete = action
+	return b
+}
+
+// OnUpdate sets the ON UPDATE action for the foreign key.
+func (b *ForeignKeyBuilder) OnUpdate(action ForeignKeyAction) *ForeignKeyBuilder {
+	b.table.Constraints[b.constraint].OnUpdate = action
+	return b
+}
+
 // Timestamps can be embedded into models used for scans and payloads.
 type Timestamps struct {
 	CreatedAt time.Time `db:"created_at"`
@@ -837,12 +1001,32 @@ func addColumn[T any](table *TableDef, name string, columnType ColumnType, nulla
 	return &Column[T]{def: def}
 }
 
+func resolveConstraintColumns(table *TableDef, columns ...ConstraintColumnSpec) []*ColumnDef {
+	resolved := make([]*ColumnDef, 0, len(columns))
+	for _, column := range columns {
+		ref, ok := column.(ColumnReference)
+		if !ok {
+			panic(fmt.Sprintf("schema: unsupported constraint column type %T", column))
+		}
+		def := ref.ColumnDef()
+		if def == nil {
+			panic("schema: constraint column must have metadata")
+		}
+		if table != nil && def.Table != table {
+			panic(fmt.Sprintf("schema: constraint column %q must belong to table %q", def.Name, table.Name))
+		}
+		resolved = append(resolved, def)
+	}
+	return resolved
+}
+
 func cloneTableDef(src *TableDef, alias string) *TableDef {
 	cloned := &TableDef{
 		Name:            src.Name,
 		Alias:           alias,
 		Columns:         make([]*ColumnDef, 0, len(src.Columns)),
 		Indexes:         make([]IndexDef, len(src.Indexes)),
+		Constraints:     make([]ConstraintDef, len(src.Constraints)),
 		ForeignKeys:     make([]ForeignKeyDef, 0, len(src.ForeignKeys)),
 		Relations:       make([]RelationDef, 0, len(src.Relations)),
 		columnsByName:   make(map[string]*ColumnDef, len(src.Columns)),
@@ -872,12 +1056,39 @@ func cloneTableDef(src *TableDef, alias string) *TableDef {
 		cloned.Indexes[idx] = clonedIndex
 	}
 
+	for idx := range src.Constraints {
+		clonedConstraint := ConstraintDef{
+			Name:            src.Constraints[idx].Name,
+			Type:            src.Constraints[idx].Type,
+			ReferencedTable: src.Constraints[idx].ReferencedTable,
+			OnDelete:        src.Constraints[idx].OnDelete,
+			OnUpdate:        src.Constraints[idx].OnUpdate,
+		}
+		for _, column := range src.Constraints[idx].Columns {
+			clonedConstraint.Columns = append(clonedConstraint.Columns, cloned.columnsByName[column.Name])
+		}
+		for _, column := range src.Constraints[idx].ReferencedCols {
+			if src.Constraints[idx].ReferencedTable == src {
+				clonedConstraint.ReferencedCols = append(clonedConstraint.ReferencedCols, cloned.columnsByName[column.Name])
+				clonedConstraint.ReferencedTable = cloned
+				continue
+			}
+			clonedConstraint.ReferencedCols = append(clonedConstraint.ReferencedCols, column)
+		}
+		if src.Constraints[idx].Check != nil {
+			clonedConstraint.Check = cloneExpressionForTable(src.Constraints[idx].Check, cloned).(Predicate)
+		}
+		cloned.Constraints[idx] = clonedConstraint
+	}
+
 	for _, foreignKey := range src.ForeignKeys {
 		cloned.ForeignKeys = append(cloned.ForeignKeys, ForeignKeyDef{
 			Name:             foreignKey.Name,
 			Column:           cloned.columnsByName[foreignKey.Column.Name],
 			ReferencedTable:  foreignKey.ReferencedTable,
 			ReferencedColumn: foreignKey.ReferencedColumn,
+			OnDelete:         foreignKey.OnDelete,
+			OnUpdate:         foreignKey.OnUpdate,
 		})
 	}
 
@@ -898,6 +1109,63 @@ func cloneTableDef(src *TableDef, alias string) *TableDef {
 	}
 
 	return cloned
+}
+
+func cloneExpressionForTable(expr Expression, table *TableDef) Expression {
+	switch value := expr.(type) {
+	case ColumnReference:
+		cloner, ok := any(value).(tableCloner)
+		if !ok {
+			panic(fmt.Sprintf("schema: expression column %T cannot be cloned", value))
+		}
+		cloned, ok := cloner.cloneForTable(table).(Expression)
+		if !ok {
+			panic(fmt.Sprintf("schema: cloned expression %T is not an expression", value))
+		}
+		return cloned
+	case ValueExpr:
+		return value
+	case ComparisonExpr:
+		return ComparisonExpr{
+			Left:     cloneExpressionForTable(value.Left, table),
+			Operator: value.Operator,
+			Right:    cloneExpressionForTable(value.Right, table),
+		}
+	case InExpr:
+		cloned := InExpr{Left: cloneExpressionForTable(value.Left, table)}
+		for _, item := range value.Values {
+			cloned.Values = append(cloned.Values, cloneExpressionForTable(item, table))
+		}
+		return cloned
+	case NullCheckExpr:
+		return NullCheckExpr{Expr: cloneExpressionForTable(value.Expr, table), Negated: value.Negated}
+	case LogicalExpr:
+		cloned := LogicalExpr{Operator: value.Operator, Exprs: make([]Predicate, 0, len(value.Exprs))}
+		for _, part := range value.Exprs {
+			cloned.Exprs = append(cloned.Exprs, cloneExpressionForTable(part, table).(Predicate))
+		}
+		return cloned
+	case AggregateExpr:
+		cloned := value
+		if value.Expr != nil {
+			cloned.Expr = cloneExpressionForTable(value.Expr, table)
+		}
+		return cloned
+	case AliasExpr:
+		return AliasExpr{Expr: cloneExpressionForTable(value.Expr, table), Alias: value.Alias}
+	case RawExpr:
+		cloned := RawExpr{SQL: value.SQL, Args: make([]any, 0, len(value.Args))}
+		for _, arg := range value.Args {
+			if cloner, ok := arg.(tableCloner); ok {
+				cloned.Args = append(cloned.Args, cloner.cloneForTable(table))
+				continue
+			}
+			cloned.Args = append(cloned.Args, arg)
+		}
+		return cloned
+	default:
+		panic(fmt.Sprintf("schema: unsupported expression clone type %T", expr))
+	}
 }
 
 func bindTableModel(target any, def *TableDef) {

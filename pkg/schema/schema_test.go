@@ -22,6 +22,15 @@ type postsTable struct {
 	Title  *schema.Column[string]
 }
 
+type membershipsTable struct {
+	schema.TableModel
+	UserID  *schema.Column[int64]
+	OrgID   *schema.Column[int64]
+	Role    *schema.Column[string]
+	Active  *schema.Column[bool]
+	Manager *schema.Column[int64]
+}
+
 type auditColumns struct {
 	CreatedAt *schema.Column[time.Time]
 }
@@ -81,6 +90,33 @@ func TestSchemaMetadataAndAlias(t *testing.T) {
 		t.Fatalf("expected foreign key to users.id")
 	}
 
+	memberships := schema.Define("memberships", func(tm *membershipsTable) {
+		tm.UserID = tm.BigInt("user_id").NotNull()
+		tm.OrgID = tm.BigInt("org_id").NotNull()
+		tm.Role = tm.Text("role").NotNull()
+		tm.Active = tm.Boolean("active").NotNull().Default(true)
+		tm.Manager = tm.BigInt("manager").Nullable()
+		tm.PrimaryKey("memberships_pkey").On(tm.UserID, tm.OrgID)
+		tm.Unique("memberships_role_org_key").On(tm.OrgID, tm.Role)
+		tm.Check("memberships_active_manager_check", schema.Or(tm.Active.Eq(true), tm.Manager.IsNotNull()))
+		tm.ForeignKey("memberships_user_fk").On(tm.UserID).References(users.ID).OnDelete(schema.ForeignKeyActionCascade).OnUpdate(schema.ForeignKeyActionRestrict)
+	})
+	if got := len(memberships.TableDef().Constraints); got != 4 {
+		t.Fatalf("expected 4 constraints, got %d", got)
+	}
+	if memberships.TableDef().Constraints[0].Type != schema.ConstraintPrimaryKey {
+		t.Fatalf("expected first constraint to be primary key")
+	}
+	if memberships.TableDef().Constraints[1].Type != schema.ConstraintUnique {
+		t.Fatalf("expected second constraint to be unique")
+	}
+	if memberships.TableDef().Constraints[2].Type != schema.ConstraintCheck {
+		t.Fatalf("expected third constraint to be check")
+	}
+	if memberships.TableDef().Constraints[3].OnDelete != schema.ForeignKeyActionCascade || memberships.TableDef().Constraints[3].OnUpdate != schema.ForeignKeyActionRestrict {
+		t.Fatalf("expected foreign key actions to be preserved")
+	}
+
 	aliased := schema.Alias(users, "u")
 	if users.TableDef().Alias != "" {
 		t.Fatalf("base table alias mutated")
@@ -90,6 +126,11 @@ func TestSchemaMetadataAndAlias(t *testing.T) {
 	}
 	if aliased.ID.ColumnDef().Table.Alias != "u" {
 		t.Fatalf("expected aliased column metadata to point at aliased table")
+	}
+
+	aliasedMemberships := schema.Alias(memberships, "m")
+	if aliasedMemberships.TableDef().Constraints[2].Check.(schema.LogicalExpr).Exprs[1].(schema.NullCheckExpr).Expr.(schema.ColumnReference).ColumnDef().Table.Alias != "m" {
+		t.Fatalf("expected check constraint columns to point at aliased table")
 	}
 }
 

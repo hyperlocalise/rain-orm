@@ -30,6 +30,8 @@ func TestSchemaInternalHelpersAndExpressions(t *testing.T) {
 		tu.CreatedAt = tu.TimestampTZ("created_at").NotNull().DefaultNow()
 		tu.Index("users_email_idx").On(tu.Email)
 		tu.UniqueIndex("users_created_idx").On(tu.CreatedAt.Desc())
+		tu.Unique("users_email_created_key").On(tu.Email, tu.CreatedAt)
+		tu.Check("users_email_present_check", tu.Email.IsNotNull())
 	})
 
 	col, ok := users.TableDef().ColumnByName("email")
@@ -113,6 +115,9 @@ func TestSchemaInternalHelpersAndExpressions(t *testing.T) {
 	if users.TableDef().Indexes[1].Columns[0].Direction != SortDesc {
 		t.Fatalf("expected ordered index column direction DESC")
 	}
+	if users.TableDef().Constraints[0].Columns[1].Name != "created_at" {
+		t.Fatalf("expected table constraint column metadata to be preserved")
+	}
 }
 
 func TestSchemaInternalPanicsAndCloners(t *testing.T) {
@@ -162,9 +167,24 @@ func TestSchemaInternalPanicsAndCloners(t *testing.T) {
 		zero.C("id")
 	})
 	assertPanics(t, func() { users.C("missing") })
+	assertPanics(t, func() { users.PrimaryKey("") })
+	assertPanics(t, func() { users.Unique("") })
+	assertPanics(t, func() { users.ForeignKey("") })
+	assertPanics(t, func() { users.Check("", users.Email.IsNotNull()) })
+	assertPanics(t, func() { users.Check("users_bad_check", nil) })
+	assertPanics(t, func() { users.Check("users_bad_or_check", Or()) })
+	assertPanics(t, func() { users.Check("users_bad_and_check", And()) })
 	assertPanics(t, func() {
 		idx := users.Index("also-broken")
 		idx.On(OrderExpr{Expr: Raw("x"), Direction: SortAsc})
+	})
+	assertPanics(t, func() {
+		other := Define("other_users", func(tu *internalUsersTable) {
+			tu.ID = tu.BigSerial("id").PrimaryKey()
+			tu.Email = tu.VarChar("email", 255).NotNull()
+			tu.CreatedAt = tu.TimestampTZ("created_at").NotNull()
+		})
+		users.PrimaryKey("users_broken_pkey").On(other.ID)
 	})
 	assertPanics(t, func() {
 		missing := &Column[int64]{def: &ColumnDef{Name: "missing"}}
@@ -206,14 +226,19 @@ func TestSchemaInternalPanicsAndCloners(t *testing.T) {
 		tp.UserID = tp.BigInt("user_id").NotNull().References(users.ID)
 		tp.Status = tp.Enum("status", "draft", "published")
 		tp.Index("posts_user_idx").On(tp.UserID)
+		tp.Check("posts_status_check", tp.Status.In("draft", "published"))
+		tp.ForeignKey("posts_status_fk").On(tp.UserID).References(users.ID).OnDelete(ForeignKeyActionCascade)
 	})
 	clonedWithFK := cloneTableDef(posts.TableDef(), "p")
-	if clonedWithFK.Alias != "p" || len(clonedWithFK.ForeignKeys) != 1 || len(clonedWithFK.Indexes) != 1 {
-		t.Fatalf("expected cloneTableDef to preserve alias, indexes, and foreign keys")
+	if clonedWithFK.Alias != "p" || len(clonedWithFK.ForeignKeys) != 1 || len(clonedWithFK.Indexes) != 1 || len(clonedWithFK.Constraints) != 2 {
+		t.Fatalf("expected cloneTableDef to preserve alias, indexes, foreign keys, and constraints")
 	}
 	posts.Status.ColumnDef().Type.EnumValues[0] = "mutated"
 	if clonedWithFK.columnsByName["status"].Type.EnumValues[0] != "draft" {
 		t.Fatalf("expected enum metadata to be deep-cloned")
+	}
+	if clonedWithFK.Constraints[0].Check.(InExpr).Left.(ColumnReference).ColumnDef().Table.Alias != "p" {
+		t.Fatalf("expected cloned check constraint to bind to aliased table")
 	}
 }
 
