@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"net"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -116,6 +118,23 @@ func TestPostgresIntegrationInsertSelectAndJoin(t *testing.T) {
 		t.Fatalf("expected created_at to be populated")
 	}
 
+	var second postgresUserRow
+	if err := db.Select().
+		Table(users).
+		Where(users.Email.Eq("override@example.com")).
+		Scan(ctx, &second); err != nil {
+		t.Fatalf("scan override user: %v", err)
+	}
+	if second.Name != "Alice" {
+		t.Fatalf("expected override name Alice, got %q", second.Name)
+	}
+	if second.Active {
+		t.Fatalf("expected explicit active=false override")
+	}
+	if second.Nickname == nil || *second.Nickname != "ali" {
+		t.Fatalf("expected explicit nickname ali, got %#v", second.Nickname)
+	}
+
 	if _, err := db.Insert().
 		Table(posts).
 		Set(posts.UserID, first.ID).
@@ -163,11 +182,21 @@ func postgresIntegrationDSN() (string, bool) {
 	}
 
 	password := strings.TrimSpace(os.Getenv("RAIN_POSTGRES_PASSWORD"))
-	if password == "" {
-		return fmt.Sprintf("postgres://%s@%s:%s/%s?sslmode=%s", user, host, port, dbName, sslmode), true
+	query := url.Values{"sslmode": []string{sslmode}}
+	dsn := &url.URL{
+		Scheme:   "postgres",
+		Host:     net.JoinHostPort(host, port),
+		Path:     "/" + dbName,
+		RawQuery: query.Encode(),
 	}
 
-	return fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=%s", user, password, host, port, dbName, sslmode), true
+	if password == "" {
+		dsn.User = url.User(user)
+		return dsn.String(), true
+	}
+
+	dsn.User = url.UserPassword(user, password)
+	return dsn.String(), true
 }
 
 func definePostgresTables(suffix string) (*postgresUsersTable, *postgresPostsTable) {
