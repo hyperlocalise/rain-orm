@@ -19,7 +19,7 @@ func (d *MySQLDialect) Name() string {
 
 // Features returns MySQL capabilities supported by Rain.
 func (d *MySQLDialect) Features() Feature {
-	return FeatureOffset | FeatureUpsert
+	return FeatureOffset | FeatureUpsert | FeatureSavepoint
 }
 
 // QuoteIdentifier quotes identifiers with backticks.

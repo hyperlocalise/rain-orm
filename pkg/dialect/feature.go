@@ -11,6 +11,7 @@ const (
 	FeatureUpsert
 	FeatureCTE
 	FeatureDefaultPlaceholder
+	FeatureSavepoint
 )
 
 // HasFeature reports whether a feature set includes the requested capability.

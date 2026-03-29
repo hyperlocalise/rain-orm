@@ -134,7 +134,7 @@ func TestPostgresDialect(t *testing.T) {
 	if got := d.Name(); got != "postgres" {
 		t.Fatalf("unexpected name: %q", got)
 	}
-	if got := d.Features(); got != FeatureInsertReturning|FeatureUpdateReturning|FeatureDeleteReturning|FeatureOffset|FeatureUpsert|FeatureCTE|FeatureDefaultPlaceholder {
+	if got := d.Features(); got != FeatureInsertReturning|FeatureUpdateReturning|FeatureDeleteReturning|FeatureOffset|FeatureUpsert|FeatureCTE|FeatureDefaultPlaceholder|FeatureSavepoint {
 		t.Fatalf("unexpected features: %b", got)
 	}
 	if got := d.QuoteIdentifier(`user"name`); got != `"user""name"` {
@@ -224,7 +224,7 @@ func TestMySQLDialect(t *testing.T) {
 	if got := d.Name(); got != "mysql" {
 		t.Fatalf("unexpected name: %q", got)
 	}
-	if got := d.Features(); got != FeatureOffset|FeatureUpsert {
+	if got := d.Features(); got != FeatureOffset|FeatureUpsert|FeatureSavepoint {
 		t.Fatalf("unexpected features: %b", got)
 	}
 	if got := d.QuoteIdentifier("user`name"); got != "`user``name`" {
@@ -314,7 +314,7 @@ func TestSQLiteDialect(t *testing.T) {
 	if got := d.Name(); got != "sqlite" {
 		t.Fatalf("unexpected name: %q", got)
 	}
-	if got := d.Features(); got != FeatureInsertReturning|FeatureUpdateReturning|FeatureDeleteReturning|FeatureOffset|FeatureUpsert {
+	if got := d.Features(); got != FeatureInsertReturning|FeatureUpdateReturning|FeatureDeleteReturning|FeatureOffset|FeatureUpsert|FeatureSavepoint {
 		t.Fatalf("unexpected features: %b", got)
 	}
 	if got := d.QuoteIdentifier(`user"name`); got != `"user""name"` {
