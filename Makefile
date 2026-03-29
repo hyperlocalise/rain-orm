@@ -23,6 +23,10 @@ test: ## run tests with coverage
 bench: ## run sqlite benchmark suite with allocation metrics
 	go test -run '^$$' -bench . -benchmem -count=3 ./pkg/rain
 
+.PHONY: bench-report
+bench-report: ## run sqlite benchmark suite and save an annotated report under artifacts/bench
+	/bin/zsh ./scripts/bench-sqlite-report.sh "$(BENCH_FILTER)"
+
 .PHONY: test-json
 test-json: ## run tests with JSON output (for CI)
 	go test -json -race -coverprofile=coverage.out $$(go list ./... | grep -v '/examples/') > test-report.jsonl
