@@ -421,6 +421,12 @@ Run the full suite:
 make bench
 ```
 
+Save an annotated report with environment details and a metric legend:
+
+```sh
+make bench-report
+```
+
 Run a single workload:
 
 ```sh
@@ -433,13 +439,26 @@ Run one workload for one dataset size:
 go test -run '^$' -bench 'BenchmarkSQLiteSelectJoinScan/medium$' -benchmem ./pkg/rain
 ```
 
+Save a filtered annotated report:
+
+```sh
+BENCH_FILTER='BenchmarkSQLiteRichSelectWithNestedRelations/medium$' make bench-report
+```
+
 Compare two runs over time by saving the benchmark output and diffing the benchmark lines from the same machine and environment. Use the built-in Go metrics as the primary signals:
 
 - `ns/op` shows the average execution time per benchmark iteration.
 - `B/op` shows the average bytes allocated per iteration.
 - `allocs/op` shows the average number of heap allocations per iteration.
 
-The suite seeds deterministic `small`, `medium`, and `large` SQLite datasets before measurements start so setup cost does not pollute the reported ORM metrics.
+`make bench-report` writes plain-text reports under `artifacts/bench/` and prepends a header that records the timestamp, git commit, branch, Go version, platform, exact command, optional benchmark filter, and the metric legend above.
+
+The suite uses two SQLite fixtures:
+
+- the baseline `users`/`posts` schema for fast, broad CRUD and relation benchmarks
+- a richer `rich_users`/`rich_categories`/`rich_posts` schema for grouped-reporting, subquery, nested-relation, upsert, and wider-row benchmarks
+
+The suite seeds deterministic `small`, `medium`, and `large` SQLite datasets before measurements start so setup cost does not pollute the reported ORM metrics. Local same-machine comparisons remain the source of truth for performance changes; CI benchmark artifacts are best treated as informational snapshots rather than precise regression gates.
 
 # Makefile Targets
 
