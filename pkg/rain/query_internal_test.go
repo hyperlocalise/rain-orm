@@ -775,6 +775,30 @@ func TestRelationLoadingChunksLargeINQueries(t *testing.T) {
 	}
 }
 
+func TestRelationElementTypeFromTypeHandlesPointerSlices(t *testing.T) {
+	t.Parallel()
+
+	users, _ := defineInternalQueryTables()
+	db, err := OpenDialect("sqlite")
+	if err != nil {
+		t.Fatalf("OpenDialect(sqlite): %v", err)
+	}
+
+	parentsType := reflect.TypeOf([]*internalUserWithPostPointersRow{})
+	parentStructType, err := sliceParentStructType(parentsType)
+	if err != nil {
+		t.Fatalf("sliceParentStructType failed: %v", err)
+	}
+
+	relatedType, err := db.Select().relationElementTypeFromType(parentStructType, users.TableDef().Relations[0])
+	if err != nil {
+		t.Fatalf("relationElementTypeFromType failed: %v", err)
+	}
+	if relatedType != reflect.TypeOf(internalPostOnlyRow{}) {
+		t.Fatalf("expected related type %v, got %v", reflect.TypeOf(internalPostOnlyRow{}), relatedType)
+	}
+}
+
 func TestCompileContextAndAssignmentsHelpers(t *testing.T) {
 	t.Parallel()
 

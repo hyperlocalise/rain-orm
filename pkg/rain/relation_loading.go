@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"reflect"
+	"strconv"
 	"strings"
 
 	"github.com/hyperlocalise/rain-orm/pkg/schema"
@@ -13,8 +14,8 @@ import (
 const relationBatchSize = 512
 
 type typedKey struct {
-	typeName string
-	value    string
+	typ   reflect.Type
+	value any
 }
 
 type relationLoadNode struct {
@@ -210,7 +211,11 @@ func (q *SelectQuery) loadRelatedRows(
 	relation schema.RelationDef,
 	sourceKeys []any,
 ) (reflect.Value, error) {
-	relatedElemType, err := q.relationElementType(dereferenceModelValue(parents.Index(0)), relation)
+	parentStructType, err := sliceParentStructType(parents.Type())
+	if err != nil {
+		return reflect.Value{}, err
+	}
+	relatedElemType, err := q.relationElementTypeFromType(parentStructType, relation)
 	if err != nil {
 		return reflect.Value{}, err
 	}
@@ -262,24 +267,35 @@ func (q *SelectQuery) validateRelationField(parent reflect.Value, relation schem
 	return nil
 }
 
-func (q *SelectQuery) relationElementType(parent reflect.Value, relation schema.RelationDef) (reflect.Type, error) {
-	meta, _, err := lookupModelMeta(parent.Addr().Interface())
-	if err != nil {
-		return nil, err
+func sliceParentStructType(sliceType reflect.Type) (reflect.Type, error) {
+	if sliceType.Kind() != reflect.Slice {
+		return nil, fmt.Errorf("rain: relation loading requires a slice, got %s", sliceType)
 	}
+	elemType := sliceType.Elem()
+	if elemType.Kind() == reflect.Pointer {
+		elemType = elemType.Elem()
+	}
+	if elemType.Kind() != reflect.Struct {
+		return nil, fmt.Errorf("rain: relation loading requires slice elements to be structs, got %s", sliceType.Elem())
+	}
+	return elemType, nil
+}
+
+func (q *SelectQuery) relationElementTypeFromType(parentType reflect.Type, relation schema.RelationDef) (reflect.Type, error) {
+	meta := lookupModelMetaForType(parentType)
 	fieldInfo, ok := meta.byRelation[relation.Name]
 	if !ok {
 		return nil, fmt.Errorf("rain: relation %q not found in model metadata", relation.Name)
 	}
-	field := parent.FieldByIndex(fieldInfo.index)
+	fieldType := parentType.FieldByIndex(fieldInfo.index).Type
 	switch relation.Type {
 	case schema.RelationTypeBelongsTo:
-		if field.Kind() == reflect.Pointer {
-			return field.Type().Elem(), nil
+		if fieldType.Kind() == reflect.Pointer {
+			return fieldType.Elem(), nil
 		}
-		return field.Type(), nil
+		return fieldType, nil
 	case schema.RelationTypeHasMany:
-		elemType := field.Type().Elem()
+		elemType := fieldType.Elem()
 		if elemType.Kind() == reflect.Pointer {
 			return elemType.Elem(), nil
 		}
@@ -371,5 +387,21 @@ func dereferenceModelValue(value reflect.Value) reflect.Value {
 }
 
 func toTypedKey(value any) typedKey {
-	return typedKey{typeName: fmt.Sprintf("%T", value), value: fmt.Sprint(value)}
+	typ := reflect.TypeOf(value)
+	return typedKey{typ: typ, value: normalizeTypedKeyValue(value)}
+}
+
+func normalizeTypedKeyValue(value any) any {
+	if bytes, ok := value.([]byte); ok {
+		return string(bytes)
+	}
+
+	rv := reflect.ValueOf(value)
+	if rv.IsValid() && rv.Type().Comparable() {
+		return value
+	}
+
+	// Fallback for uncommon non-comparable key types. Primary/foreign key values are
+	// expected to be comparable primitives or []byte in normal ORM usage.
+	return strconv.Quote(fmt.Sprintf("%#v", value))
 }
