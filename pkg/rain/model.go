@@ -2,7 +2,6 @@ package rain
 
 import (
 	"database/sql"
-	"database/sql/driver"
 	"fmt"
 	"reflect"
 	"strings"
@@ -12,10 +11,6 @@ import (
 
 type scannerInterface = interface {
 	Scan(src any) error
-}
-
-type valuerInterface = interface {
-	Value() (driver.Value, error)
 }
 
 type modelField struct {
@@ -252,7 +247,6 @@ func nullablePrimitiveHandlers() []nullableHandler {
 
 func scannerTarget(field reflect.Value) (any, func() error, bool) {
 	scannerType := reflect.TypeFor[scannerInterface]()
-	valuerType := reflect.TypeFor[valuerInterface]()
 
 	if field.Kind() != reflect.Pointer {
 		if field.CanAddr() && field.Addr().Type().Implements(scannerType) {
@@ -262,14 +256,12 @@ func scannerTarget(field reflect.Value) (any, func() error, bool) {
 	}
 
 	fieldType := field.Type()
-	if fieldType.Implements(scannerType) && fieldType.Implements(valuerType) {
+	if fieldType.Implements(scannerType) {
 		receiver := reflect.New(fieldType.Elem())
-		if receiver.Type().Implements(scannerType) {
-			return receiver.Interface(), func() error {
-				field.Set(receiver)
-				return nil
-			}, true
-		}
+		return receiver.Interface(), func() error {
+			field.Set(receiver)
+			return nil
+		}, true
 	}
 
 	if fieldType.Elem().Implements(scannerType) {
@@ -302,14 +294,9 @@ func nullableStringTarget(field reflect.Value) (any, func() error, bool) {
 
 func nullableSignedIntTarget(field reflect.Value) (any, func() error, bool) {
 	elemType := field.Type().Elem()
-	signed := map[reflect.Kind]bool{
-		reflect.Int:   true,
-		reflect.Int8:  true,
-		reflect.Int16: true,
-		reflect.Int32: true,
-		reflect.Int64: true,
-	}
-	if !signed[elemType.Kind()] {
+	switch elemType.Kind() {
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+	default:
 		return nil, nil, false
 	}
 
@@ -328,14 +315,9 @@ func nullableSignedIntTarget(field reflect.Value) (any, func() error, bool) {
 
 func nullableUnsignedIntTarget(field reflect.Value) (any, func() error, bool) {
 	elemType := field.Type().Elem()
-	unsigned := map[reflect.Kind]bool{
-		reflect.Uint:   true,
-		reflect.Uint8:  true,
-		reflect.Uint16: true,
-		reflect.Uint32: true,
-		reflect.Uint64: true,
-	}
-	if !unsigned[elemType.Kind()] {
+	switch elemType.Kind() {
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+	default:
 		return nil, nil, false
 	}
 

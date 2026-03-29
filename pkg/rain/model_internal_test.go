@@ -2,7 +2,6 @@ package rain
 
 import (
 	"database/sql"
-	"database/sql/driver"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -24,10 +23,6 @@ func (s *modelScanStatus) Scan(src any) error {
 	default:
 		return fmt.Errorf("unsupported status source %T", src)
 	}
-}
-
-func (s modelScanStatus) Value() (driver.Value, error) {
-	return string(s), nil
 }
 
 type ModelScanEmbedded struct {
