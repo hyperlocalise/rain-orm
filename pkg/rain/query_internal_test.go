@@ -371,6 +371,12 @@ func TestSelectWithRelations(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "unknown relation") {
 		t.Fatalf("expected unknown relation error, got %v", err)
 	}
+
+	var empty []internalUserRow
+	err = db.Select().Table(users).Where(users.ID.Eq(-999)).WithRelations("does_not_exist").Scan(ctx, &empty)
+	if err == nil || !strings.Contains(err.Error(), "unknown relation") {
+		t.Fatalf("expected unknown relation error for empty result, got %v", err)
+	}
 }
 
 func TestCompileContextAndAssignmentsHelpers(t *testing.T) {

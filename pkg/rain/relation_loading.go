@@ -65,15 +65,20 @@ func (q *SelectQuery) loadRelationsIntoSlice(ctx context.Context, parents reflec
 		return fmt.Errorf("rain: relation loading requires a concrete table source")
 	}
 
-	if parents.Len() == 0 {
-		return nil
-	}
-
+	validatedRelations := make([]schema.RelationDef, 0, len(q.relationNames))
 	for _, relationName := range q.relationNames {
 		relation, exists := tableSource.table.RelationByName(relationName)
 		if !exists {
 			return fmt.Errorf("rain: unknown relation %q on table %q", relationName, tableSource.table.Name)
 		}
+		validatedRelations = append(validatedRelations, relation)
+	}
+
+	if parents.Len() == 0 {
+		return nil
+	}
+
+	for _, relation := range validatedRelations {
 		if err := q.loadRelation(ctx, parents, relation); err != nil {
 			return err
 		}
@@ -111,6 +116,8 @@ func (q *SelectQuery) loadRelation(ctx context.Context, parents reflect.Value, r
 	if err != nil {
 		return err
 	}
+	// TODO: replace per-key queries with a single IN-clause query
+	// (see docs/adr/2026-03-28-typed-relations-design.md).
 	for _, sourceKey := range sourceKeys {
 		query := &SelectQuery{runner: q.runner, dialect: q.dialect, table: tableDefSource{table: relation.TargetTable}}
 		relatedRows := reflect.New(reflect.SliceOf(relatedElemType))
@@ -182,7 +189,10 @@ func (q *SelectQuery) relationElementType(parent reflect.Value, relation schema.
 	if err != nil {
 		return nil, err
 	}
-	fieldInfo := meta.byRelation[relation.Name]
+	fieldInfo, ok := meta.byRelation[relation.Name]
+	if !ok {
+		return nil, fmt.Errorf("rain: relation %q not found in model metadata", relation.Name)
+	}
 	field := parent.FieldByIndex(fieldInfo.index)
 	switch relation.Type {
 	case schema.RelationTypeBelongsTo:
@@ -221,7 +231,10 @@ func setRelationValue(parent reflect.Value, relationName string, relationType sc
 	if err != nil {
 		return err
 	}
-	fieldInfo := meta.byRelation[relationName]
+	fieldInfo, ok := meta.byRelation[relationName]
+	if !ok {
+		return fmt.Errorf("rain: relation %q not found in model metadata", relationName)
+	}
 	field := parent.FieldByIndex(fieldInfo.index)
 
 	switch relationType {
