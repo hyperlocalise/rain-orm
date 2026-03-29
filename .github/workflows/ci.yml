@@ -76,3 +76,38 @@ jobs:
         env:
           RAIN_POSTGRES_DSN: postgres://rain:rain@127.0.0.1:5432/rain_test?sslmode=disable
         run: go test -race ./pkg/rain -run '^TestPostgresIntegration'
+
+  mysql-integration:
+    name: MySQL Integration Tests
+    runs-on: ubuntu-latest
+    needs: [precommit]
+    timeout-minutes: 10
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_DATABASE: rain_test
+          MYSQL_USER: rain
+          MYSQL_PASSWORD: rain
+          MYSQL_ROOT_PASSWORD: root
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -urain -prain"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+
+      - name: Run MySQL integration tests
+        env:
+          RAIN_MYSQL_DSN: rain:rain@tcp(127.0.0.1:3306)/rain_test?parseTime=true
+        run: go test -race ./pkg/rain -run '^TestMySQLIntegration'
