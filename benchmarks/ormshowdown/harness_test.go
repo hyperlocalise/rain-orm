@@ -51,9 +51,9 @@ func BenchmarkORMShowdown(b *testing.B) {
 			b.Run(fmt.Sprintf("%s/%s", adapter.name(), ds.name), func(b *testing.B) {
 				dbPath := filepath.Join(b.TempDir(), "showdown.db")
 				ctx := context.Background()
+				setupCanonicalSchemaAndSeed(b, ctx, dbPath, ds)
 				closeFn := adapter.open(b, dbPath)
 				b.Cleanup(closeFn)
-				setupCanonicalSchemaAndSeed(b, ctx, dbPath, ds)
 				runWorkloads(b, ctx, ds, adapter)
 			})
 		}
@@ -215,7 +215,58 @@ type basicUser struct {
 	CreatedAt time.Time `db:"created_at"`
 }
 
-type rawAdapter struct{ db *sql.DB }
+type bunBenchUser struct {
+	bun.BaseModel `bun:"table:users,alias:u"`
+	ID            int64          `bun:"id,pk,autoincrement"`
+	Email         string         `bun:"email"`
+	Name          string         `bun:"name"`
+	Active        bool           `bun:"active"`
+	Status        string         `bun:"status"`
+	CreatedAt     time.Time      `bun:"created_at"`
+	Posts         []bunBenchPost `bun:"rel:has-many,join:id=user_id"`
+}
+
+type bunBenchPost struct {
+	bun.BaseModel `bun:"table:posts,alias:p"`
+	ID            int64     `bun:"id,pk,autoincrement"`
+	UserID        int64     `bun:"user_id"`
+	CategoryID    *int64    `bun:"category_id"`
+	Title         string    `bun:"title"`
+	Body          string    `bun:"body"`
+	Published     bool      `bun:"published"`
+	CreatedAt     time.Time `bun:"created_at"`
+}
+
+type gormBenchUser struct {
+	ID        int64           `gorm:"column:id;primaryKey;autoIncrement"`
+	Email     string          `gorm:"column:email"`
+	Name      string          `gorm:"column:name"`
+	Active    bool            `gorm:"column:active"`
+	Status    string          `gorm:"column:status"`
+	CreatedAt time.Time       `gorm:"column:created_at"`
+	Posts     []gormBenchPost `gorm:"foreignKey:UserID;references:ID"`
+}
+
+func (gormBenchUser) TableName() string { return "users" }
+
+type gormBenchPost struct {
+	ID         int64     `gorm:"column:id;primaryKey;autoIncrement"`
+	UserID     int64     `gorm:"column:user_id"`
+	CategoryID *int64    `gorm:"column:category_id"`
+	Title      string    `gorm:"column:title"`
+	Body       string    `gorm:"column:body"`
+	Published  bool      `gorm:"column:published"`
+	CreatedAt  time.Time `gorm:"column:created_at"`
+}
+
+func (gormBenchPost) TableName() string { return "posts" }
+
+const preparedPointLookupSQL = `SELECT id,email,name,active,status,created_at FROM users WHERE id=?`
+
+type rawAdapter struct {
+	db                 *sql.DB
+	preparedPointQuery *sql.Stmt
+}
 
 func (a *rawAdapter) name() string { return "raw" }
 func (a *rawAdapter) open(tb testing.TB, path string) func() {
@@ -223,8 +274,19 @@ func (a *rawAdapter) open(tb testing.TB, path string) func() {
 	if err != nil {
 		tb.Fatal(err)
 	}
+	stmt, err := db.PrepareContext(context.Background(), preparedPointLookupSQL)
+	if err != nil {
+		_ = db.Close()
+		tb.Fatal(err)
+	}
 	a.db = db
-	return func() { _ = db.Close() }
+	a.preparedPointQuery = stmt
+	return func() {
+		if a.preparedPointQuery != nil {
+			_ = a.preparedPointQuery.Close()
+		}
+		_ = db.Close()
+	}
 }
 
 func (a *rawAdapter) insertSingle(ctx context.Context, i int) error {
@@ -318,13 +380,8 @@ func (a *rawAdapter) eagerLoadNearestEquivalent(ctx context.Context, limit int) 
 }
 
 func (a *rawAdapter) preparedPointLookup(ctx context.Context, id int64) error {
-	stmt, err := a.db.PrepareContext(ctx, `SELECT id,email,name,active,status,created_at FROM users WHERE id=?`)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = stmt.Close() }()
 	var u basicUser
-	return stmt.QueryRowContext(ctx, id).Scan(&u.ID, &u.Email, &u.Name, &u.Active, &u.Status, &u.CreatedAt)
+	return a.preparedPointQuery.QueryRowContext(ctx, id).Scan(&u.ID, &u.Email, &u.Name, &u.Active, &u.Status, &u.CreatedAt)
 }
 
 type benchUsersTable struct {
@@ -337,8 +394,9 @@ type benchUsersTable struct {
 	CreatedAt *schema.Column[time.Time]
 }
 type rainAdapter struct {
-	db    *rain.DB
-	users *benchUsersTable
+	db                 *rain.DB
+	users              *benchUsersTable
+	preparedPointQuery *rain.PreparedSelectQuery
 }
 
 func (a *rainAdapter) name() string { return "rain" }
@@ -356,7 +414,18 @@ func (a *rainAdapter) open(tb testing.TB, path string) func() {
 		t.Status = t.Text("status").NotNull()
 		t.CreatedAt = t.Timestamp("created_at").NotNull()
 	})
-	return func() { _ = db.Close() }
+	prepared, err := a.db.Select().Table(a.users).Where(a.users.ID.EqExpr(schema.Placeholder("id"))).Prepare(context.Background())
+	if err != nil {
+		_ = db.Close()
+		tb.Fatal(err)
+	}
+	a.preparedPointQuery = prepared
+	return func() {
+		if a.preparedPointQuery != nil {
+			_ = a.preparedPointQuery.Close()
+		}
+		_ = db.Close()
+	}
 }
 
 func (a *rainAdapter) insertSingle(ctx context.Context, i int) error {
@@ -440,16 +509,14 @@ func (a *rainAdapter) eagerLoadNearestEquivalent(ctx context.Context, limit int)
 }
 
 func (a *rainAdapter) preparedPointLookup(ctx context.Context, id int64) error {
-	q, err := a.db.Select().Table(a.users).Where(a.users.ID.EqExpr(schema.Placeholder("id"))).Prepare(ctx)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = q.Close() }()
 	var u basicUser
-	return q.Scan(ctx, rain.PreparedArgs{"id": id}, &u)
+	return a.preparedPointQuery.Scan(ctx, rain.PreparedArgs{"id": id}, &u)
 }
 
-type bunAdapter struct{ db *bun.DB }
+type bunAdapter struct {
+	db                 *bun.DB
+	preparedPointQuery *sql.Stmt
+}
 
 func (a *bunAdapter) name() string { return "bun" }
 func (a *bunAdapter) open(tb testing.TB, path string) func() {
@@ -458,22 +525,40 @@ func (a *bunAdapter) open(tb testing.TB, path string) func() {
 		tb.Fatal(err)
 	}
 	a.db = bun.NewDB(sqldb, sqlitedialect.New())
-	return func() { _ = a.db.Close() }
+	stmt, err := a.db.DB.PrepareContext(context.Background(), preparedPointLookupSQL)
+	if err != nil {
+		_ = a.db.Close()
+		tb.Fatal(err)
+	}
+	a.preparedPointQuery = stmt
+	return func() {
+		if a.preparedPointQuery != nil {
+			_ = a.preparedPointQuery.Close()
+		}
+		_ = a.db.Close()
+	}
 }
 
 func (a *bunAdapter) insertSingle(ctx context.Context, i int) error {
-	_, err := a.db.NewRaw(`INSERT INTO users(email,name,active,status,created_at) VALUES(?,?,?,?,?)`, fmt.Sprintf("bun-insert-%d@example.com", i), "Bun Insert", i%2 == 0, "active", time.Now().UTC()).Exec(ctx)
+	u := &basicUser{
+		Email:     fmt.Sprintf("bun-insert-%d@example.com", i),
+		Name:      "Bun Insert",
+		Active:    i%2 == 0,
+		Status:    "active",
+		CreatedAt: time.Now().UTC(),
+	}
+	_, err := a.db.NewInsert().Model(u).ModelTableExpr("users").Exec(ctx)
 	return err
 }
 
 func (a *bunAdapter) lookupByPK(ctx context.Context, id int64) error {
 	var u basicUser
-	return a.db.NewRaw(`SELECT id,email,name,active,status,created_at FROM users WHERE id=?`, id).Scan(ctx, &u)
+	return a.db.NewSelect().Model(&u).ModelTableExpr("users").Where("id = ?", id).Limit(1).Scan(ctx)
 }
 
 func (a *bunAdapter) filteredSliceScan(ctx context.Context, limit int) error {
 	rows := make([]basicUser, 0, limit)
-	return a.db.NewRaw(`SELECT id,email,name,active,status,created_at FROM users WHERE active=1 ORDER BY id LIMIT ?`, limit).Scan(ctx, &rows)
+	return a.db.NewSelect().Model(&rows).ModelTableExpr("users").Where("active = ?", true).OrderExpr("id ASC").Limit(limit).Scan(ctx)
 }
 
 func (a *bunAdapter) joinScan(ctx context.Context, limit int) error {
@@ -481,7 +566,14 @@ func (a *bunAdapter) joinScan(ctx context.Context, limit int) error {
 		Title string `db:"title"`
 		Email string `db:"email"`
 	}, 0, limit)
-	return a.db.NewRaw(`SELECT p.title, u.email FROM posts p JOIN users u ON p.user_id=u.id WHERE u.active=1 ORDER BY p.id LIMIT ?`, limit).Scan(ctx, &rows)
+	return a.db.NewSelect().
+		TableExpr("posts AS p").
+		ColumnExpr("p.title, u.email").
+		Join("JOIN users AS u ON u.id = p.user_id").
+		Where("u.active = ?", true).
+		OrderExpr("p.id ASC").
+		Limit(limit).
+		Scan(ctx, &rows)
 }
 
 func (a *bunAdapter) groupedAggregate(ctx context.Context) error {
@@ -489,7 +581,11 @@ func (a *bunAdapter) groupedAggregate(ctx context.Context) error {
 		Status string `db:"status"`
 		Count  int64  `db:"count"`
 	}, 0, 3)
-	return a.db.NewRaw(`SELECT status, COUNT(*) AS count FROM users GROUP BY status`).Scan(ctx, &rows)
+	return a.db.NewSelect().
+		TableExpr("users").
+		ColumnExpr("status, COUNT(*) AS count").
+		GroupExpr("status").
+		Scan(ctx, &rows)
 }
 
 func (a *bunAdapter) subqueryReport(ctx context.Context, limit int) error {
@@ -497,30 +593,42 @@ func (a *bunAdapter) subqueryReport(ctx context.Context, limit int) error {
 		Email string `db:"email"`
 		Count int64  `db:"post_count"`
 	}, 0, limit)
-	return a.db.NewRaw(`SELECT u.email, COALESCE(x.post_count,0) AS post_count FROM users u LEFT JOIN (SELECT user_id, COUNT(*) AS post_count FROM posts WHERE published=1 GROUP BY user_id) x ON x.user_id=u.id ORDER BY u.id LIMIT ?`, limit).Scan(ctx, &rows)
+	postCounts := a.db.NewSelect().
+		TableExpr("posts").
+		ColumnExpr("user_id, COUNT(*) AS post_count").
+		Where("published = ?", true).
+		GroupExpr("user_id")
+	return a.db.NewSelect().
+		TableExpr("users AS u").
+		ColumnExpr("u.email, COALESCE(x.post_count, 0) AS post_count").
+		Join("LEFT JOIN (?) AS x ON x.user_id = u.id", postCounts).
+		OrderExpr("u.id ASC").
+		Limit(limit).
+		Scan(ctx, &rows)
 }
 
 func (a *bunAdapter) eagerLoadNearestEquivalent(ctx context.Context, limit int) error {
-	rows := make([]struct {
-		UserID int64          `db:"id"`
-		Email  string         `db:"email"`
-		PostID sql.NullInt64  `db:"post_id"`
-		Title  sql.NullString `db:"title"`
-	}, 0, limit)
-	return a.db.NewRaw(`SELECT u.id, u.email, p.id AS post_id, p.title FROM users u LEFT JOIN posts p ON p.user_id=u.id WHERE u.active=1 ORDER BY u.id,p.id LIMIT ?`, limit).Scan(ctx, &rows)
+	rows := make([]bunBenchUser, 0, limit)
+	return a.db.NewSelect().
+		Model(&rows).
+		Relation("Posts", func(q *bun.SelectQuery) *bun.SelectQuery {
+			return q.OrderExpr("id ASC")
+		}).
+		Where("u.active = ?", true).
+		OrderExpr("u.id ASC").
+		Limit(limit).
+		Scan(ctx)
 }
 
 func (a *bunAdapter) preparedPointLookup(ctx context.Context, id int64) error {
-	stmt, err := a.db.DB.PrepareContext(ctx, `SELECT id,email,name,active,status,created_at FROM users WHERE id=?`)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = stmt.Close() }()
 	var u basicUser
-	return stmt.QueryRowContext(ctx, id).Scan(&u.ID, &u.Email, &u.Name, &u.Active, &u.Status, &u.CreatedAt)
+	return a.preparedPointQuery.QueryRowContext(ctx, id).Scan(&u.ID, &u.Email, &u.Name, &u.Active, &u.Status, &u.CreatedAt)
 }
 
-type gormAdapter struct{ db *gorm.DB }
+type gormAdapter struct {
+	db                 *gorm.DB
+	preparedPointQuery *sql.Stmt
+}
 
 func (a *gormAdapter) name() string { return "gorm" }
 func (a *gormAdapter) open(tb testing.TB, path string) func() {
@@ -533,21 +641,39 @@ func (a *gormAdapter) open(tb testing.TB, path string) func() {
 	if err != nil {
 		tb.Fatal(err)
 	}
-	return func() { _ = sqlDB.Close() }
+	stmt, err := sqlDB.PrepareContext(context.Background(), preparedPointLookupSQL)
+	if err != nil {
+		_ = sqlDB.Close()
+		tb.Fatal(err)
+	}
+	a.preparedPointQuery = stmt
+	return func() {
+		if a.preparedPointQuery != nil {
+			_ = a.preparedPointQuery.Close()
+		}
+		_ = sqlDB.Close()
+	}
 }
 
 func (a *gormAdapter) insertSingle(ctx context.Context, i int) error {
-	return a.db.WithContext(ctx).Exec(`INSERT INTO users(email,name,active,status,created_at) VALUES(?,?,?,?,?)`, fmt.Sprintf("gorm-insert-%d@example.com", i), "Gorm Insert", i%2 == 0, "active", time.Now().UTC()).Error
+	u := basicUser{
+		Email:     fmt.Sprintf("gorm-insert-%d@example.com", i),
+		Name:      "Gorm Insert",
+		Active:    i%2 == 0,
+		Status:    "active",
+		CreatedAt: time.Now().UTC(),
+	}
+	return a.db.WithContext(ctx).Table("users").Create(&u).Error
 }
 
 func (a *gormAdapter) lookupByPK(ctx context.Context, id int64) error {
 	var u basicUser
-	return a.db.WithContext(ctx).Raw(`SELECT id,email,name,active,status,created_at FROM users WHERE id=?`, id).Scan(&u).Error
+	return a.db.WithContext(ctx).Table("users").Where("id = ?", id).Take(&u).Error
 }
 
 func (a *gormAdapter) filteredSliceScan(ctx context.Context, limit int) error {
 	var rows []basicUser
-	return a.db.WithContext(ctx).Raw(`SELECT id,email,name,active,status,created_at FROM users WHERE active=1 ORDER BY id LIMIT ?`, limit).Scan(&rows).Error
+	return a.db.WithContext(ctx).Table("users").Where("active = ?", true).Order("id ASC").Limit(limit).Find(&rows).Error
 }
 
 func (a *gormAdapter) joinScan(ctx context.Context, limit int) error {
@@ -555,7 +681,14 @@ func (a *gormAdapter) joinScan(ctx context.Context, limit int) error {
 		Title string `gorm:"column:title"`
 		Email string `gorm:"column:email"`
 	}
-	return a.db.WithContext(ctx).Raw(`SELECT p.title, u.email FROM posts p JOIN users u ON p.user_id=u.id WHERE u.active=1 ORDER BY p.id LIMIT ?`, limit).Scan(&rows).Error
+	return a.db.WithContext(ctx).
+		Table("posts AS p").
+		Select("p.title, u.email").
+		Joins("JOIN users AS u ON u.id = p.user_id").
+		Where("u.active = ?", true).
+		Order("p.id ASC").
+		Limit(limit).
+		Scan(&rows).Error
 }
 
 func (a *gormAdapter) groupedAggregate(ctx context.Context) error {
@@ -563,7 +696,11 @@ func (a *gormAdapter) groupedAggregate(ctx context.Context) error {
 		Status string `gorm:"column:status"`
 		Count  int64  `gorm:"column:count"`
 	}
-	return a.db.WithContext(ctx).Raw(`SELECT status, COUNT(*) AS count FROM users GROUP BY status`).Scan(&rows).Error
+	return a.db.WithContext(ctx).
+		Table("users").
+		Select("status, COUNT(*) AS count").
+		Group("status").
+		Scan(&rows).Error
 }
 
 func (a *gormAdapter) subqueryReport(ctx context.Context, limit int) error {
@@ -571,31 +708,36 @@ func (a *gormAdapter) subqueryReport(ctx context.Context, limit int) error {
 		Email string `gorm:"column:email"`
 		Count int64  `gorm:"column:post_count"`
 	}
-	return a.db.WithContext(ctx).Raw(`SELECT u.email, COALESCE(x.post_count,0) AS post_count FROM users u LEFT JOIN (SELECT user_id, COUNT(*) AS post_count FROM posts WHERE published=1 GROUP BY user_id) x ON x.user_id=u.id ORDER BY u.id LIMIT ?`, limit).Scan(&rows).Error
+	postCounts := a.db.WithContext(ctx).
+		Table("posts").
+		Select("user_id, COUNT(*) AS post_count").
+		Where("published = ?", true).
+		Group("user_id")
+	return a.db.WithContext(ctx).
+		Table("users AS u").
+		Select("u.email, COALESCE(x.post_count, 0) AS post_count").
+		Joins("LEFT JOIN (?) AS x ON x.user_id = u.id", postCounts).
+		Order("u.id ASC").
+		Limit(limit).
+		Scan(&rows).Error
 }
 
 func (a *gormAdapter) eagerLoadNearestEquivalent(ctx context.Context, limit int) error {
-	var rows []struct {
-		UserID int64         `gorm:"column:id"`
-		Email  string        `gorm:"column:email"`
-		PostID sql.NullInt64 `gorm:"column:post_id"`
-		Title  *string       `gorm:"column:title"`
-	}
-	return a.db.WithContext(ctx).Raw(`SELECT u.id, u.email, p.id AS post_id, p.title FROM users u LEFT JOIN posts p ON p.user_id=u.id WHERE u.active=1 ORDER BY u.id,p.id LIMIT ?`, limit).Scan(&rows).Error
+	var rows []gormBenchUser
+	return a.db.WithContext(ctx).
+		Model(&gormBenchUser{}).
+		Where("active = ?", true).
+		Order("id ASC").
+		Limit(limit).
+		Preload("Posts", func(tx *gorm.DB) *gorm.DB {
+			return tx.Order("id ASC")
+		}).
+		Find(&rows).Error
 }
 
 func (a *gormAdapter) preparedPointLookup(ctx context.Context, id int64) error {
-	sqlDB, err := a.db.DB()
-	if err != nil {
-		return err
-	}
-	stmt, err := sqlDB.PrepareContext(ctx, `SELECT id,email,name,active,status,created_at FROM users WHERE id=?`)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = stmt.Close() }()
 	var u basicUser
-	return stmt.QueryRowContext(ctx, id).Scan(&u.ID, &u.Email, &u.Name, &u.Active, &u.Status, &u.CreatedAt)
+	return a.preparedPointQuery.QueryRowContext(ctx, id).Scan(&u.ID, &u.Email, &u.Name, &u.Active, &u.Status, &u.CreatedAt)
 }
 
 type sqlcAdapter struct{ rawAdapter }
