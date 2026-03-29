@@ -48,7 +48,17 @@ var Posts = schema.Define("posts", func(t *PostsTable) {
 })
 
 func main() {
-	db, err := rain.Open("postgres", "postgres://example")
+	primaryDB, err := rain.Open("postgres", "postgres://primary")
+	if err != nil {
+		panic(err)
+	}
+
+	readReplica, err := rain.Open("postgres", "postgres://read-replica")
+	if err != nil {
+		panic(err)
+	}
+
+	db, err := rain.WithReplicas(primaryDB, []*rain.DB{readReplica}, nil)
 	if err != nil {
 		panic(err)
 	}
@@ -94,9 +104,16 @@ func main() {
 		Where(Users.ID.Eq(int64(99))).
 		ToSQL()
 
+	primarySelectSQL, primarySelectArgs, _ := db.Primary().Select().
+		Table(Users).
+		Column(Users.ID, Users.Email).
+		Limit(5).
+		ToSQL()
+
 	fmt.Println(selectSQL, selectArgs)
 	fmt.Println(aggSQL, aggArgs)
 	fmt.Println(insertSQL, insertArgs)
 	fmt.Println(updateSQL, updateArgs)
 	fmt.Println(deleteSQL, deleteArgs)
+	fmt.Println(primarySelectSQL, primarySelectArgs)
 }

@@ -174,6 +174,63 @@ if err != nil {
 `RunInTx` commits when the callback returns `nil` and rolls back when it returns an error. Nested `RunInTx` calls use savepoints on dialects that support them.
 Inside a nested callback, call patterns should return errors instead of calling `Commit`/`Rollback` directly.
 
+## Read Replicas
+
+Rain can route builder-based reads to replicas while keeping writes, raw SQL, and transactions on primary:
+
+```go
+primaryDB, err := rain.Open("postgres", "postgres://user:pass@localhost/primary")
+if err != nil {
+    panic(err)
+}
+
+read1, err := rain.Open("postgres", "postgres://user:pass@localhost/read1")
+if err != nil {
+    panic(err)
+}
+
+read2, err := rain.Open("postgres", "postgres://user:pass@localhost/read2")
+if err != nil {
+    panic(err)
+}
+
+db, err := rain.WithReplicas(primaryDB, []*rain.DB{read1, read2}, nil)
+if err != nil {
+    panic(err)
+}
+defer func() { _ = db.Close() }()
+
+var replicaRows []User
+if err := db.Select().
+    Table(Users).
+    Where(Users.Active.Eq(true)).
+    Scan(context.Background(), &replicaRows); err != nil {
+    panic(err)
+}
+
+var primaryRows []User
+if err := db.Primary().Select().
+    Table(Users).
+    Where(Users.Active.Eq(true)).
+    Scan(context.Background(), &primaryRows); err != nil {
+    panic(err)
+}
+
+// Writes stay on primary.
+if _, err := db.Insert().
+    Table(Users).
+    Model(&User{Email: "replica-aware@example.com", Name: "Replica Aware"}).
+    Exec(context.Background()); err != nil {
+    panic(err)
+}
+```
+
+Notes:
+- `Select()` uses a replica by default.
+- `Primary().Select()` forces reads to the primary database.
+- `Insert`, `Update`, `Delete`, `Exec`, `Query`, `QueryRow`, `Begin`, and `RunInTx` always use primary.
+- v1 does not hide replica lag automatically; use `Primary()` when you need read-after-write consistency.
+
 ## Opt-in Query Cache (v1)
 
 Rain supports opt-in caching for `SELECT` helpers (`Scan`, `Count`, and `Exists`). Caching is disabled unless you set a cache backend on `DB`.
