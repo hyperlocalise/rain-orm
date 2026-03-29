@@ -45,6 +45,8 @@ func defineDDLTables() (*ddlUsersTable, *ddlPostsTable) {
 		t.Payload = t.Bytes("payload").Nullable()
 		t.CreatedAt = t.TimestampTZPrecision("created_at", 6).NotNull().DefaultNow()
 		t.Status = t.Enum("status", "draft", "published").NotNull().Default("draft")
+		t.UniqueIndex("users_email_idx").On(t.Email)
+		t.Index("users_created_status_idx").On(t.CreatedAt.Desc(), t.Status)
 	})
 
 	posts := schema.Define("posts", func(t *ddlPostsTable) {
@@ -194,5 +196,77 @@ func TestCreateTableSQLExecutesInSQLite(t *testing.T) {
 		if _, err := db.Exec(ctx, statement); err != nil {
 			t.Fatalf("exec generated DDL failed: %v\nSQL:\n%s", err, statement)
 		}
+	}
+
+	indexesSQL, err := db.CreateIndexesSQL(users)
+	if err != nil {
+		t.Fatalf("CreateIndexesSQL(users): %v", err)
+	}
+	for _, statement := range indexesSQL {
+		if _, err := db.Exec(ctx, statement); err != nil {
+			t.Fatalf("exec generated index DDL failed: %v\nSQL:\n%s", err, statement)
+		}
+	}
+}
+
+func TestCreateIndexesSQLAcrossDialects(t *testing.T) {
+	t.Parallel()
+
+	users, _ := defineDDLTables()
+
+	cases := []struct {
+		name      string
+		dialect   string
+		fragments []string
+	}{
+		{
+			name:    "postgres indexes",
+			dialect: "postgres",
+			fragments: []string{
+				`CREATE UNIQUE INDEX "users_email_idx" ON "users" ("email" ASC)`,
+				`CREATE INDEX "users_created_status_idx" ON "users" ("created_at" DESC, "status" ASC)`,
+			},
+		},
+		{
+			name:    "mysql indexes",
+			dialect: "mysql",
+			fragments: []string{
+				"CREATE UNIQUE INDEX `users_email_idx` ON `users` (`email` ASC)",
+				"CREATE INDEX `users_created_status_idx` ON `users` (`created_at` DESC, `status` ASC)",
+			},
+		},
+		{
+			name:    "sqlite indexes",
+			dialect: "sqlite",
+			fragments: []string{
+				`CREATE UNIQUE INDEX "users_email_idx" ON "users" ("email" ASC)`,
+				`CREATE INDEX "users_created_status_idx" ON "users" ("created_at" DESC, "status" ASC)`,
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			db, err := rain.OpenDialect(tc.dialect)
+			if err != nil {
+				t.Fatalf("OpenDialect(%q): %v", tc.dialect, err)
+			}
+
+			statements, err := db.CreateIndexesSQL(users)
+			if err != nil {
+				t.Fatalf("CreateIndexesSQL: %v", err)
+			}
+			if len(statements) != len(tc.fragments) {
+				t.Fatalf("expected %d index statements, got %d", len(tc.fragments), len(statements))
+			}
+			for idx, fragment := range tc.fragments {
+				if statements[idx] != fragment {
+					t.Fatalf("unexpected index SQL at %d:\nwant: %s\ngot:  %s", idx, fragment, statements[idx])
+				}
+			}
+		})
 	}
 }

@@ -209,6 +209,20 @@ Notes:
 - Tags are optional, but recommended for manual invalidation.
 - Cache is a convenience for read-mostly workloads, not a substitute for fixing inefficient query shapes.
 
+## Relation Loading
+
+`WithRelations` supports top-level and nested relation paths:
+
+```go
+var rows []UserWithPosts
+err := db.Select().
+    Table(Users).
+    WithRelations("posts", "posts.author").
+    Scan(ctx, &rows)
+```
+
+Relation loading batches follow-up `IN (...)` queries automatically for larger parent result sets.
+
 ## Schema Definition
 
 ```go
@@ -248,6 +262,15 @@ if err != nil {
 ```
 
 Rain can compile `CREATE TABLE` SQL directly from schema metadata, including dialect-specific type rendering, defaults, foreign keys, and enum `CHECK` constraints.
+
+Indexes compile separately:
+
+```go
+indexSQL, err := ddl.CreateIndexesSQL(Users)
+if err != nil {
+    panic(err)
+}
+```
 
 This is intentionally limited to schema-to-DDL compilation. Rain does not generate migration diffs or manage migration history.
 

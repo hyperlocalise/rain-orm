@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -59,6 +60,31 @@ type internalUserWithPostsRow struct {
 	Email string                `db:"email"`
 	Name  string                `db:"name"`
 	Posts []internalPostOnlyRow `rain:"relation:posts"`
+}
+
+type internalUserWithPostPointersRow struct {
+	ID    int64                  `db:"id"`
+	Posts []*internalPostOnlyRow `rain:"relation:posts"`
+}
+
+type internalPostWithAuthorPointerRow struct {
+	ID     int64            `db:"id"`
+	UserID int64            `db:"user_id"`
+	Title  string           `db:"title"`
+	Author *internalUserRow `rain:"relation:author"`
+}
+
+type internalUserWithPostsAndAuthorsRow struct {
+	ID    int64                          `db:"id"`
+	Email string                         `db:"email"`
+	Posts []internalPostWithAuthorPtrRow `rain:"relation:posts"`
+}
+
+type internalPostWithAuthorPtrRow struct {
+	ID     int64            `db:"id"`
+	UserID int64            `db:"user_id"`
+	Title  string           `db:"title"`
+	Author *internalUserRow `rain:"relation:author"`
 }
 
 type internalPostOnlyRow struct {
@@ -578,6 +604,18 @@ func TestSelectWithRelations(t *testing.T) {
 		t.Fatalf("expected author alice@example.com, got %#v", postsWithAuthor[0].Author)
 	}
 
+	var postsWithAuthorPtr []internalPostWithAuthorPointerRow
+	if err := db.Select().
+		Table(posts).
+		Where(posts.Title.Eq("Hello from Alice")).
+		WithRelations("author").
+		Scan(ctx, &postsWithAuthorPtr); err != nil {
+		t.Fatalf("select with pointer author relation failed: %v", err)
+	}
+	if len(postsWithAuthorPtr) != 1 || postsWithAuthorPtr[0].Author == nil || postsWithAuthorPtr[0].Author.Email != "alice@example.com" {
+		t.Fatalf("expected pointer author alice@example.com, got %#v", postsWithAuthorPtr)
+	}
+
 	var usersWithPosts []internalUserWithPostsRow
 	if err := db.Select().
 		Table(users).
@@ -593,6 +631,35 @@ func TestSelectWithRelations(t *testing.T) {
 		t.Fatalf("expected two posts for alice, got %d", len(usersWithPosts[0].Posts))
 	}
 
+	var usersWithPostPointers []internalUserWithPostPointersRow
+	if err := db.Select().
+		Table(users).
+		Where(users.ID.Eq(aliceID)).
+		WithRelations("posts").
+		Scan(ctx, &usersWithPostPointers); err != nil {
+		t.Fatalf("select with pointer posts relation failed: %v", err)
+	}
+	if len(usersWithPostPointers) != 1 || len(usersWithPostPointers[0].Posts) != 2 || usersWithPostPointers[0].Posts[0] == nil {
+		t.Fatalf("expected pointer posts relation to populate, got %#v", usersWithPostPointers)
+	}
+
+	var nested []internalUserWithPostsAndAuthorsRow
+	if err := db.Select().
+		Table(users).
+		Where(users.ID.Eq(aliceID)).
+		WithRelations("posts.author").
+		Scan(ctx, &nested); err != nil {
+		t.Fatalf("select with nested relations failed: %v", err)
+	}
+	if len(nested) != 1 || len(nested[0].Posts) != 2 {
+		t.Fatalf("expected nested relation rows, got %#v", nested)
+	}
+	for _, post := range nested[0].Posts {
+		if post.Author == nil || post.Author.Email != "alice@example.com" {
+			t.Fatalf("expected nested author alice@example.com, got %#v", post.Author)
+		}
+	}
+
 	var bad []internalUserRow
 	err = db.Select().Table(users).WithRelations("does_not_exist").Scan(ctx, &bad)
 	if err == nil || !strings.Contains(err.Error(), "unknown relation") {
@@ -603,6 +670,11 @@ func TestSelectWithRelations(t *testing.T) {
 	err = db.Select().Table(users).Where(users.ID.Eq(-999)).WithRelations("does_not_exist").Scan(ctx, &empty)
 	if err == nil || !strings.Contains(err.Error(), "unknown relation") {
 		t.Fatalf("expected unknown relation error for empty result, got %v", err)
+	}
+
+	err = db.Select().Table(users).WithRelations("posts.does_not_exist").Scan(ctx, &bad)
+	if err == nil || !strings.Contains(err.Error(), "unknown relation") {
+		t.Fatalf("expected unknown nested relation error, got %v", err)
 	}
 }
 
@@ -659,6 +731,71 @@ func TestRelationLoadingBatchesQueriesPerRelation(t *testing.T) {
 	}
 	if len(runner.lastQueries) != 2 || !strings.Contains(runner.lastQueries[1], `IN (`) {
 		t.Fatalf("expected relation load query with IN clause, got %#v", runner.lastQueries)
+	}
+}
+
+func TestRelationLoadingChunksLargeINQueries(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db := openInternalQueryDB(t)
+	users, posts := defineInternalQueryTables()
+	createInternalQuerySchema(t, ctx, db)
+
+	for idx := 0; idx < relationBatchSize+5; idx++ {
+		result, err := db.Insert().
+			Table(users).
+			Set(users.Email, fmt.Sprintf("user-%d@example.com", idx)).
+			Set(users.Name, fmt.Sprintf("User %d", idx)).
+			Exec(ctx)
+		if err != nil {
+			t.Fatalf("insert user %d failed: %v", idx, err)
+		}
+		userID, err := result.LastInsertId()
+		if err != nil {
+			t.Fatalf("last insert id %d failed: %v", idx, err)
+		}
+		if _, err := db.Insert().Table(posts).Set(posts.UserID, userID).Set(posts.Title, fmt.Sprintf("Post %d", idx)).Exec(ctx); err != nil {
+			t.Fatalf("insert post %d failed: %v", idx, err)
+		}
+	}
+
+	runner := &countingRunner{base: db}
+	query := &SelectQuery{runner: runner, dialect: db.Dialect()}
+
+	var rows []internalUserWithPostsRow
+	if err := query.Table(users).WithRelations("posts").Scan(ctx, &rows); err != nil {
+		t.Fatalf("chunked relation load failed: %v", err)
+	}
+	if len(rows) != relationBatchSize+5 {
+		t.Fatalf("expected %d users, got %d", relationBatchSize+5, len(rows))
+	}
+	if runner.queryCount != 3 {
+		t.Fatalf("expected 3 query executions (base + 2 relation batches), got %d", runner.queryCount)
+	}
+}
+
+func TestRelationElementTypeFromTypeHandlesPointerSlices(t *testing.T) {
+	t.Parallel()
+
+	users, _ := defineInternalQueryTables()
+	db, err := OpenDialect("sqlite")
+	if err != nil {
+		t.Fatalf("OpenDialect(sqlite): %v", err)
+	}
+
+	parentsType := reflect.TypeOf([]*internalUserWithPostPointersRow{})
+	parentStructType, err := sliceParentStructType(parentsType)
+	if err != nil {
+		t.Fatalf("sliceParentStructType failed: %v", err)
+	}
+
+	relatedType, err := db.Select().relationElementTypeFromType(parentStructType, users.TableDef().Relations[0])
+	if err != nil {
+		t.Fatalf("relationElementTypeFromType failed: %v", err)
+	}
+	if relatedType != reflect.TypeOf(internalPostOnlyRow{}) {
+		t.Fatalf("expected related type %v, got %v", reflect.TypeOf(internalPostOnlyRow{}), relatedType)
 	}
 }
 

@@ -5,13 +5,23 @@ import (
 	"database/sql"
 	"fmt"
 	"reflect"
+	"strconv"
+	"strings"
 
 	"github.com/hyperlocalise/rain-orm/pkg/schema"
 )
 
+const relationBatchSize = 512
+
 type typedKey struct {
-	typeName string
-	value    string
+	typ   reflect.Type
+	value any
+}
+
+type relationLoadNode struct {
+	name     string
+	relation schema.RelationDef
+	children map[string]*relationLoadNode
 }
 
 func (q *SelectQuery) scanRowsWithRelations(ctx context.Context, rows *sql.Rows, dest any) error {
@@ -25,12 +35,15 @@ func (q *SelectQuery) scanRowsWithRelations(ctx context.Context, rows *sql.Rows,
 	if target.Kind() != reflect.Struct && target.Kind() != reflect.Slice {
 		return fmt.Errorf("rain: destination must point to a struct or slice")
 	}
-	if target.Kind() == reflect.Slice && target.Type().Elem().Kind() != reflect.Struct {
-		return fmt.Errorf("rain: relation loading requires destination slice element type to be a struct")
+
+	tableSource, ok := q.table.(tableDefSource)
+	if !ok {
+		return fmt.Errorf("rain: relation loading requires a concrete table source")
 	}
 
-	if _, ok := q.table.(tableDefSource); !ok {
-		return fmt.Errorf("rain: relation loading requires a concrete table source")
+	relationTree, err := buildRelationLoadTree(tableSource.table, q.relationNames)
+	if err != nil {
+		return err
 	}
 
 	containerPtr := dest
@@ -45,7 +58,7 @@ func (q *SelectQuery) scanRowsWithRelations(ctx context.Context, rows *sql.Rows,
 	}
 
 	sliceValue := reflect.ValueOf(containerPtr).Elem()
-	if err := q.loadRelationsIntoSlice(ctx, sliceValue); err != nil {
+	if err := q.loadRelationsIntoSlice(ctx, sliceValue, relationTree); err != nil {
 		return err
 	}
 
@@ -59,27 +72,48 @@ func (q *SelectQuery) scanRowsWithRelations(ctx context.Context, rows *sql.Rows,
 	return nil
 }
 
-func (q *SelectQuery) loadRelationsIntoSlice(ctx context.Context, parents reflect.Value) error {
-	tableSource, ok := q.table.(tableDefSource)
-	if !ok {
-		return fmt.Errorf("rain: relation loading requires a concrete table source")
-	}
-
-	validatedRelations := make([]schema.RelationDef, 0, len(q.relationNames))
-	for _, relationName := range q.relationNames {
-		relation, exists := tableSource.table.RelationByName(relationName)
-		if !exists {
-			return fmt.Errorf("rain: unknown relation %q on table %q", relationName, tableSource.table.Name)
+func buildRelationLoadTree(table *schema.TableDef, relationNames []string) (map[string]*relationLoadNode, error) {
+	tree := make(map[string]*relationLoadNode, len(relationNames))
+	for _, rawName := range relationNames {
+		parts := strings.Split(rawName, ".")
+		currentTable := table
+		currentLevel := tree
+		for _, part := range parts {
+			part = strings.TrimSpace(part)
+			if part == "" {
+				return nil, fmt.Errorf("rain: relation path %q contains an empty segment", rawName)
+			}
+			relation, exists := currentTable.RelationByName(part)
+			if !exists {
+				return nil, fmt.Errorf("rain: unknown relation %q on table %q", part, currentTable.Name)
+			}
+			node, exists := currentLevel[part]
+			if !exists {
+				node = &relationLoadNode{
+					name:     part,
+					relation: relation,
+					children: make(map[string]*relationLoadNode),
+				}
+				currentLevel[part] = node
+			}
+			currentTable = relation.TargetTable
+			currentLevel = node.children
 		}
-		validatedRelations = append(validatedRelations, relation)
 	}
+	return tree, nil
+}
 
-	if parents.Len() == 0 {
+func (q *SelectQuery) loadRelationsIntoSlice(
+	ctx context.Context,
+	parents reflect.Value,
+	relationTree map[string]*relationLoadNode,
+) error {
+	if parents.Len() == 0 || len(relationTree) == 0 {
 		return nil
 	}
 
-	for _, relation := range validatedRelations {
-		if err := q.loadRelation(ctx, parents, relation); err != nil {
+	for _, node := range relationTree {
+		if err := q.loadRelationNode(ctx, parents, node); err != nil {
 			return err
 		}
 	}
@@ -87,10 +121,13 @@ func (q *SelectQuery) loadRelationsIntoSlice(ctx context.Context, parents reflec
 	return nil
 }
 
-func (q *SelectQuery) loadRelation(ctx context.Context, parents reflect.Value, relation schema.RelationDef) error {
+func (q *SelectQuery) loadRelationNode(ctx context.Context, parents reflect.Value, node *relationLoadNode) error {
 	for idx := 0; idx < parents.Len(); idx++ {
-		parent := parents.Index(idx)
-		if err := q.validateRelationField(parent, relation); err != nil {
+		parent := dereferenceModelValue(parents.Index(idx))
+		if !parent.IsValid() {
+			continue
+		}
+		if err := q.validateRelationField(parent, node.relation); err != nil {
 			return err
 		}
 	}
@@ -98,8 +135,11 @@ func (q *SelectQuery) loadRelation(ctx context.Context, parents reflect.Value, r
 	sourceKeys := make(map[typedKey]any, parents.Len())
 	orderedSourceKeys := make([]any, 0, parents.Len())
 	for idx := 0; idx < parents.Len(); idx++ {
-		parent := parents.Index(idx)
-		keyValue, ok, err := relationColumnValue(parent, relation.SourceColumn.Name)
+		parent := dereferenceModelValue(parents.Index(idx))
+		if !parent.IsValid() {
+			continue
+		}
+		keyValue, ok, err := relationColumnValue(parent, node.relation.SourceColumn.Name)
 		if err != nil {
 			return err
 		}
@@ -117,22 +157,24 @@ func (q *SelectQuery) loadRelation(ctx context.Context, parents reflect.Value, r
 		return nil
 	}
 
-	relatedByTargetKey := make(map[typedKey][]reflect.Value, len(sourceKeys))
-	relatedElemType, err := q.relationElementType(parents.Index(0), relation)
+	relatedRows, err := q.loadRelatedRows(ctx, parents, node.relation, orderedSourceKeys)
 	if err != nil {
 		return err
 	}
-	query := &SelectQuery{runner: q.runner, dialect: q.dialect, table: tableDefSource{table: relation.TargetTable}}
-	relatedRows := reflect.New(reflect.SliceOf(relatedElemType))
-	if err := query.Where(schema.Ref(relation.TargetColumn).In(orderedSourceKeys...)).
-		Scan(ctx, relatedRows.Interface()); err != nil {
-		if err != sql.ErrNoRows {
+
+	if len(node.children) > 0 {
+		if err := q.loadRelationsIntoSlice(ctx, relatedRows, node.children); err != nil {
 			return err
 		}
 	}
-	for rowIdx := 0; rowIdx < relatedRows.Elem().Len(); rowIdx++ {
-		related := relatedRows.Elem().Index(rowIdx)
-		targetValue, ok, err := relationColumnValue(related, relation.TargetColumn.Name)
+
+	relatedByTargetKey := make(map[typedKey][]reflect.Value, len(sourceKeys))
+	for rowIdx := 0; rowIdx < relatedRows.Len(); rowIdx++ {
+		related := dereferenceModelValue(relatedRows.Index(rowIdx))
+		if !related.IsValid() {
+			continue
+		}
+		targetValue, ok, err := relationColumnValue(related, node.relation.TargetColumn.Name)
 		if err != nil {
 			return err
 		}
@@ -143,8 +185,11 @@ func (q *SelectQuery) loadRelation(ctx context.Context, parents reflect.Value, r
 	}
 
 	for idx := 0; idx < parents.Len(); idx++ {
-		parent := parents.Index(idx)
-		sourceValue, ok, err := relationColumnValue(parent, relation.SourceColumn.Name)
+		parent := dereferenceModelValue(parents.Index(idx))
+		if !parent.IsValid() {
+			continue
+		}
+		sourceValue, ok, err := relationColumnValue(parent, node.relation.SourceColumn.Name)
 		if err != nil {
 			return err
 		}
@@ -152,12 +197,45 @@ func (q *SelectQuery) loadRelation(ctx context.Context, parents reflect.Value, r
 			continue
 		}
 		matches := relatedByTargetKey[toTypedKey(sourceValue)]
-		if err := setRelationValue(parent, relation.Name, relation.Type, matches); err != nil {
+		if err := setRelationValue(parent, node.name, node.relation.Type, matches); err != nil {
 			return err
 		}
 	}
 
 	return nil
+}
+
+func (q *SelectQuery) loadRelatedRows(
+	ctx context.Context,
+	parents reflect.Value,
+	relation schema.RelationDef,
+	sourceKeys []any,
+) (reflect.Value, error) {
+	parentStructType, err := sliceParentStructType(parents.Type())
+	if err != nil {
+		return reflect.Value{}, err
+	}
+	relatedElemType, err := q.relationElementTypeFromType(parentStructType, relation)
+	if err != nil {
+		return reflect.Value{}, err
+	}
+
+	relatedRows := reflect.New(reflect.SliceOf(relatedElemType))
+	for start := 0; start < len(sourceKeys); start += relationBatchSize {
+		end := min(start+relationBatchSize, len(sourceKeys))
+		batchDest := reflect.New(reflect.SliceOf(relatedElemType))
+		query := &SelectQuery{runner: q.runner, dialect: q.dialect, table: tableDefSource{table: relation.TargetTable}}
+		if err := query.Where(schema.Ref(relation.TargetColumn).In(sourceKeys[start:end]...)).
+			Scan(ctx, batchDest.Interface()); err != nil {
+			if err == sql.ErrNoRows {
+				continue
+			}
+			return reflect.Value{}, err
+		}
+		relatedRows.Elem().Set(reflect.AppendSlice(relatedRows.Elem(), batchDest.Elem()))
+	}
+
+	return relatedRows.Elem(), nil
 }
 
 func (q *SelectQuery) validateRelationField(parent reflect.Value, relation schema.RelationDef) error {
@@ -179,30 +257,49 @@ func (q *SelectQuery) validateRelationField(parent reflect.Value, relation schem
 		if field.Kind() != reflect.Slice {
 			return fmt.Errorf("rain: relation %q must target a slice field", relation.Name)
 		}
+		elemType := field.Type().Elem()
+		if elemType.Kind() != reflect.Struct && (elemType.Kind() != reflect.Pointer || elemType.Elem().Kind() != reflect.Struct) {
+			return fmt.Errorf("rain: relation %q must target a slice of struct or pointer-to-struct", relation.Name)
+		}
 	default:
 		return fmt.Errorf("rain: unsupported relation type %q", relation.Type)
 	}
 	return nil
 }
 
-func (q *SelectQuery) relationElementType(parent reflect.Value, relation schema.RelationDef) (reflect.Type, error) {
-	meta, _, err := lookupModelMeta(parent.Addr().Interface())
-	if err != nil {
-		return nil, err
+func sliceParentStructType(sliceType reflect.Type) (reflect.Type, error) {
+	if sliceType.Kind() != reflect.Slice {
+		return nil, fmt.Errorf("rain: relation loading requires a slice, got %s", sliceType)
 	}
+	elemType := sliceType.Elem()
+	if elemType.Kind() == reflect.Pointer {
+		elemType = elemType.Elem()
+	}
+	if elemType.Kind() != reflect.Struct {
+		return nil, fmt.Errorf("rain: relation loading requires slice elements to be structs, got %s", sliceType.Elem())
+	}
+	return elemType, nil
+}
+
+func (q *SelectQuery) relationElementTypeFromType(parentType reflect.Type, relation schema.RelationDef) (reflect.Type, error) {
+	meta := lookupModelMetaForType(parentType)
 	fieldInfo, ok := meta.byRelation[relation.Name]
 	if !ok {
 		return nil, fmt.Errorf("rain: relation %q not found in model metadata", relation.Name)
 	}
-	field := parent.FieldByIndex(fieldInfo.index)
+	fieldType := parentType.FieldByIndex(fieldInfo.index).Type
 	switch relation.Type {
 	case schema.RelationTypeBelongsTo:
-		if field.Kind() == reflect.Pointer {
-			return field.Type().Elem(), nil
+		if fieldType.Kind() == reflect.Pointer {
+			return fieldType.Elem(), nil
 		}
-		return field.Type(), nil
+		return fieldType, nil
 	case schema.RelationTypeHasMany:
-		return field.Type().Elem(), nil
+		elemType := fieldType.Elem()
+		if elemType.Kind() == reflect.Pointer {
+			return elemType.Elem(), nil
+		}
+		return elemType, nil
 	default:
 		return nil, fmt.Errorf("rain: unsupported relation type %q", relation.Type)
 	}
@@ -243,7 +340,10 @@ func setRelationValue(parent reflect.Value, relationName string, relationType sc
 		if len(matches) == 0 {
 			return nil
 		}
-		item := matches[0]
+		item := dereferenceModelValue(matches[0])
+		if !item.IsValid() {
+			return nil
+		}
 		if field.Kind() == reflect.Pointer {
 			ptr := reflect.New(field.Type().Elem())
 			ptr.Elem().Set(item)
@@ -254,8 +354,19 @@ func setRelationValue(parent reflect.Value, relationName string, relationType sc
 		return nil
 	case schema.RelationTypeHasMany:
 		slice := reflect.MakeSlice(field.Type(), 0, len(matches))
+		pointerElems := field.Type().Elem().Kind() == reflect.Pointer
 		for _, match := range matches {
-			slice = reflect.Append(slice, match)
+			item := dereferenceModelValue(match)
+			if !item.IsValid() {
+				continue
+			}
+			if pointerElems {
+				ptr := reflect.New(field.Type().Elem().Elem())
+				ptr.Elem().Set(item)
+				slice = reflect.Append(slice, ptr)
+				continue
+			}
+			slice = reflect.Append(slice, item)
 		}
 		field.Set(slice)
 		return nil
@@ -264,6 +375,33 @@ func setRelationValue(parent reflect.Value, relationName string, relationType sc
 	}
 }
 
+func dereferenceModelValue(value reflect.Value) reflect.Value {
+	current := value
+	for current.IsValid() && current.Kind() == reflect.Pointer {
+		if current.IsNil() {
+			return reflect.Value{}
+		}
+		current = current.Elem()
+	}
+	return current
+}
+
 func toTypedKey(value any) typedKey {
-	return typedKey{typeName: fmt.Sprintf("%T", value), value: fmt.Sprint(value)}
+	typ := reflect.TypeOf(value)
+	return typedKey{typ: typ, value: normalizeTypedKeyValue(value)}
+}
+
+func normalizeTypedKeyValue(value any) any {
+	if bytes, ok := value.([]byte); ok {
+		return string(bytes)
+	}
+
+	rv := reflect.ValueOf(value)
+	if rv.IsValid() && rv.Type().Comparable() {
+		return value
+	}
+
+	// Fallback for uncommon non-comparable key types. Primary/foreign key values are
+	// expected to be comparable primitives or []byte in normal ORM usage.
+	return strconv.Quote(fmt.Sprintf("%#v", value))
 }
