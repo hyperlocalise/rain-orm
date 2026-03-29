@@ -209,7 +209,7 @@ func columnDefinitionSQL(d dialect.Dialect, table *schema.TableDef, column *sche
 	if inlinePrimaryKey {
 		parts = append(parts, "PRIMARY KEY")
 	}
-	if column.AutoIncrement && shouldEmitAutoIncrementKeyword(d, table, column, inlinePrimaryKey) {
+	if column.AutoIncrement && shouldEmitAutoIncrementKeyword(d, column, inlinePrimaryKey) {
 		parts = append(parts, d.AutoIncrementKeyword())
 	}
 	if !column.Nullable && !inlinePrimaryKey {
@@ -250,7 +250,7 @@ func columnTypeSQL(d dialect.Dialect, column *schema.ColumnDef) (string, error) 
 	return typeSQL, nil
 }
 
-func shouldEmitAutoIncrementKeyword(d dialect.Dialect, table *schema.TableDef, column *schema.ColumnDef, inlinePrimaryKey bool) bool {
+func shouldEmitAutoIncrementKeyword(d dialect.Dialect, column *schema.ColumnDef, inlinePrimaryKey bool) bool {
 	if !column.AutoIncrement {
 		return false
 	}

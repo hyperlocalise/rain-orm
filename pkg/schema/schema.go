@@ -422,6 +422,9 @@ func (t *TableModel) Check(name string, predicate Predicate) {
 	if predicate == nil {
 		panic("schema: check constraint requires a predicate")
 	}
+	if logical, ok := predicate.(LogicalExpr); ok && len(logical.Exprs) == 0 {
+		panic("schema: check constraint logical expression must contain at least one predicate")
+	}
 
 	t.def.Constraints = append(t.def.Constraints, ConstraintDef{
 		Name:  name,

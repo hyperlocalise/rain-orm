@@ -172,6 +172,8 @@ func TestSchemaInternalPanicsAndCloners(t *testing.T) {
 	assertPanics(t, func() { users.ForeignKey("") })
 	assertPanics(t, func() { users.Check("", users.Email.IsNotNull()) })
 	assertPanics(t, func() { users.Check("users_bad_check", nil) })
+	assertPanics(t, func() { users.Check("users_bad_or_check", Or()) })
+	assertPanics(t, func() { users.Check("users_bad_and_check", And()) })
 	assertPanics(t, func() {
 		idx := users.Index("also-broken")
 		idx.On(OrderExpr{Expr: Raw("x"), Direction: SortAsc})
