@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -525,6 +526,9 @@ func TestSQLiteIntegrationRichAdvancedSelectsAndPreparedQueries(t *testing.T) {
 	fixture := defineSQLiteRichTables()
 	createSQLiteRichSchema(t, ctx, db, fixture)
 	seeded := seedSQLiteRichFixture(t, ctx, db, fixture)
+	if seeded.AliceID == 0 {
+		t.Fatalf("expected seeded alice id to be populated")
+	}
 
 	var distinctStatuses []sqliteRichStatusRow
 	if err := db.Select().
@@ -695,9 +699,6 @@ func TestSQLiteIntegrationRichAdvancedSelectsAndPreparedQueries(t *testing.T) {
 		t.Fatalf("close tx prepared query failed: %v", err)
 	}
 
-	if seeded.AliceID == 0 {
-		t.Fatalf("expected seeded alice id to be populated")
-	}
 }
 
 func TestSQLiteIntegrationRichRelationsAndTransactions(t *testing.T) {
@@ -901,7 +902,7 @@ func TestSQLiteIntegrationRichCreateIndexesSQL(t *testing.T) {
 		"rich_users_status_created_at_idx",
 	}
 	for _, want := range wantIndexes {
-		if !slicesContain(names, want) {
+		if !slices.Contains(names, want) {
 			t.Fatalf("expected index %q in sqlite_master, got %#v", want, names)
 		}
 	}
@@ -1126,13 +1127,4 @@ func seedSQLiteRichFixture(tb testing.TB, ctx context.Context, db *rain.DB, fixt
 		ProductID:     productID,
 		EngineeringID: engineeringID,
 	}
-}
-
-func slicesContain(items []string, want string) bool {
-	for _, item := range items {
-		if item == want {
-			return true
-		}
-	}
-	return false
 }
