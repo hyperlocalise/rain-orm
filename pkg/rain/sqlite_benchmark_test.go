@@ -181,10 +181,7 @@ func BenchmarkSQLiteSelectJoinScan(b *testing.B) {
 func BenchmarkSQLiteSelectWithRelations(b *testing.B) {
 	runSQLiteBenchmarkDatasets(b, func(b *testing.B, fixture *benchmarkFixture, dataset benchmarkDataset) {
 		ctx := context.Background()
-		limit := min(dataset.users/10, 100)
-		if limit < 1 {
-			limit = 1
-		}
+		limit := max(min(dataset.users/10, 100), 1)
 		b.ReportAllocs()
 		b.ResetTimer()
 
@@ -209,7 +206,6 @@ func runSQLiteBenchmarkDatasets(
 	b.Helper()
 
 	for _, dataset := range benchmarkDatasets {
-		dataset := dataset
 		b.Run(dataset.name, func(b *testing.B) {
 			fixture := newSQLiteBenchmarkFixture(b, dataset)
 			run(b, fixture, dataset)
