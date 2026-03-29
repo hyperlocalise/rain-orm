@@ -41,7 +41,6 @@ type queryCacheKeyMaterial struct {
 	SQL       string   `json:"sql"`
 	Args      []any    `json:"args"`
 	Namespace string   `json:"namespace,omitempty"`
-	Tags      []string `json:"tags,omitempty"`
 	Relations []string `json:"relations,omitempty"`
 }
 
@@ -78,7 +77,6 @@ func buildQueryCacheKey(dialectName string, sqlText string, args []any, relation
 	}
 	if opts != nil {
 		material.Namespace = opts.namespace
-		material.Tags = append([]string(nil), opts.tags...)
 	}
 
 	payload, err := json.Marshal(material)
@@ -95,9 +93,11 @@ type MemoryQueryCache struct {
 	entries    map[string]memoryQueryCacheEntry
 	tagMembers map[string]map[string]struct{}
 	now        func() time.Time
+	seq        uint64
 }
 
 type memoryQueryCacheEntry struct {
+	version   uint64
 	value     []byte
 	expiresAt time.Time
 	tags      []string
@@ -121,7 +121,10 @@ func (c *MemoryQueryCache) Get(_ context.Context, key string) ([]byte, bool, err
 	}
 	if c.now().After(entry.expiresAt) {
 		c.mu.Lock()
-		c.deleteEntryLocked(key, entry)
+		current, stillPresent := c.entries[key]
+		if stillPresent && current.version == entry.version && c.now().After(current.expiresAt) {
+			c.deleteEntryLocked(key, current)
+		}
 		c.mu.Unlock()
 		return nil, false, nil
 	}
@@ -140,6 +143,8 @@ func (c *MemoryQueryCache) Set(_ context.Context, key string, value []byte, ttl 
 	}
 
 	c.mu.Lock()
+	c.seq++
+	entry.version = c.seq
 	if prev, ok := c.entries[key]; ok {
 		c.deleteEntryLocked(key, prev)
 	}
