@@ -9,6 +9,10 @@ import (
 	"time"
 )
 
+type scannerInterface = interface {
+	Scan(src any) error
+}
+
 type modelField struct {
 	index []int
 }
@@ -60,8 +64,8 @@ func buildModelMeta(meta *modelMeta, typ reflect.Type, prefix []int) {
 		}
 
 		current := append(append([]int{}, prefix...), fieldIndex)
-		if field.Anonymous && field.Type.Kind() == reflect.Struct {
-			buildModelMeta(meta, field.Type, current)
+		if embedded := embeddedStructType(field); embedded != nil {
+			buildModelMeta(meta, embedded, current)
 			continue
 		}
 
@@ -75,6 +79,22 @@ func buildModelMeta(meta *modelMeta, typ reflect.Type, prefix []int) {
 			meta.byRelation[relationName] = modelField{index: current}
 		}
 	}
+}
+
+func embeddedStructType(field reflect.StructField) reflect.Type {
+	if !field.Anonymous {
+		return nil
+	}
+
+	typ := field.Type
+	if typ.Kind() == reflect.Pointer {
+		typ = typ.Elem()
+	}
+	if typ.Kind() != reflect.Struct {
+		return nil
+	}
+
+	return typ
 }
 
 func relationTagName(tag string) string {
@@ -144,7 +164,10 @@ func scanCurrentRow(rows *sql.Rows, target reflect.Value) error {
 			continue
 		}
 
-		field := target.FieldByIndex(fieldInfo.index)
+		field, err := fieldByIndexAlloc(target, fieldInfo.index)
+		if err != nil {
+			return err
+		}
 		scanTarget, finalize, err := prepareScanTarget(field)
 		if err != nil {
 			return err
@@ -169,7 +192,30 @@ func scanCurrentRow(rows *sql.Rows, target reflect.Value) error {
 	return nil
 }
 
+func fieldByIndexAlloc(value reflect.Value, index []int) (reflect.Value, error) {
+	current := value
+	for position, part := range index {
+		field := current.Field(part)
+		if position < len(index)-1 && field.Kind() == reflect.Pointer {
+			if field.IsNil() {
+				if !field.CanSet() {
+					return reflect.Value{}, fmt.Errorf("rain: embedded pointer field %s is not settable", field.Type())
+				}
+				field.Set(reflect.New(field.Type().Elem()))
+			}
+			current = field.Elem()
+			continue
+		}
+		current = field
+	}
+	return current, nil
+}
+
 func prepareScanTarget(field reflect.Value) (any, func() error, error) {
+	if scanTarget, finalize, ok := scannerTarget(field); ok {
+		return scanTarget, finalize, nil
+	}
+
 	if field.Kind() != reflect.Pointer {
 		if !field.CanAddr() {
 			return nil, nil, fmt.Errorf("rain: field %s is not addressable", field.Type())
@@ -177,54 +223,169 @@ func prepareScanTarget(field reflect.Value) (any, func() error, error) {
 		return field.Addr().Interface(), nil, nil
 	}
 
-	elemType := field.Type().Elem()
-	switch {
-	case elemType.Kind() == reflect.String:
-		holder := sql.Null[string]{}
-		return &holder, func() error {
-			if !holder.Valid {
-				field.Set(reflect.Zero(field.Type()))
-				return nil
-			}
-			value := holder.V
-			field.Set(reflect.ValueOf(&value))
-			return nil
-		}, nil
-	case elemType.Kind() == reflect.Int || elemType.Kind() == reflect.Int64:
-		holder := sql.Null[int64]{}
-		return &holder, func() error {
-			if !holder.Valid {
-				field.Set(reflect.Zero(field.Type()))
-				return nil
-			}
-			ptr := reflect.New(elemType)
-			ptr.Elem().SetInt(holder.V)
-			field.Set(ptr)
-			return nil
-		}, nil
-	case elemType.Kind() == reflect.Bool:
-		holder := sql.Null[bool]{}
-		return &holder, func() error {
-			if !holder.Valid {
-				field.Set(reflect.Zero(field.Type()))
-				return nil
-			}
-			value := holder.V
-			field.Set(reflect.ValueOf(&value))
-			return nil
-		}, nil
-	case elemType == reflect.TypeFor[time.Time]():
-		holder := sql.Null[time.Time]{}
-		return &holder, func() error {
-			if !holder.Valid {
-				field.Set(reflect.Zero(field.Type()))
-				return nil
-			}
-			value := holder.V
-			field.Set(reflect.ValueOf(&value))
-			return nil
-		}, nil
-	default:
-		return nil, nil, fmt.Errorf("rain: unsupported nullable field type %s", field.Type())
+	for _, handler := range nullablePrimitiveHandlers() {
+		if scanTarget, finalize, ok := handler(field); ok {
+			return scanTarget, finalize, nil
+		}
 	}
+
+	return nil, nil, fmt.Errorf("rain: unsupported nullable field type %s", field.Type())
+}
+
+type nullableHandler func(field reflect.Value) (target any, finalize func() error, ok bool)
+
+func nullablePrimitiveHandlers() []nullableHandler {
+	return []nullableHandler{
+		nullableStringTarget,
+		nullableSignedIntTarget,
+		nullableUnsignedIntTarget,
+		nullableFloatTarget,
+		nullableBoolTarget,
+		nullableTimeTarget,
+	}
+}
+
+func scannerTarget(field reflect.Value) (any, func() error, bool) {
+	scannerType := reflect.TypeFor[scannerInterface]()
+
+	if field.Kind() != reflect.Pointer {
+		if field.CanAddr() && field.Addr().Type().Implements(scannerType) {
+			return field.Addr().Interface(), nil, true
+		}
+		return nil, nil, false
+	}
+
+	fieldType := field.Type()
+	if fieldType.Implements(scannerType) {
+		receiver := reflect.New(fieldType.Elem())
+		return receiver.Interface(), func() error {
+			field.Set(receiver)
+			return nil
+		}, true
+	}
+
+	if fieldType.Elem().Implements(scannerType) {
+		receiver := reflect.New(fieldType.Elem())
+		return receiver.Interface(), func() error {
+			field.Set(receiver)
+			return nil
+		}, true
+	}
+
+	return nil, nil, false
+}
+
+func nullableStringTarget(field reflect.Value) (any, func() error, bool) {
+	if field.Type().Elem().Kind() != reflect.String {
+		return nil, nil, false
+	}
+
+	holder := sql.Null[string]{}
+	return &holder, func() error {
+		if !holder.Valid {
+			field.Set(reflect.Zero(field.Type()))
+			return nil
+		}
+		value := holder.V
+		field.Set(reflect.ValueOf(&value))
+		return nil
+	}, true
+}
+
+func nullableSignedIntTarget(field reflect.Value) (any, func() error, bool) {
+	elemType := field.Type().Elem()
+	switch elemType.Kind() {
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+	default:
+		return nil, nil, false
+	}
+
+	holder := sql.Null[int64]{}
+	return &holder, func() error {
+		if !holder.Valid {
+			field.Set(reflect.Zero(field.Type()))
+			return nil
+		}
+		ptr := reflect.New(elemType)
+		ptr.Elem().SetInt(holder.V)
+		field.Set(ptr)
+		return nil
+	}, true
+}
+
+func nullableUnsignedIntTarget(field reflect.Value) (any, func() error, bool) {
+	elemType := field.Type().Elem()
+	switch elemType.Kind() {
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+	default:
+		return nil, nil, false
+	}
+
+	holder := sql.Null[int64]{}
+	return &holder, func() error {
+		if !holder.Valid {
+			field.Set(reflect.Zero(field.Type()))
+			return nil
+		}
+		if holder.V < 0 {
+			return fmt.Errorf("rain: cannot scan negative value %d into %s", holder.V, field.Type())
+		}
+		ptr := reflect.New(elemType)
+		ptr.Elem().SetUint(uint64(holder.V))
+		field.Set(ptr)
+		return nil
+	}, true
+}
+
+func nullableFloatTarget(field reflect.Value) (any, func() error, bool) {
+	elemType := field.Type().Elem()
+	if elemType.Kind() != reflect.Float32 && elemType.Kind() != reflect.Float64 {
+		return nil, nil, false
+	}
+
+	holder := sql.Null[float64]{}
+	return &holder, func() error {
+		if !holder.Valid {
+			field.Set(reflect.Zero(field.Type()))
+			return nil
+		}
+		ptr := reflect.New(elemType)
+		ptr.Elem().SetFloat(holder.V)
+		field.Set(ptr)
+		return nil
+	}, true
+}
+
+func nullableBoolTarget(field reflect.Value) (any, func() error, bool) {
+	if field.Type().Elem().Kind() != reflect.Bool {
+		return nil, nil, false
+	}
+
+	holder := sql.Null[bool]{}
+	return &holder, func() error {
+		if !holder.Valid {
+			field.Set(reflect.Zero(field.Type()))
+			return nil
+		}
+		value := holder.V
+		field.Set(reflect.ValueOf(&value))
+		return nil
+	}, true
+}
+
+func nullableTimeTarget(field reflect.Value) (any, func() error, bool) {
+	if field.Type().Elem() != reflect.TypeFor[time.Time]() {
+		return nil, nil, false
+	}
+
+	holder := sql.Null[time.Time]{}
+	return &holder, func() error {
+		if !holder.Valid {
+			field.Set(reflect.Zero(field.Type()))
+			return nil
+		}
+		value := holder.V
+		field.Set(reflect.ValueOf(&value))
+		return nil
+	}, true
 }
