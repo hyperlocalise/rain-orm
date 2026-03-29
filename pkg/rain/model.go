@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"reflect"
+	"strings"
 	"sync"
 	"time"
 )
@@ -13,7 +14,8 @@ type modelField struct {
 }
 
 type modelMeta struct {
-	byColumn map[string]modelField
+	byColumn   map[string]modelField
+	byRelation map[string]modelField
 }
 
 var modelMetaCache sync.Map
@@ -40,7 +42,10 @@ func lookupModelMeta(model any) (*modelMeta, reflect.Value, error) {
 		return cached.(*modelMeta), value, nil
 	}
 
-	meta := &modelMeta{byColumn: make(map[string]modelField, typ.NumField())}
+	meta := &modelMeta{
+		byColumn:   make(map[string]modelField, typ.NumField()),
+		byRelation: make(map[string]modelField, typ.NumField()),
+	}
 	buildModelMeta(meta, typ, nil)
 	actual, _ := modelMetaCache.LoadOrStore(typ, meta)
 
@@ -61,12 +66,26 @@ func buildModelMeta(meta *modelMeta, typ reflect.Type, prefix []int) {
 		}
 
 		columnName := field.Tag.Get("db")
-		if columnName == "" || columnName == "-" {
-			continue
+		if columnName != "" && columnName != "-" {
+			meta.byColumn[columnName] = modelField{index: current}
 		}
 
-		meta.byColumn[columnName] = modelField{index: current}
+		relationName := relationTagName(field.Tag.Get("rain"))
+		if relationName != "" {
+			meta.byRelation[relationName] = modelField{index: current}
+		}
 	}
+}
+
+func relationTagName(tag string) string {
+	trimmed := strings.TrimSpace(tag)
+	if trimmed == "" || trimmed == "-" {
+		return ""
+	}
+	if relation, ok := strings.CutPrefix(trimmed, "relation:"); ok {
+		return strings.TrimSpace(relation)
+	}
+	return ""
 }
 
 func scanRows(rows *sql.Rows, dest any) error {

@@ -188,3 +188,32 @@ func TestExpandedColumnTypesMetadata(t *testing.T) {
 		}
 	}
 }
+
+func TestRelationMetadataRegistration(t *testing.T) {
+	users := schema.Define("users", func(tu *usersTable) {
+		tu.ID = tu.BigSerial("id").PrimaryKey()
+		tu.Email = tu.VarChar("email", 255).NotNull()
+		tu.Active = tu.Boolean("active").NotNull().Default(true)
+		tu.CreatedAt = tu.TimestampTZ("created_at").NotNull().DefaultNow()
+	})
+	posts := schema.Define("posts", func(tp *postsTable) {
+		tp.ID = tp.BigSerial("id").PrimaryKey()
+		tp.UserID = tp.BigInt("user_id").NotNull().References(users.ID)
+		tp.Title = tp.Text("title").NotNull()
+		tp.BelongsTo("author", tp.UserID, users.ID)
+	})
+
+	if got := len(posts.TableDef().Relations); got != 1 {
+		t.Fatalf("expected 1 relation, got %d", got)
+	}
+	relation, ok := posts.TableDef().RelationByName("author")
+	if !ok {
+		t.Fatalf("expected relation author")
+	}
+	if relation.Type != schema.RelationTypeBelongsTo {
+		t.Fatalf("expected belongs_to relation, got %q", relation.Type)
+	}
+	if relation.SourceColumn.Name != "user_id" || relation.TargetColumn.Name != "id" || relation.TargetTable.Name != "users" {
+		t.Fatalf("unexpected relation metadata: %#v", relation)
+	}
+}

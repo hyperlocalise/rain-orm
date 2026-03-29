@@ -100,8 +100,10 @@ type TableDef struct {
 	Columns     []*ColumnDef
 	Indexes     []IndexDef
 	ForeignKeys []ForeignKeyDef
+	Relations   []RelationDef
 
-	columnsByName map[string]*ColumnDef
+	columnsByName   map[string]*ColumnDef
+	relationsByName map[string]RelationDef
 }
 
 // ColumnDef stores immutable column metadata after schema construction.
@@ -124,6 +126,23 @@ type ForeignKeyDef struct {
 	Column           *ColumnDef
 	ReferencedTable  *TableDef
 	ReferencedColumn *ColumnDef
+}
+
+// RelationType identifies how two tables are related.
+type RelationType string
+
+const (
+	RelationTypeBelongsTo RelationType = "belongs_to"
+	RelationTypeHasMany   RelationType = "has_many"
+)
+
+// RelationDef stores table-level relation metadata used by relation loading.
+type RelationDef struct {
+	Name         string
+	Type         RelationType
+	SourceColumn *ColumnDef
+	TargetTable  *TableDef
+	TargetColumn *ColumnDef
 }
 
 // IndexDef stores table-level index metadata.
@@ -159,6 +178,12 @@ func (t *TableModel) TableDef() *TableDef {
 func (t *TableDef) ColumnByName(name string) (*ColumnDef, bool) {
 	column, ok := t.columnsByName[name]
 	return column, ok
+}
+
+// RelationByName returns a relation definition by name.
+func (t *TableDef) RelationByName(name string) (RelationDef, bool) {
+	relation, ok := t.relationsByName[name]
+	return relation, ok
 }
 
 // C returns an untyped column handle by name for index definitions or dynamic access.
@@ -321,11 +346,13 @@ func (t *TableModel) UniqueIndex(name string) *IndexBuilder {
 func Define[T any](name string, fn func(*T)) *T {
 	handle := new(T)
 	def := &TableDef{
-		Name:          name,
-		Columns:       make([]*ColumnDef, 0, 8),
-		Indexes:       make([]IndexDef, 0, 4),
-		ForeignKeys:   make([]ForeignKeyDef, 0, 4),
-		columnsByName: make(map[string]*ColumnDef, 8),
+		Name:            name,
+		Columns:         make([]*ColumnDef, 0, 8),
+		Indexes:         make([]IndexDef, 0, 4),
+		ForeignKeys:     make([]ForeignKeyDef, 0, 4),
+		Relations:       make([]RelationDef, 0, 4),
+		columnsByName:   make(map[string]*ColumnDef, 8),
+		relationsByName: make(map[string]RelationDef, 4),
 	}
 	bindTableModel(handle, def)
 	fn(handle)
@@ -438,6 +465,49 @@ func (c *Column[T]) References(other ColumnReference) *Column[T] {
 	c.def.Table.ForeignKeys = append(c.def.Table.ForeignKeys, ref)
 
 	return c
+}
+
+// BelongsTo registers a belongs-to relation on the table.
+func (t *TableModel) BelongsTo(name string, source ColumnReference, target ColumnReference) {
+	t.addRelation(RelationDef{
+		Name:         name,
+		Type:         RelationTypeBelongsTo,
+		SourceColumn: source.ColumnDef(),
+		TargetTable:  target.ColumnDef().Table,
+		TargetColumn: target.ColumnDef(),
+	})
+}
+
+// HasMany registers a has-many relation on the table.
+func (t *TableModel) HasMany(name string, source ColumnReference, target ColumnReference) {
+	t.addRelation(RelationDef{
+		Name:         name,
+		Type:         RelationTypeHasMany,
+		SourceColumn: source.ColumnDef(),
+		TargetTable:  target.ColumnDef().Table,
+		TargetColumn: target.ColumnDef(),
+	})
+}
+
+func (t *TableModel) addRelation(relation RelationDef) {
+	if t.def == nil {
+		panic("schema: table model is not initialized")
+	}
+	if relation.Name == "" {
+		panic("schema: relation name cannot be empty")
+	}
+	if relation.SourceColumn == nil || relation.TargetTable == nil || relation.TargetColumn == nil {
+		panic(fmt.Sprintf("schema: relation %q requires source and target columns", relation.Name))
+	}
+	if relation.SourceColumn.Table != t.def {
+		panic(fmt.Sprintf("schema: relation %q source column must belong to table %q", relation.Name, t.def.Name))
+	}
+	if _, exists := t.def.relationsByName[relation.Name]; exists {
+		panic(fmt.Sprintf("schema: relation %q already defined on table %q", relation.Name, t.def.Name))
+	}
+
+	t.def.Relations = append(t.def.Relations, relation)
+	t.def.relationsByName[relation.Name] = relation
 }
 
 // Eq compares this column to a Go value.
@@ -647,12 +717,14 @@ func addColumn[T any](table *TableDef, name string, columnType ColumnType, nulla
 
 func cloneTableDef(src *TableDef, alias string) *TableDef {
 	cloned := &TableDef{
-		Name:          src.Name,
-		Alias:         alias,
-		Columns:       make([]*ColumnDef, 0, len(src.Columns)),
-		Indexes:       make([]IndexDef, len(src.Indexes)),
-		ForeignKeys:   make([]ForeignKeyDef, 0, len(src.ForeignKeys)),
-		columnsByName: make(map[string]*ColumnDef, len(src.Columns)),
+		Name:            src.Name,
+		Alias:           alias,
+		Columns:         make([]*ColumnDef, 0, len(src.Columns)),
+		Indexes:         make([]IndexDef, len(src.Indexes)),
+		ForeignKeys:     make([]ForeignKeyDef, 0, len(src.ForeignKeys)),
+		Relations:       make([]RelationDef, 0, len(src.Relations)),
+		columnsByName:   make(map[string]*ColumnDef, len(src.Columns)),
+		relationsByName: make(map[string]RelationDef, len(src.Relations)),
 	}
 
 	for _, column := range src.Columns {
@@ -685,6 +757,22 @@ func cloneTableDef(src *TableDef, alias string) *TableDef {
 			ReferencedTable:  foreignKey.ReferencedTable,
 			ReferencedColumn: foreignKey.ReferencedColumn,
 		})
+	}
+
+	for _, relation := range src.Relations {
+		aliasedRelation := RelationDef{
+			Name:         relation.Name,
+			Type:         relation.Type,
+			SourceColumn: cloned.columnsByName[relation.SourceColumn.Name],
+			TargetTable:  relation.TargetTable,
+			TargetColumn: relation.TargetColumn,
+		}
+		if relation.TargetTable == src {
+			aliasedRelation.TargetTable = cloned
+			aliasedRelation.TargetColumn = cloned.columnsByName[relation.TargetColumn.Name]
+		}
+		cloned.Relations = append(cloned.Relations, aliasedRelation)
+		cloned.relationsByName[aliasedRelation.Name] = aliasedRelation
 	}
 
 	return cloned

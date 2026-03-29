@@ -47,6 +47,26 @@ type internalUserRow struct {
 	Nickname *string `db:"nickname"`
 }
 
+type internalPostWithAuthorRow struct {
+	ID     int64           `db:"id"`
+	UserID int64           `db:"user_id"`
+	Title  string          `db:"title"`
+	Author internalUserRow `rain:"relation:author"`
+}
+
+type internalUserWithPostsRow struct {
+	ID    int64                 `db:"id"`
+	Email string                `db:"email"`
+	Name  string                `db:"name"`
+	Posts []internalPostOnlyRow `rain:"relation:posts"`
+}
+
+type internalPostOnlyRow struct {
+	ID     int64  `db:"id"`
+	UserID int64  `db:"user_id"`
+	Title  string `db:"title"`
+}
+
 func defineInternalQueryTables() (*internalQueryUsersTable, *internalQueryPostsTable) {
 	users := schema.Define("users", func(t *internalQueryUsersTable) {
 		t.ID = t.BigSerial("id").PrimaryKey()
@@ -61,7 +81,9 @@ func defineInternalQueryTables() (*internalQueryUsersTable, *internalQueryPostsT
 		t.ID = t.BigSerial("id").PrimaryKey()
 		t.UserID = t.BigInt("user_id").NotNull().References(users.ID)
 		t.Title = t.Text("title").NotNull()
+		t.BelongsTo("author", t.UserID, users.ID)
 	})
+	users.HasMany("posts", users.ID, posts.UserID)
 
 	return users, posts
 }
@@ -276,6 +298,78 @@ func TestQueryBuilderAndHelperErrors(t *testing.T) {
 	}
 	if !strings.Contains(leftJoinSQL, "LEFT JOIN") || !strings.Contains(leftJoinSQL, "OFFSET 10") {
 		t.Fatalf("unexpected left join SQL: %s", leftJoinSQL)
+	}
+}
+
+func TestSelectWithRelations(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db := openInternalQueryDB(t)
+	users, posts := defineInternalQueryTables()
+	createInternalQuerySchema(t, ctx, db)
+
+	aliceResult, err := db.Insert().Table(users).Set(users.Email, "alice@example.com").Set(users.Name, "Alice").Exec(ctx)
+	if err != nil {
+		t.Fatalf("insert alice failed: %v", err)
+	}
+	aliceID, err := aliceResult.LastInsertId()
+	if err != nil {
+		t.Fatalf("alice last insert id failed: %v", err)
+	}
+	bobResult, err := db.Insert().Table(users).Set(users.Email, "bob@example.com").Set(users.Name, "Bob").Exec(ctx)
+	if err != nil {
+		t.Fatalf("insert bob failed: %v", err)
+	}
+	bobID, err := bobResult.LastInsertId()
+	if err != nil {
+		t.Fatalf("bob last insert id failed: %v", err)
+	}
+
+	if _, err := db.Insert().Table(posts).Set(posts.UserID, aliceID).Set(posts.Title, "Hello from Alice").Exec(ctx); err != nil {
+		t.Fatalf("insert alice post failed: %v", err)
+	}
+	if _, err := db.Insert().Table(posts).Set(posts.UserID, aliceID).Set(posts.Title, "Second Alice Post").Exec(ctx); err != nil {
+		t.Fatalf("insert alice post 2 failed: %v", err)
+	}
+	if _, err := db.Insert().Table(posts).Set(posts.UserID, bobID).Set(posts.Title, "Bob Post").Exec(ctx); err != nil {
+		t.Fatalf("insert bob post failed: %v", err)
+	}
+
+	var postsWithAuthor []internalPostWithAuthorRow
+	if err := db.Select().
+		Table(posts).
+		Where(posts.Title.Eq("Hello from Alice")).
+		WithRelations("author").
+		Scan(ctx, &postsWithAuthor); err != nil {
+		t.Fatalf("select with author relation failed: %v", err)
+	}
+	if len(postsWithAuthor) != 1 {
+		t.Fatalf("expected one post row, got %d", len(postsWithAuthor))
+	}
+	if postsWithAuthor[0].Author.Email != "alice@example.com" {
+		t.Fatalf("expected author alice@example.com, got %#v", postsWithAuthor[0].Author)
+	}
+
+	var usersWithPosts []internalUserWithPostsRow
+	if err := db.Select().
+		Table(users).
+		Where(users.ID.Eq(aliceID)).
+		WithRelations("posts").
+		Scan(ctx, &usersWithPosts); err != nil {
+		t.Fatalf("select with posts relation failed: %v", err)
+	}
+	if len(usersWithPosts) != 1 {
+		t.Fatalf("expected one user row, got %d", len(usersWithPosts))
+	}
+	if len(usersWithPosts[0].Posts) != 2 {
+		t.Fatalf("expected two posts for alice, got %d", len(usersWithPosts[0].Posts))
+	}
+
+	var bad []internalUserRow
+	err = db.Select().Table(users).WithRelations("does_not_exist").Scan(ctx, &bad)
+	if err == nil || !strings.Contains(err.Error(), "unknown relation") {
+		t.Fatalf("expected unknown relation error, got %v", err)
 	}
 }
 
