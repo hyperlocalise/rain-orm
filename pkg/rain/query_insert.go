@@ -50,8 +50,9 @@ func (q *InsertQuery) Table(table schema.TableReference) *InsertQuery {
 }
 
 // Model sets a struct payload for the insert.
-// Zero-valued fields for columns with schema defaults are omitted so the
-// database default applies; use Set to override that behavior explicitly.
+// Plain fields are treated as explicit values, including zero values.
+// Nil pointers are omitted, and rain.Set[T]{Valid:false} omits a value so
+// schema defaults can apply.
 func (q *InsertQuery) Model(model any) *InsertQuery {
 	q.model = model
 	return q
@@ -191,7 +192,7 @@ func (q *InsertQuery) Scan(ctx context.Context, dest any) error {
 	}
 	defer closeRows(rows, &err)
 
-	err = scanRows(rows, dest)
+	err = scanRowsAgainstTable(rows, dest, q.table)
 	return err
 }
 

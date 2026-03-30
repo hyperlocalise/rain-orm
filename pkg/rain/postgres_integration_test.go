@@ -36,10 +36,10 @@ type postgresPostsTable struct {
 }
 
 type postgresInsertModel struct {
-	Email    string  `db:"email"`
-	Name     string  `db:"name"`
-	Active   bool    `db:"active"`
-	Nickname *string `db:"nickname"`
+	Email    string
+	Name     rain.Set[string]
+	Active   rain.Set[bool]
+	Nickname *string
 }
 
 func registerPostgresDriverForTests(tb testing.TB) {
@@ -53,12 +53,12 @@ func registerPostgresDriverForTests(tb testing.TB) {
 }
 
 type postgresUserRow struct {
-	ID        int64      `db:"id"`
-	Email     string     `db:"email"`
-	Name      string     `db:"name"`
-	Active    bool       `db:"active"`
-	Nickname  *string    `db:"nickname"`
-	CreatedAt *time.Time `db:"created_at"`
+	ID        int64
+	Email     string
+	Name      string
+	Active    bool
+	Nickname  *string
+	CreatedAt *time.Time
 }
 
 func TestPostgresIntegrationInsertSelectAndJoin(t *testing.T) {
@@ -92,7 +92,11 @@ func TestPostgresIntegrationInsertSelectAndJoin(t *testing.T) {
 
 	if _, err := db.Insert().
 		Table(users).
-		Model(&postgresInsertModel{Email: "override@example.com"}).
+		Model(&postgresInsertModel{
+			Email:  "override@example.com",
+			Name:   rain.Set[string]{Value: "Alice", Valid: true},
+			Active: rain.Set[bool]{Value: false, Valid: true},
+		}).
 		Set(users.Name, "Alice").
 		Set(users.Active, false).
 		Set(users.Nickname, "ali").

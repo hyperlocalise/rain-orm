@@ -51,7 +51,7 @@ func insertReplicaTestUser(t *testing.T, ctx context.Context, db *DB, users *int
 
 	result, err := db.Insert().
 		Table(users).
-		Model(&internalInsertModel{Email: email, Name: name}).
+		Model(&internalInsertModel{Email: email, Name: name, Active: true}).
 		Exec(ctx)
 	if err != nil {
 		t.Fatalf("insert user %q: %v", email, err)
@@ -286,7 +286,7 @@ func TestWithReplicasWritesUsePrimary(t *testing.T) {
 	var inserted internalUserRow
 	if err := routed.Insert().
 		Table(users).
-		Model(&internalInsertModel{Email: "inserted@example.com", Name: "Inserted"}).
+		Model(&internalInsertModel{Email: "inserted@example.com", Name: "Inserted", Active: true}).
 		Returning(users.ID, users.Email, users.Name).
 		Scan(ctx, &inserted); err != nil {
 		t.Fatalf("insert returning scan: %v", err)

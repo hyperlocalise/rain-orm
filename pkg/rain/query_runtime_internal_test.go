@@ -3,6 +3,7 @@ package rain
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
@@ -23,7 +24,7 @@ func TestQueryExecutionPaths(t *testing.T) {
 
 	insert := db.Insert().
 		Table(users).
-		Model(&internalInsertModel{Email: "alice@example.com", Name: "Alice"})
+		Model(&internalInsertModel{Email: "alice@example.com", Name: "Alice", Active: true})
 	result, err := insert.Exec(ctx)
 	if err != nil {
 		t.Fatalf("insert exec failed: %v", err)
@@ -186,7 +187,7 @@ func TestPreparedSelectQueryInTransactionLifecycle(t *testing.T) {
 	users, _ := defineInternalQueryTables()
 	createInternalQuerySchema(t, ctx, db)
 
-	if _, err := db.Insert().Table(users).Model(&internalInsertModel{Email: "tx@example.com", Name: "Tx"}).Exec(ctx); err != nil {
+	if _, err := db.Insert().Table(users).Model(&internalInsertModel{Email: "tx@example.com", Name: "Tx", Active: true}).Exec(ctx); err != nil {
 		t.Fatalf("insert user: %v", err)
 	}
 
@@ -281,7 +282,7 @@ func TestSelectQueryCacheHitMissExpiryAndBypass(t *testing.T) {
 	cache.now = func() time.Time { return time.Date(2026, 3, 29, 12, 0, 0, 0, time.UTC) }
 	db.WithQueryCache(cache)
 
-	if _, err := db.Insert().Table(users).Model(&internalInsertModel{Email: "cache@example.com", Name: "Cache"}).Exec(ctx); err != nil {
+	if _, err := db.Insert().Table(users).Model(&internalInsertModel{Email: "cache@example.com", Name: "Cache", Active: true}).Exec(ctx); err != nil {
 		t.Fatalf("insert user: %v", err)
 	}
 
@@ -338,8 +339,8 @@ func TestSelectQueryCacheArgsAndManualInvalidation(t *testing.T) {
 	db.WithQueryCache(NewMemoryQueryCache())
 
 	for _, item := range []internalInsertModel{
-		{Email: "alice@example.com", Name: "Alice"},
-		{Email: "bob@example.com", Name: "Bob"},
+		{Email: "alice@example.com", Name: "Alice", Active: true},
+		{Email: "bob@example.com", Name: "Bob", Active: true},
 	} {
 		if _, err := db.Insert().Table(users).Model(&item).Exec(ctx); err != nil {
 			t.Fatalf("insert user %s: %v", item.Email, err)
@@ -384,6 +385,63 @@ func TestSelectQueryCacheArgsAndManualInvalidation(t *testing.T) {
 	}
 }
 
+func TestSelectQueryCachePayloadIsPortableAcrossDestinations(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db := openInternalQueryDB(t)
+	users, _ := defineInternalQueryTables()
+	createInternalQuerySchema(t, ctx, db)
+
+	cache := NewMemoryQueryCache()
+	db.WithQueryCache(cache)
+
+	if _, err := db.Insert().Table(users).Model(&internalInsertModel{Email: "portable@example.com", Name: "Portable", Active: true}).Exec(ctx); err != nil {
+		t.Fatalf("insert user: %v", err)
+	}
+
+	counter := &countingRunner{base: db}
+	query := (&SelectQuery{runner: counter, dialect: db.Dialect(), cache: cache}).
+		Table(users).
+		Where(users.Email.Eq("portable@example.com")).
+		Cache(QueryCacheOptions{TTL: time.Minute, Tags: []string{"users"}})
+
+	var full []internalUserRow
+	if err := query.Scan(ctx, &full); err != nil {
+		t.Fatalf("full scan: %v", err)
+	}
+	if counter.queryCount != 1 {
+		t.Fatalf("expected first scan to hit DB once, got %d", counter.queryCount)
+	}
+
+	foundJSON := false
+	cache.mu.RLock()
+	for _, entry := range cache.entries {
+		var payload cachedPayload
+		if err := json.Unmarshal(entry.value, &payload); err == nil && payload.Kind == "select" {
+			foundJSON = true
+			break
+		}
+	}
+	cache.mu.RUnlock()
+	if !foundJSON {
+		t.Fatalf("expected cache payload to be JSON select envelope")
+	}
+
+	var projected []struct {
+		Email string
+	}
+	if err := query.Scan(ctx, &projected); err != nil {
+		t.Fatalf("projected cached scan: %v", err)
+	}
+	if counter.queryCount != 1 {
+		t.Fatalf("expected second scan to use cache, got %d DB queries", counter.queryCount)
+	}
+	if len(projected) != 1 || projected[0].Email != "portable@example.com" {
+		t.Fatalf("unexpected projected cached rows: %#v", projected)
+	}
+}
+
 func TestSelectQueryCacheDisabledKeepsNormalBehavior(t *testing.T) {
 	t.Parallel()
 
@@ -391,7 +449,7 @@ func TestSelectQueryCacheDisabledKeepsNormalBehavior(t *testing.T) {
 	db := openInternalQueryDB(t)
 	users, _ := defineInternalQueryTables()
 	createInternalQuerySchema(t, ctx, db)
-	if _, err := db.Insert().Table(users).Model(&internalInsertModel{Email: "nocache@example.com", Name: "No Cache"}).Exec(ctx); err != nil {
+	if _, err := db.Insert().Table(users).Model(&internalInsertModel{Email: "nocache@example.com", Name: "No Cache", Active: true}).Exec(ctx); err != nil {
 		t.Fatalf("insert user: %v", err)
 	}
 
@@ -439,7 +497,7 @@ func TestSelectAggregateCacheForCountAndExists(t *testing.T) {
 	createInternalQuerySchema(t, ctx, db)
 	db.WithQueryCache(NewMemoryQueryCache())
 
-	if _, err := db.Insert().Table(users).Model(&internalInsertModel{Email: "agg@example.com", Name: "Agg"}).Exec(ctx); err != nil {
+	if _, err := db.Insert().Table(users).Model(&internalInsertModel{Email: "agg@example.com", Name: "Agg", Active: true}).Exec(ctx); err != nil {
 		t.Fatalf("insert user: %v", err)
 	}
 
@@ -475,6 +533,176 @@ func TestSelectAggregateCacheForCountAndExists(t *testing.T) {
 	}
 	if counter.queryCount != 2 {
 		t.Fatalf("expected second exists to hit cache, query count %d", counter.queryCount)
+	}
+}
+
+func seedLegacyCacheValue(t *testing.T, ctx context.Context, cache *MemoryQueryCache, key string, opts *queryCacheOptions, value []byte) {
+	t.Helper()
+
+	if opts == nil {
+		t.Fatal("expected cache options")
+	}
+	if err := cache.Set(ctx, key, value, time.Minute, opts.tags); err != nil {
+		t.Fatalf("seed legacy cache: %v", err)
+	}
+}
+
+func TestSelectQueryLegacyCachePayloadFallsBackToDB(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db := openInternalQueryDB(t)
+	users, _ := defineInternalQueryTables()
+	createInternalQuerySchema(t, ctx, db)
+
+	cache := NewMemoryQueryCache()
+	db.WithQueryCache(cache)
+
+	if _, err := db.Insert().Table(users).Model(&internalInsertModel{Email: "legacy@example.com", Name: "Legacy", Active: true}).Exec(ctx); err != nil {
+		t.Fatalf("insert user: %v", err)
+	}
+
+	counter := &countingRunner{base: db}
+	query := (&SelectQuery{runner: counter, dialect: db.Dialect(), cache: cache}).
+		Table(users).
+		Where(users.Email.Eq("legacy@example.com")).
+		Cache(QueryCacheOptions{TTL: time.Minute, Tags: []string{"users"}})
+
+	sqlText, args, err := query.ToSQL()
+	if err != nil {
+		t.Fatalf("compile select query: %v", err)
+	}
+	key, opts, err := query.resolveCacheKey(sqlText, args)
+	if err != nil {
+		t.Fatalf("resolve select cache key: %v", err)
+	}
+	seedLegacyCacheValue(t, ctx, cache, key, opts, []byte(`[{"id":1,"email":"legacy@example.com","name":"Legacy"}]`))
+
+	var rows []internalUserRow
+	if err := query.Scan(ctx, &rows); err != nil {
+		t.Fatalf("scan with legacy cached payload: %v", err)
+	}
+	if counter.queryCount != 1 {
+		t.Fatalf("expected legacy cached payload to fall back to DB, got %d queries", counter.queryCount)
+	}
+
+	countQuery, countArgs, err := query.toAggregateSQL("COUNT(*)")
+	if err != nil {
+		t.Fatalf("compile count query: %v", err)
+	}
+	countKey, opts, err := query.resolveCacheKey(countQuery, countArgs)
+	if err != nil {
+		t.Fatalf("resolve count cache key: %v", err)
+	}
+	seedLegacyCacheValue(t, ctx, cache, countKey, opts, []byte(`1`))
+
+	count, err := query.Count(ctx)
+	if err != nil {
+		t.Fatalf("count with legacy cached payload: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected count 1, got %d", count)
+	}
+
+	compiled, err := query.compile()
+	if err != nil {
+		t.Fatalf("compile exists query: %v", err)
+	}
+	existsQuery, err := wrapExistsCompiled(compiled)
+	if err != nil {
+		t.Fatalf("wrap exists query: %v", err)
+	}
+	existsArgs, err := existsQuery.literalArgs()
+	if err != nil {
+		t.Fatalf("literal exists args: %v", err)
+	}
+	existsKey, opts, err := query.resolveCacheKey(existsQuery.sql, existsArgs)
+	if err != nil {
+		t.Fatalf("resolve exists cache key: %v", err)
+	}
+	seedLegacyCacheValue(t, ctx, cache, existsKey, opts, []byte(`true`))
+
+	exists, err := query.Exists(ctx)
+	if err != nil {
+		t.Fatalf("exists with legacy cached payload: %v", err)
+	}
+	if !exists {
+		t.Fatalf("expected exists=true")
+	}
+	if counter.queryCount != 3 {
+		t.Fatalf("expected legacy cached payloads to fall back to DB for each operation, got %d queries", counter.queryCount)
+	}
+}
+
+func TestPreparedSelectQueryLegacyCachePayloadFallsBackToDB(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db := openInternalQueryDB(t)
+	users, _ := defineInternalQueryTables()
+	createInternalQuerySchema(t, ctx, db)
+
+	cache := NewMemoryQueryCache()
+	db.WithQueryCache(cache)
+
+	if _, err := db.Insert().Table(users).Model(&internalInsertModel{Email: "prepared-legacy@example.com", Name: "Prepared Legacy", Active: true}).Exec(ctx); err != nil {
+		t.Fatalf("insert user: %v", err)
+	}
+
+	query := db.Select().
+		Table(users).
+		Where(users.Email.EqExpr(schema.Placeholder("email"))).
+		Cache(QueryCacheOptions{TTL: time.Minute, Tags: []string{"users"}})
+
+	prepared, err := query.Prepare(ctx)
+	if err != nil {
+		t.Fatalf("prepare query: %v", err)
+	}
+	defer func() {
+		if err := prepared.Close(); err != nil {
+			t.Fatalf("close prepared query: %v", err)
+		}
+	}()
+
+	bound := PreparedArgs{"email": "prepared-legacy@example.com"}
+
+	key, opts, err := prepared.query.resolveCacheKey(prepared.selectQuery.sql, []any{"prepared-legacy@example.com"})
+	if err != nil {
+		t.Fatalf("resolve prepared select cache key: %v", err)
+	}
+	seedLegacyCacheValue(t, ctx, cache, key, opts, []byte(`[{"email":"prepared-legacy@example.com"}]`))
+
+	var rows []internalUserRow
+	if err := prepared.Scan(ctx, bound, &rows); err != nil {
+		t.Fatalf("prepared scan with legacy cached payload: %v", err)
+	}
+
+	countKey, opts, err := prepared.query.resolveCacheKey(prepared.countQuery.sql, []any{"prepared-legacy@example.com"})
+	if err != nil {
+		t.Fatalf("resolve prepared count cache key: %v", err)
+	}
+	seedLegacyCacheValue(t, ctx, cache, countKey, opts, []byte(`1`))
+
+	count, err := prepared.Count(ctx, bound)
+	if err != nil {
+		t.Fatalf("prepared count with legacy cached payload: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected count 1, got %d", count)
+	}
+
+	existsKey, opts, err := prepared.query.resolveCacheKey(prepared.existsQuery.sql, []any{"prepared-legacy@example.com"})
+	if err != nil {
+		t.Fatalf("resolve prepared exists cache key: %v", err)
+	}
+	seedLegacyCacheValue(t, ctx, cache, existsKey, opts, []byte(`true`))
+
+	exists, err := prepared.Exists(ctx, bound)
+	if err != nil {
+		t.Fatalf("prepared exists with legacy cached payload: %v", err)
+	}
+	if !exists {
+		t.Fatalf("expected exists=true")
 	}
 }
 

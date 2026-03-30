@@ -34,24 +34,24 @@ type sqlitePostsTable struct {
 }
 
 type sqliteInsertModel struct {
-	Email    string  `db:"email"`
-	Name     string  `db:"name"`
-	Active   bool    `db:"active"`
-	Nickname *string `db:"nickname"`
+	Email    string
+	Name     rain.Set[string]
+	Active   rain.Set[bool]
+	Nickname *string
 }
 
 type sqliteUserRow struct {
-	ID        int64   `db:"id"`
-	Email     string  `db:"email"`
-	Name      string  `db:"name"`
-	Active    bool    `db:"active"`
-	Nickname  *string `db:"nickname"`
-	CreatedAt string  `db:"created_at"`
+	ID        int64
+	Email     string
+	Name      string
+	Active    bool
+	Nickname  *string
+	CreatedAt string
 }
 
 type joinedPostRow struct {
-	Title string `db:"title"`
-	Email string `db:"email"`
+	Title string
+	Email string
 }
 
 type aliasedJoinRow struct {
@@ -96,15 +96,15 @@ type sqliteRichPostsTable struct {
 }
 
 type sqliteRichUserMutationRow struct {
-	ID         int64  `db:"id"`
-	Email      string `db:"email"`
-	Name       string `db:"name"`
-	ExternalID string `db:"external_id"`
-	Status     string `db:"status"`
+	ID         int64
+	Email      string
+	Name       string
+	ExternalID string
+	Status     string
 }
 
 type sqliteRichStatusRow struct {
-	Status string `db:"status"`
+	Status string
 }
 
 type sqliteRichUserAggregateRow struct {
@@ -119,10 +119,10 @@ type sqliteRichUserSummaryRow struct {
 }
 
 type sqliteRichPreparedUserRow struct {
-	ID     int64  `db:"id"`
-	Email  string `db:"email"`
-	Status string `db:"status"`
-	Active bool   `db:"active"`
+	ID     int64
+	Email  string
+	Status string
+	Active bool
 }
 
 type sqliteRichLeftJoinSummaryRow struct {
@@ -131,46 +131,46 @@ type sqliteRichLeftJoinSummaryRow struct {
 }
 
 type sqliteRichAuthorRow struct {
-	ID    int64  `db:"id"`
-	Email string `db:"email"`
-	Name  string `db:"name"`
+	ID    int64
+	Email string
+	Name  string
 }
 
 type sqliteRichCategoryRow struct {
-	ID   int64  `db:"id"`
-	Slug string `db:"slug"`
-	Name string `db:"name"`
+	ID   int64
+	Slug string
+	Name string
 }
 
 type sqliteRichPostWithRelationsRow struct {
-	ID         int64                  `db:"id"`
-	UserID     int64                  `db:"user_id"`
-	CategoryID *int64                 `db:"category_id"`
-	Title      string                 `db:"title"`
-	Published  bool                   `db:"published"`
+	ID         int64
+	UserID     int64
+	CategoryID *int64
+	Title      string
+	Published  bool
 	Author     sqliteRichAuthorRow    `rain:"relation:author"`
 	Category   *sqliteRichCategoryRow `rain:"relation:category"`
 }
 
 type sqliteRichPostWithRelationPointersRow struct {
-	ID         int64                  `db:"id"`
-	UserID     int64                  `db:"user_id"`
-	CategoryID *int64                 `db:"category_id"`
-	Title      string                 `db:"title"`
-	Published  bool                   `db:"published"`
+	ID         int64
+	UserID     int64
+	CategoryID *int64
+	Title      string
+	Published  bool
 	Author     *sqliteRichAuthorRow   `rain:"relation:author"`
 	Category   *sqliteRichCategoryRow `rain:"relation:category"`
 }
 
 type sqliteRichUserWithPostsRow struct {
-	ID    int64                            `db:"id"`
-	Email string                           `db:"email"`
+	ID    int64
+	Email string
 	Posts []sqliteRichPostWithRelationsRow `rain:"relation:posts"`
 }
 
 type sqliteRichUserWithPostPointersRow struct {
-	ID    int64                                    `db:"id"`
-	Email string                                   `db:"email"`
+	ID    int64
+	Email string
 	Posts []*sqliteRichPostWithRelationPointersRow `rain:"relation:posts"`
 }
 
@@ -298,7 +298,11 @@ func TestSQLiteIntegrationInsertDefaultsOverridesAndScan(t *testing.T) {
 
 	if _, err := db.Insert().
 		Table(users).
-		Model(&sqliteInsertModel{Email: "override@example.com"}).
+		Model(&sqliteInsertModel{
+			Email:  "override@example.com",
+			Name:   rain.Set[string]{Value: "Alice", Valid: true},
+			Active: rain.Set[bool]{Value: false, Valid: true},
+		}).
 		Set(users.Name, "Alice").
 		Set(users.Active, false).
 		Set(users.Nickname, "ali").

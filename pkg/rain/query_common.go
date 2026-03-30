@@ -45,6 +45,13 @@ type tableDefSource struct {
 	table *schema.TableDef
 }
 
+func tableDefFromSelectSource(source selectTableSource) *schema.TableDef {
+	if table, ok := source.(tableDefSource); ok {
+		return table.table
+	}
+	return nil
+}
+
 func (s tableDefSource) writeSQL(ctx *compileContext) error {
 	ctx.writeTable(s.table)
 	return nil

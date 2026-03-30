@@ -53,7 +53,7 @@ func (q *SelectQuery) scanRowsWithRelations(ctx context.Context, rows *sql.Rows,
 		containerPtr = slicePtr.Interface()
 	}
 
-	if err := scanRows(rows, containerPtr); err != nil {
+	if err := scanRowsAgainstTable(rows, containerPtr, tableSource.table); err != nil {
 		return err
 	}
 
@@ -239,6 +239,9 @@ func (q *SelectQuery) loadRelatedRows(
 }
 
 func (q *SelectQuery) validateRelationField(parent reflect.Value, relation schema.RelationDef) error {
+	if _, err := lookupTableModelBinding(parent.Type(), relation.SourceColumn.Table, true); err != nil {
+		return err
+	}
 	meta, _, err := lookupModelMeta(parent.Addr().Interface())
 	if err != nil {
 		return err
@@ -282,7 +285,13 @@ func sliceParentStructType(sliceType reflect.Type) (reflect.Type, error) {
 }
 
 func (q *SelectQuery) relationElementTypeFromType(parentType reflect.Type, relation schema.RelationDef) (reflect.Type, error) {
-	meta := lookupModelMetaForType(parentType)
+	if _, err := lookupTableModelBinding(parentType, relation.SourceColumn.Table, true); err != nil {
+		return nil, err
+	}
+	meta, err := lookupModelMetaForType(parentType)
+	if err != nil {
+		return nil, err
+	}
 	fieldInfo, ok := meta.byRelation[relation.Name]
 	if !ok {
 		return nil, fmt.Errorf("rain: relation %q not found in model metadata", relation.Name)
