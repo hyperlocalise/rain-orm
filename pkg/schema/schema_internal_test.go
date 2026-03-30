@@ -79,6 +79,7 @@ func TestSchemaInternalHelpersAndExpressions(t *testing.T) {
 	isNull := users.Email.IsNull()
 	isNotNull := users.Email.IsNotNull()
 	raw := Raw("LOWER(?)", users.Email)
+	coalesce := Coalesce(users.Email, ValueExpr{Value: ""})
 	andExpr := And(eq, ne)
 	orExpr := Or(gt, lt)
 
@@ -94,6 +95,9 @@ func TestSchemaInternalHelpersAndExpressions(t *testing.T) {
 	if raw.SQL != "LOWER(?)" || len(raw.Args) != 1 {
 		t.Fatalf("unexpected raw expression payload")
 	}
+	if len(coalesce.Exprs) != 2 {
+		t.Fatalf("unexpected COALESCE expression payload")
+	}
 	if andExpr.Operator != "AND" || orExpr.Operator != "OR" {
 		t.Fatalf("unexpected logical expression operators")
 	}
@@ -108,6 +112,7 @@ func TestSchemaInternalHelpersAndExpressions(t *testing.T) {
 	andExpr.isExpression()
 	andExpr.isPredicate()
 	raw.isExpression()
+	coalesce.isExpression()
 
 	if users.TableDef().Indexes[0].Columns[0].Direction != SortAsc {
 		t.Fatalf("expected plain index column direction ASC")
@@ -167,6 +172,8 @@ func TestSchemaInternalPanicsAndCloners(t *testing.T) {
 		zero.C("id")
 	})
 	assertPanics(t, func() { users.C("missing") })
+	assertPanics(t, func() { Coalesce(users.Email) })
+	assertPanics(t, func() { Coalesce(users.Email, nil) })
 	assertPanics(t, func() { users.PrimaryKey("") })
 	assertPanics(t, func() { users.Unique("") })
 	assertPanics(t, func() { users.ForeignKey("") })
