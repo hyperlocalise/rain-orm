@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode"
 
 	"go.yaml.in/yaml/v3"
 )
@@ -69,6 +70,7 @@ func validateConfigForGenerate(config Config) error {
 		validateSharedConfig(config),
 		requireField("schema_package", config.SchemaPackage),
 		requireField("schema_function", config.SchemaFunction),
+		validateGoIdentifier("schema_function", config.SchemaFunction),
 	)
 }
 
@@ -84,6 +86,7 @@ func validateConfigForCheck(config Config) error {
 		validateSharedConfig(config),
 		requireField("schema_package", config.SchemaPackage),
 		requireField("schema_function", config.SchemaFunction),
+		validateGoIdentifier("schema_function", config.SchemaFunction),
 	)
 }
 
@@ -106,4 +109,31 @@ func requireField(name, value string) error {
 		return fmt.Errorf("raincli: %s is required", name)
 	}
 	return nil
+}
+
+func validateGoIdentifier(name, value string) error {
+	if !isValidGoIdentifier(value) {
+		return fmt.Errorf("raincli: %s must be a valid Go identifier", name)
+	}
+	return nil
+}
+
+func isValidGoIdentifier(s string) bool {
+	if s == "" {
+		return false
+	}
+
+	for i, r := range s {
+		if i == 0 {
+			if !unicode.IsLetter(r) && r != '_' {
+				return false
+			}
+			continue
+		}
+		if !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '_' {
+			return false
+		}
+	}
+
+	return true
 }

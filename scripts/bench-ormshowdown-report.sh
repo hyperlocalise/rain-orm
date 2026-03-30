@@ -1,4 +1,4 @@
-#!/bin/zsh
+#!/usr/bin/env bash
 
 set -euo pipefail
 
@@ -12,7 +12,7 @@ manifest_path="${report_dir}/manifest.txt"
 bench_count="${BENCH_COUNT:-3}"
 benchstat_bin="${BENCHSTAT_BIN:-benchstat}"
 libraries=(raw rain bun gorm)
-comparison_libraries=("${(@)libraries[2,-1]}")
+comparison_libraries=("${libraries[@]:1}")
 
 mkdir -p "${report_dir}" "${normalized_dir}" "${detail_dir}" "${csv_dir}"
 
@@ -24,35 +24,35 @@ sanitize_name() {
   if [[ -z "${value}" ]]; then
     value="ormshowdown"
   fi
-  print -r -- "${value}"
+  printf '%s\n' "${value}"
 }
 
 assert_tooling() {
   if ! command -v "${benchstat_bin}" >/dev/null 2>&1; then
-    print -u2 -- "benchstat not found at '${benchstat_bin}'. Run 'make bootstrap' or set BENCHSTAT_BIN=/path/to/benchstat."
+    printf '%s\n' "benchstat not found at '${benchstat_bin}'. Run 'make bootstrap' or set BENCHSTAT_BIN=/path/to/benchstat." >&2
     exit 1
   fi
 }
 
 write_manifest() {
   local commit_sha branch_name go_version platform
-  commit_sha="$(git rev-parse --short HEAD 2>/dev/null || print -r -- unknown)"
-  branch_name="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || print -r -- unknown)"
-  go_version="$(go version 2>/dev/null || print -r -- unknown)"
-  platform="$(go env GOOS 2>/dev/null || print -r -- unknown)/$(go env GOARCH 2>/dev/null || print -r -- unknown)"
+  commit_sha="$(git rev-parse --short HEAD 2>/dev/null || printf '%s\n' unknown)"
+  branch_name="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || printf '%s\n' unknown)"
+  go_version="$(go version 2>/dev/null || printf '%s\n' unknown)"
+  platform="$(go env GOOS 2>/dev/null || printf '%s\n' unknown)/$(go env GOARCH 2>/dev/null || printf '%s\n' unknown)"
 
   {
-    print -r -- "ORM showdown benchmark run"
-    print -r -- "Timestamp: $(date '+%Y-%m-%d %H:%M:%S %Z')"
-    print -r -- "Commit: ${commit_sha}"
-    print -r -- "Branch: ${branch_name}"
-    print -r -- "Go: ${go_version}"
-    print -r -- "Platform: ${platform}"
-    print -r -- "Bench count: ${bench_count}"
+    printf '%s\n' "ORM showdown benchmark run"
+    printf '%s\n' "Timestamp: $(date '+%Y-%m-%d %H:%M:%S %Z')"
+    printf '%s\n' "Commit: ${commit_sha}"
+    printf '%s\n' "Branch: ${branch_name}"
+    printf '%s\n' "Go: ${go_version}"
+    printf '%s\n' "Platform: ${platform}"
+    printf '%s\n' "Bench count: ${bench_count}"
     if [[ -n "${filter}" ]]; then
-      print -r -- "Benchmark filter: ${filter}"
+      printf '%s\n' "Benchmark filter: ${filter}"
     fi
-    print -r -- ""
+    printf '\n'
   } | tee "${manifest_path}"
 }
 
@@ -68,16 +68,17 @@ run_library_benchmarks() {
     output_path="${report_dir}/${library}.txt"
     command_string="go test -run '^$' -bench '${regex}' -benchmem -count ${bench_count} ./benchmarks/ormshowdown/..."
 
-    print -r -- "${library}: ${command_string}" >> "${manifest_path}"
-    print -r -- "==> ${library}"
+    printf '%s\n' "${library}: ${command_string}" >> "${manifest_path}"
+    printf '%s\n' "==> ${library}"
     go test -run '^$' -bench "${regex}" -benchmem -count "${bench_count}" ./benchmarks/ormshowdown/... | tee "${output_path}"
     sed -E "s#^(BenchmarkORMShowdown)/${library}/#\\1/#" "${output_path}" > "${normalized_dir}/${library}.txt"
-    print -r -- ""
+    printf '\n'
   done
 }
 
 write_benchstat_outputs() {
-  local summary_suffix summary_path csv_inputs library detail_path csv_path
+  local summary_suffix summary_path library detail_path csv_path libs_csv
+  local -a csv_inputs
 
   summary_suffix=""
   if [[ -n "${filter}" ]]; then
@@ -85,17 +86,17 @@ write_benchstat_outputs() {
   fi
   summary_path="${report_dir}/benchstat${summary_suffix}.txt"
 
-  print -r -- "==> benchstat (baseline: raw)"
+  printf '%s\n' "==> benchstat (baseline: raw)"
   csv_inputs=()
   for library in "${comparison_libraries[@]}"; do
     detail_path="${detail_dir}/raw-vs-${library}.txt"
     csv_path="${csv_dir}/raw-vs-${library}.csv"
 
-    print -r -- "raw vs ${library}"
+    printf '%s\n' "raw vs ${library}"
     "${benchstat_bin}" "${normalized_dir}/raw.txt" "${normalized_dir}/${library}.txt" > "${detail_path}"
     "${benchstat_bin}" -format csv "${normalized_dir}/raw.txt" "${normalized_dir}/${library}.txt" 2>/dev/null > "${csv_path}"
     csv_inputs+=("${csv_path}")
-    print -r -- ""
+    printf '\n'
   done
 
   # benchstat -format csv currently emits tables like:
@@ -103,7 +104,9 @@ write_benchstat_outputs() {
   #   ,sec/op,CI,sec/op,CI,vs base,P
   # Parse the repeated metric headings to locate the two centre-value columns
   # rather than assuming fixed field numbers.
-  awk -F',' -v libs_csv="${(j:,:)comparison_libraries}" '
+  libs_csv="$(IFS=,; printf '%s' "${comparison_libraries[*]}")"
+
+  awk -F',' -v libs_csv="${libs_csv}" '
 function trim(value) {
   gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
   return value
@@ -201,11 +204,11 @@ END {
 }
 ' "${csv_inputs[@]}" | tee "${summary_path}"
 
-  print -r -- ""
-  print -r -- "Saved ORM showdown benchmark reports: ${report_dir}"
-  print -r -- "Saved run manifest: ${manifest_path}"
-  print -r -- "Saved comparison summary: ${summary_path}"
-  print -r -- "Saved pairwise benchstat details: ${detail_dir}"
+  printf '\n'
+  printf '%s\n' "Saved ORM showdown benchmark reports: ${report_dir}"
+  printf '%s\n' "Saved run manifest: ${manifest_path}"
+  printf '%s\n' "Saved comparison summary: ${summary_path}"
+  printf '%s\n' "Saved pairwise benchstat details: ${detail_dir}"
 }
 
 assert_tooling

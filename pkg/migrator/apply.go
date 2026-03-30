@@ -68,7 +68,7 @@ func loadAppliedMigrationIDs(ctx context.Context, db *sql.DB, tableName string) 
 	query := fmt.Sprintf(`SELECT id FROM %s ORDER BY id DESC`, quoteMigrationIdentifier(tableName))
 	rows, err := db.QueryContext(ctx, query)
 	if err != nil {
-		if strings.Contains(err.Error(), "no such table") || strings.Contains(err.Error(), "does not exist") {
+		if isMissingTableError(err) {
 			return nil, "", nil
 		}
 		return nil, "", fmt.Errorf("migrator: load applied migrations: %w", err)
@@ -92,6 +92,13 @@ func loadAppliedMigrationIDs(ctx context.Context, db *sql.DB, tableName string) 
 	}
 
 	return applied, lastAppliedID, nil
+}
+
+func isMissingTableError(err error) bool {
+	message := err.Error()
+	return strings.Contains(message, "no such table") ||
+		strings.Contains(message, "does not exist") ||
+		strings.Contains(message, "doesn't exist")
 }
 
 func quoteMigrationIdentifier(name string) string {

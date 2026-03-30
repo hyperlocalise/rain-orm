@@ -3,6 +3,7 @@ package migrator
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -338,6 +339,14 @@ func TestApplySQLMigrationsRejectsPendingOlderThanLastApplied(t *testing.T) {
 	}
 	if _, err := ApplySQLMigrations(ctx, db, "rain_schema_migrations", pending); err == nil || !strings.Contains(err.Error(), "older than the last applied migration") {
 		t.Fatalf("expected older-than-last-applied error, got %v", err)
+	}
+}
+
+func TestLoadAppliedMigrationIDsTreatsMySQLMissingTableAsEmpty(t *testing.T) {
+	t.Parallel()
+
+	if !isMissingTableError(errors.New(`Error 1146 (42S02): Table 'app.rain_schema_migrations' doesn't exist`)) {
+		t.Fatalf("expected MySQL missing-table error to be treated as empty state")
 	}
 }
 

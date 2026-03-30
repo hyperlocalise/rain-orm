@@ -342,7 +342,7 @@ Rain also includes a first-party CLI for code-first SQL migration generation and
 
 ## CLI Migrations
 
-See [cmd/rain/README.md](/Users/minhcung/work/rain-orm/cmd/rain/README.md) for the CLI design, migration folder format, config examples, and command workflow.
+See [cmd/rain/README.md](cmd/rain/README.md) for the CLI design, migration folder format, config examples, and command workflow.
 
 ## Migrations (forward-only v1)
 
