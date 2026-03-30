@@ -131,7 +131,7 @@ func runMigrate(ctx context.Context, cwd string, args []string, stdout, stderr i
 	}
 	defer func() { _ = db.Close() }()
 
-	result, err := migrator.ApplySQLMigrations(ctx, db, config.MigrationTable, migrationsOnDisk)
+	result, err := migrator.ApplySQLMigrations(ctx, db, config.Dialect, config.MigrationTable, migrationsOnDisk)
 	if err != nil {
 		return err
 	}

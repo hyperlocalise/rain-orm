@@ -337,7 +337,7 @@ func TestApplySQLMigrationsRejectsPendingOlderThanLastApplied(t *testing.T) {
 			SQL: `CREATE TABLE "users" ("id" INTEGER PRIMARY KEY);`,
 		},
 	}
-	if _, err := ApplySQLMigrations(ctx, db, "rain_schema_migrations", pending); err == nil || !strings.Contains(err.Error(), "older than the last applied migration") {
+	if _, err := ApplySQLMigrations(ctx, db, "sqlite", "rain_schema_migrations", pending); err == nil || !strings.Contains(err.Error(), "older than the last applied migration") {
 		t.Fatalf("expected older-than-last-applied error, got %v", err)
 	}
 }
@@ -347,6 +347,17 @@ func TestLoadAppliedMigrationIDsTreatsMySQLMissingTableAsEmpty(t *testing.T) {
 
 	if !isMissingTableError(errors.New(`Error 1146 (42S02): Table 'app.rain_schema_migrations' doesn't exist`)) {
 		t.Fatalf("expected MySQL missing-table error to be treated as empty state")
+	}
+}
+
+func TestQuoteMigrationIdentifierUsesDialectQuoting(t *testing.T) {
+	t.Parallel()
+
+	if got := quoteMigrationIdentifier("mysql", "rain_schema_migrations"); got != "`rain_schema_migrations`" {
+		t.Fatalf("expected MySQL identifier quoting, got %q", got)
+	}
+	if got := quoteMigrationIdentifier("postgres", `rain"schema`); got != `"rain""schema"` {
+		t.Fatalf("expected ANSI identifier quoting, got %q", got)
 	}
 }
 

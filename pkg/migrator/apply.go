@@ -10,8 +10,8 @@ import (
 )
 
 // ApplySQLMigrations applies ordered SQL migrations using the existing migration table tracking.
-func ApplySQLMigrations(ctx context.Context, db *sql.DB, tableName string, migrationsOnDisk []DiskMigration) (migrate.ApplyResult, error) {
-	if err := validatePendingMigrationOrder(ctx, db, tableName, migrationsOnDisk); err != nil {
+func ApplySQLMigrations(ctx context.Context, db *sql.DB, dialectName, tableName string, migrationsOnDisk []DiskMigration) (migrate.ApplyResult, error) {
+	if err := validatePendingMigrationOrder(ctx, db, dialectName, tableName, migrationsOnDisk); err != nil {
 		return migrate.ApplyResult{}, err
 	}
 
@@ -42,8 +42,8 @@ func ApplySQLMigrations(ctx context.Context, db *sql.DB, tableName string, migra
 	return migrate.NewRunner(tableName).ApplyPending(ctx, db, migrations)
 }
 
-func validatePendingMigrationOrder(ctx context.Context, db *sql.DB, tableName string, migrationsOnDisk []DiskMigration) error {
-	appliedIDs, lastAppliedID, err := loadAppliedMigrationIDs(ctx, db, tableName)
+func validatePendingMigrationOrder(ctx context.Context, db *sql.DB, dialectName, tableName string, migrationsOnDisk []DiskMigration) error {
+	appliedIDs, lastAppliedID, err := loadAppliedMigrationIDs(ctx, db, dialectName, tableName)
 	if err != nil {
 		return err
 	}
@@ -64,8 +64,8 @@ func validatePendingMigrationOrder(ctx context.Context, db *sql.DB, tableName st
 	return nil
 }
 
-func loadAppliedMigrationIDs(ctx context.Context, db *sql.DB, tableName string) (map[string]struct{}, string, error) {
-	query := fmt.Sprintf(`SELECT id FROM %s ORDER BY id DESC`, quoteMigrationIdentifier(tableName))
+func loadAppliedMigrationIDs(ctx context.Context, db *sql.DB, dialectName, tableName string) (map[string]struct{}, string, error) {
+	query := fmt.Sprintf(`SELECT id FROM %s ORDER BY id DESC`, quoteMigrationIdentifier(dialectName, tableName))
 	rows, err := db.QueryContext(ctx, query)
 	if err != nil {
 		if isMissingTableError(err) {
@@ -101,7 +101,11 @@ func isMissingTableError(err error) bool {
 		strings.Contains(message, "doesn't exist")
 }
 
-func quoteMigrationIdentifier(name string) string {
+func quoteMigrationIdentifier(dialectName, name string) string {
+	if dialectName == "mysql" {
+		escaped := strings.ReplaceAll(name, "`", "``")
+		return "`" + escaped + "`"
+	}
 	escaped := strings.ReplaceAll(name, `"`, `""`)
 	return `"` + escaped + `"`
 }

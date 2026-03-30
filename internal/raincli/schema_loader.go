@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"text/template"
 
@@ -31,7 +32,7 @@ import (
 )
 
 func main() {
-	snapshot, err := migrator.BuildSnapshot("{{.Dialect}}", registrypkg.{{.SchemaFunction}}())
+	snapshot, err := migrator.BuildSnapshot({{.Dialect}}, registrypkg.{{.SchemaFunction}}())
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
@@ -61,19 +62,15 @@ func LoadSchemaSnapshot(ctx context.Context, cwd string, config Config) (migrato
 	defer func() { _ = os.RemoveAll(tempDir) }()
 
 	loaderPath := filepath.Join(tempDir, "main.go")
-	var source bytes.Buffer
-	templateValue, parseErr := template.New("schema-loader").Parse(schemaLoaderSource)
-	if parseErr != nil {
-		return migrator.Snapshot{}, parseErr
-	}
-	if executeErr := templateValue.Execute(&source, schemaLoaderInput{
-		Dialect:        config.Dialect,
+	source, renderErr := renderSchemaLoaderSource(schemaLoaderInput{
+		Dialect:        strconv.Quote(config.Dialect),
 		SchemaImport:   schemaImport,
 		SchemaFunction: config.SchemaFunction,
-	}); executeErr != nil {
-		return migrator.Snapshot{}, executeErr
+	})
+	if renderErr != nil {
+		return migrator.Snapshot{}, renderErr
 	}
-	if writeErr := os.WriteFile(loaderPath, source.Bytes(), 0o644); writeErr != nil {
+	if writeErr := os.WriteFile(loaderPath, source, 0o644); writeErr != nil {
 		return migrator.Snapshot{}, writeErr
 	}
 
@@ -93,6 +90,18 @@ func LoadSchemaSnapshot(ctx context.Context, cwd string, config Config) (migrato
 	}
 
 	return snapshot, nil
+}
+
+func renderSchemaLoaderSource(input schemaLoaderInput) ([]byte, error) {
+	var source bytes.Buffer
+	templateValue, parseErr := template.New("schema-loader").Parse(schemaLoaderSource)
+	if parseErr != nil {
+		return nil, parseErr
+	}
+	if executeErr := templateValue.Execute(&source, input); executeErr != nil {
+		return nil, executeErr
+	}
+	return source.Bytes(), nil
 }
 
 func resolveImportPath(ctx context.Context, cwd, packageRef string) (string, error) {
