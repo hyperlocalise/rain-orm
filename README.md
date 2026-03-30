@@ -427,6 +427,12 @@ Save an annotated report with environment details and a metric legend:
 make bench-report
 ```
 
+Run the ORM showdown suite per library and print a `benchstat` comparison against the `raw` baseline:
+
+```sh
+make benchstats
+```
+
 Run a single workload:
 
 ```sh
@@ -445,13 +451,19 @@ Save a filtered annotated report:
 BENCH_FILTER='BenchmarkSQLiteRichSelectWithNestedRelations/medium$' make bench-report
 ```
 
+Filter the ORM showdown report to one dataset or workload suffix:
+
+```sh
+BENCH_FILTER='small/prepared_point_lookup$$' make benchstats
+```
+
 Compare two runs over time by saving the benchmark output and diffing the benchmark lines from the same machine and environment. Use the built-in Go metrics as the primary signals:
 
 - `ns/op` shows the average execution time per benchmark iteration.
 - `B/op` shows the average bytes allocated per iteration.
 - `allocs/op` shows the average number of heap allocations per iteration.
 
-`make bench-report` writes plain-text reports under `artifacts/bench/` and prepends a header that records the timestamp, git commit, branch, Go version, platform, exact command, optional benchmark filter, and the metric legend above.
+`make bench-report` writes each run under `artifacts/bench/sqlite/<timestamp>/`, with benchmark output in a plain `.txt` file and environment details in `manifest.txt`.
 
 The suite uses two SQLite fixtures:
 
@@ -465,6 +477,8 @@ The suite seeds deterministic `small`, `medium`, and `large` SQLite datasets bef
 ```sh
 $> make
 bench                          run sqlite benchmark suite with allocation metrics
+bench-ormshowdown              run ORM showdown benchmark suite with allocation metrics
+benchstats                     run ORM showdown per-library benchmarks and compare them with benchstat
 bootstrap                      download tool and module dependencies
 build                          build the library (verifies compilation)
 clean                          clean up test artifacts

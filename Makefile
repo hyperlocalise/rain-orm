@@ -3,6 +3,7 @@ version?=$(shell git describe --abbrev=0 --tags 2>/dev/null || echo dev)
 golangci_lint_version?=v2.10.1
 gobin?=$(shell go env GOPATH)/bin
 golangci_lint_bin?=$(gobin)/golangci-lint
+benchstat_bin?=$(gobin)/benchstat
 
 .DEFAULT_GOAL := help
 
@@ -30,6 +31,10 @@ bench-report: ## run sqlite benchmark suite and save an annotated report under a
 .PHONY: bench-ormshowdown
 bench-ormshowdown: ## run ORM showdown benchmark suite with allocation metrics
 	go test -run '^$$' -bench . -benchmem ./benchmarks/ormshowdown/...
+
+.PHONY: benchstats
+benchstats: ## run ORM showdown per-library benchmarks and compare them with benchstat
+	BENCHSTAT_BIN="$(benchstat_bin)" ./scripts/bench-ormshowdown-report.sh "$(BENCH_FILTER)"
 
 .PHONY: test-json
 test-json: ## run tests with JSON output (for CI)
@@ -84,3 +89,4 @@ example-dialect: ## run dialect example (placeholder)
 bootstrap: ## download tool and module dependencies
 	go mod download
 	go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(golangci_lint_version)
+	go install golang.org/x/perf/cmd/benchstat@latest
