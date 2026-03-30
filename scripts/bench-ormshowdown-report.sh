@@ -12,6 +12,7 @@ manifest_path="${report_dir}/manifest.txt"
 bench_count="${BENCH_COUNT:-3}"
 benchstat_bin="${BENCHSTAT_BIN:-benchstat}"
 libraries=(raw rain bun gorm)
+comparison_libraries=("${(@)libraries[2,-1]}")
 
 mkdir -p "${report_dir}" "${normalized_dir}" "${detail_dir}" "${csv_dir}"
 
@@ -86,7 +87,7 @@ write_benchstat_outputs() {
 
   print -r -- "==> benchstat (baseline: raw)"
   csv_inputs=()
-  for library in "${libraries[@]:1}"; do
+  for library in "${comparison_libraries[@]}"; do
     detail_path="${detail_dir}/raw-vs-${library}.txt"
     csv_path="${csv_dir}/raw-vs-${library}.csv"
 
@@ -97,7 +98,12 @@ write_benchstat_outputs() {
     print -r -- ""
   done
 
-  awk -F',' '
+  # benchstat -format csv currently emits tables like:
+  #   ,old.txt,,new.txt,,,
+  #   ,sec/op,CI,sec/op,CI,vs base,P
+  # Parse the repeated metric headings to locate the two centre-value columns
+  # rather than assuming fixed field numbers.
+  awk -F',' -v libs_csv="${(j:,:)comparison_libraries}" '
 function trim(value) {
   gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
   return value
@@ -111,10 +117,7 @@ function ratio(oldv, newv) {
 }
 
 BEGIN {
-  libs[1] = "rain"
-  libs[2] = "bun"
-  libs[3] = "gorm"
-  lib_count = 3
+  lib_count = split(libs_csv, libs, ",")
   metric_count = 0
   row_count = 0
 }
@@ -124,16 +127,35 @@ FNR == 1 {
   current_lib = parts[length(parts)]
   sub(/^raw-vs-/, "", current_lib)
   sub(/\.csv$/, "", current_lib)
+  current_metric = ""
+  base_col = 0
+  compare_col = 0
   next
 }
 
-$1 == "" && ($2 == "sec/op" || $2 == "B/op" || $2 == "allocs/op") {
-  metric = trim($2)
+$1 == "" {
+  metric = ""
+  delete metric_cols
+  metric_col_count = 0
+  for (i = 2; i <= NF; i++) {
+    value = trim($i)
+    if (value == "sec/op" || value == "B/op" || value == "allocs/op") {
+      metric_cols[++metric_col_count] = i
+      if (metric == "") {
+        metric = value
+      }
+    }
+  }
+  if (metric_col_count < 2) {
+    next
+  }
   if (!(metric in metric_seen)) {
     metric_seen[metric] = 1
     metric_order[++metric_count] = metric
   }
   current_metric = metric
+  base_col = metric_cols[1]
+  compare_col = metric_cols[2]
   next
 }
 
@@ -143,7 +165,9 @@ $1 ~ /^ORMShowdown\// || $1 == "geomean" {
     row_seen[benchmark] = 1
     row_order[++row_count] = benchmark
   }
-  values[current_metric, benchmark, current_lib] = ratio(trim($2), trim($4))
+  if (current_metric != "" && base_col > 0 && compare_col > 0) {
+    values[current_metric, benchmark, current_lib] = ratio(trim($(base_col)), trim($(compare_col)))
+  }
 }
 
 END {

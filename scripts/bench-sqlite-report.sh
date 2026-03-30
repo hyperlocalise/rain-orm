@@ -39,26 +39,14 @@ fi
 manifest_path="${report_dir}/manifest.txt"
 raw_output_path="${report_dir}/${suffix}.txt"
 
-print -r -- "Rain SQLite benchmark run"
-print -r -- "Timestamp: $(date '+%Y-%m-%d %H:%M:%S %Z')"
-print -r -- "Commit: ${commit_sha}"
-print -r -- "Branch: ${branch_name}"
-print -r -- "Go: ${go_version}"
-print -r -- "Platform: ${platform}"
-print -r -- "Bench count: ${bench_count}"
-if [[ -n "${filter}" ]]; then
-  print -r -- "Benchmark filter: ${filter}"
-fi
-print -r -- "Report directory: ${report_dir}"
-print -r -- ""
-
-{
+write_manifest() {
   print -r -- "Rain SQLite benchmark run"
   print -r -- "Timestamp: $(date '+%Y-%m-%d %H:%M:%S %Z')"
   print -r -- "Commit: ${commit_sha}"
   print -r -- "Branch: ${branch_name}"
   print -r -- "Go: ${go_version}"
   print -r -- "Platform: ${platform}"
+  print -r -- "Report directory: ${report_dir}"
   print -r -- "Command: ${command_string}"
   print -r -- "Bench count: ${bench_count}"
   if [[ -n "${filter}" ]]; then
@@ -69,7 +57,9 @@ print -r -- ""
   print -r -- "- ns/op: average time per benchmark iteration"
   print -r -- "- B/op: average bytes allocated per iteration"
   print -r -- "- allocs/op: average heap allocations per iteration"
-} > "${manifest_path}"
+}
+
+write_manifest | tee "${manifest_path}"
 
 "${go_test_cmd[@]}" | tee "${raw_output_path}"
 print -r -- ""
