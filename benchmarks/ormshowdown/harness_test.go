@@ -38,14 +38,15 @@ type ormAdapter interface {
 	joinScan(ctx context.Context, limit int) error
 	groupedAggregate(ctx context.Context) error
 	subqueryReport(ctx context.Context, limit int) error
-	eagerLoadNearestEquivalent(ctx context.Context, limit int) error
+	joinUserPostsFlatRows(ctx context.Context, limit int) error
+	preloadPosts(ctx context.Context, limit int) error
 	preparedPointLookup(ctx context.Context, id int64) error
 }
 
 func BenchmarkORMShowdown(b *testing.B) {
 	for _, ds := range benchmarkDatasets {
 		ds := ds
-		adapters := []ormAdapter{&rawAdapter{}, &rainAdapter{}, &bunAdapter{}, &gormAdapter{}, &sqlcAdapter{}, &entAdapter{}}
+		adapters := []ormAdapter{&rawAdapter{}, &rainAdapter{}, &bunAdapter{}, &gormAdapter{}}
 		for _, adapter := range adapters {
 			adapter := adapter
 			b.Run(fmt.Sprintf("%s/%s", adapter.name(), ds.name), func(b *testing.B) {
@@ -61,11 +62,14 @@ func BenchmarkORMShowdown(b *testing.B) {
 }
 
 func runWorkloads(b *testing.B, ctx context.Context, ds datasetSize, adapter ormAdapter) {
+	nextInsertID := ds.posts + 1000
 	b.Run("insert_single", func(b *testing.B) {
 		b.ReportAllocs()
 		b.ResetTimer()
-		for idx := range b.N {
-			if err := adapter.insertSingle(ctx, idx+ds.posts+1000); err != nil {
+		for range b.N {
+			insertID := nextInsertID
+			nextInsertID++
+			if err := adapter.insertSingle(ctx, insertID); err != nil {
 				b.Fatalf("insert_single failed: %v", err)
 			}
 		}
@@ -119,13 +123,23 @@ func runWorkloads(b *testing.B, ctx context.Context, ds datasetSize, adapter orm
 			}
 		}
 	})
-	b.Run("eager_load_nearest_equivalent", func(b *testing.B) {
+	b.Run("join_user_posts_flat_rows", func(b *testing.B) {
 		limit := min(100, ds.users)
 		b.ReportAllocs()
 		b.ResetTimer()
 		for range b.N {
-			if err := adapter.eagerLoadNearestEquivalent(ctx, limit); err != nil {
-				b.Fatalf("eager_load_nearest_equivalent failed: %v", err)
+			if err := adapter.joinUserPostsFlatRows(ctx, limit); err != nil {
+				b.Fatalf("join_user_posts_flat_rows failed: %v", err)
+			}
+		}
+	})
+	b.Run("preload_posts", func(b *testing.B) {
+		limit := min(100, ds.users)
+		b.ReportAllocs()
+		b.ResetTimer()
+		for range b.N {
+			if err := adapter.preloadPosts(ctx, limit); err != nil {
+				b.Fatalf("preload_posts failed: %v", err)
 			}
 		}
 	})
@@ -213,6 +227,22 @@ type basicUser struct {
 	Active    bool      `db:"active"`
 	Status    string    `db:"status"`
 	CreatedAt time.Time `db:"created_at"`
+}
+
+type basicPost struct {
+	ID         int64     `db:"id"`
+	UserID     int64     `db:"user_id"`
+	CategoryID *int64    `db:"category_id"`
+	Title      string    `db:"title"`
+	Body       string    `db:"body"`
+	Published  bool      `db:"published"`
+	CreatedAt  time.Time `db:"created_at"`
+}
+
+type rawUserWithPosts struct {
+	ID    int64
+	Email string
+	Posts []basicPost
 }
 
 type bunBenchUser struct {
@@ -361,7 +391,7 @@ func (a *rawAdapter) subqueryReport(ctx context.Context, limit int) error {
 	return rows.Err()
 }
 
-func (a *rawAdapter) eagerLoadNearestEquivalent(ctx context.Context, limit int) error {
+func (a *rawAdapter) joinUserPostsFlatRows(ctx context.Context, limit int) error {
 	rows, err := a.db.QueryContext(ctx, `SELECT u.id, u.email, p.id, p.title FROM users u LEFT JOIN posts p ON p.user_id=u.id WHERE u.active=1 ORDER BY u.id, p.id LIMIT ?`, limit)
 	if err != nil {
 		return err
@@ -379,6 +409,59 @@ func (a *rawAdapter) eagerLoadNearestEquivalent(ctx context.Context, limit int) 
 	return rows.Err()
 }
 
+func (a *rawAdapter) preloadPosts(ctx context.Context, limit int) error {
+	usersRows, err := a.db.QueryContext(ctx, `SELECT id, email FROM users WHERE active=1 ORDER BY id LIMIT ?`, limit)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = usersRows.Close() }()
+
+	users := make([]rawUserWithPosts, 0, limit)
+	userIDs := make([]int64, 0, limit)
+	byID := make(map[int64]int, limit)
+	for usersRows.Next() {
+		var row rawUserWithPosts
+		if err := usersRows.Scan(&row.ID, &row.Email); err != nil {
+			return err
+		}
+		byID[row.ID] = len(users)
+		users = append(users, row)
+		userIDs = append(userIDs, row.ID)
+	}
+	if err := usersRows.Err(); err != nil {
+		return err
+	}
+	if len(userIDs) == 0 {
+		return nil
+	}
+
+	query := `SELECT id,user_id,category_id,title,body,published,created_at FROM posts WHERE user_id IN (?`
+	args := []any{userIDs[0]}
+	for _, id := range userIDs[1:] {
+		query += ",?"
+		args = append(args, id)
+	}
+	query += `) ORDER BY user_id, id`
+
+	postRows, err := a.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = postRows.Close() }()
+	for postRows.Next() {
+		var post basicPost
+		if err := postRows.Scan(&post.ID, &post.UserID, &post.CategoryID, &post.Title, &post.Body, &post.Published, &post.CreatedAt); err != nil {
+			return err
+		}
+		idx, ok := byID[post.UserID]
+		if !ok {
+			continue
+		}
+		users[idx].Posts = append(users[idx].Posts, post)
+	}
+	return postRows.Err()
+}
+
 func (a *rawAdapter) preparedPointLookup(ctx context.Context, id int64) error {
 	var u basicUser
 	return a.preparedPointQuery.QueryRowContext(ctx, id).Scan(&u.ID, &u.Email, &u.Name, &u.Active, &u.Status, &u.CreatedAt)
@@ -393,9 +476,38 @@ type benchUsersTable struct {
 	Status    *schema.Column[string]
 	CreatedAt *schema.Column[time.Time]
 }
+
+type benchPostsTable struct {
+	schema.TableModel
+	ID         *schema.Column[int64]
+	UserID     *schema.Column[int64]
+	CategoryID *schema.Column[int64]
+	Title      *schema.Column[string]
+	Body       *schema.Column[string]
+	Published  *schema.Column[bool]
+	CreatedAt  *schema.Column[time.Time]
+}
+
+type rainPostRow struct {
+	ID         int64     `db:"id"`
+	UserID     int64     `db:"user_id"`
+	CategoryID *int64    `db:"category_id"`
+	Title      string    `db:"title"`
+	Body       string    `db:"body"`
+	Published  bool      `db:"published"`
+	CreatedAt  time.Time `db:"created_at"`
+}
+
+type rainUserWithPostsRow struct {
+	ID    int64         `db:"id"`
+	Email string        `db:"email"`
+	Posts []rainPostRow `rain:"relation:posts"`
+}
+
 type rainAdapter struct {
 	db                 *rain.DB
 	users              *benchUsersTable
+	posts              *benchPostsTable
 	preparedPointQuery *rain.PreparedSelectQuery
 }
 
@@ -414,6 +526,16 @@ func (a *rainAdapter) open(tb testing.TB, path string) func() {
 		t.Status = t.Text("status").NotNull()
 		t.CreatedAt = t.Timestamp("created_at").NotNull()
 	})
+	a.posts = schema.Define("posts", func(t *benchPostsTable) {
+		t.ID = t.BigSerial("id").PrimaryKey()
+		t.UserID = t.BigInt("user_id").NotNull()
+		t.CategoryID = t.BigInt("category_id")
+		t.Title = t.Text("title").NotNull()
+		t.Body = t.Text("body").NotNull()
+		t.Published = t.Boolean("published").NotNull()
+		t.CreatedAt = t.Timestamp("created_at").NotNull()
+	})
+	a.users.HasMany("posts", a.users.ID, a.posts.UserID)
 	prepared, err := a.db.Select().Table(a.users).Where(a.users.ID.EqExpr(schema.Placeholder("id"))).Prepare(context.Background())
 	if err != nil {
 		_ = db.Close()
@@ -490,7 +612,7 @@ func (a *rainAdapter) subqueryReport(ctx context.Context, limit int) error {
 	return rows.Err()
 }
 
-func (a *rainAdapter) eagerLoadNearestEquivalent(ctx context.Context, limit int) error {
+func (a *rainAdapter) joinUserPostsFlatRows(ctx context.Context, limit int) error {
 	rows, err := a.db.Query(ctx, `SELECT u.id, u.email, p.id AS post_id, p.title FROM users u LEFT JOIN posts p ON p.user_id=u.id WHERE u.active=1 ORDER BY u.id,p.id LIMIT ?`, limit)
 	if err != nil {
 		return err
@@ -506,6 +628,17 @@ func (a *rainAdapter) eagerLoadNearestEquivalent(ctx context.Context, limit int)
 		}
 	}
 	return rows.Err()
+}
+
+func (a *rainAdapter) preloadPosts(ctx context.Context, limit int) error {
+	rows := make([]rainUserWithPostsRow, 0, limit)
+	return a.db.Select().
+		Table(a.users).
+		Where(a.users.Active.Eq(true)).
+		OrderBy(a.users.ID.Asc()).
+		Limit(limit).
+		WithRelations("posts").
+		Scan(ctx, &rows)
 }
 
 func (a *rainAdapter) preparedPointLookup(ctx context.Context, id int64) error {
@@ -540,25 +673,25 @@ func (a *bunAdapter) open(tb testing.TB, path string) func() {
 }
 
 func (a *bunAdapter) insertSingle(ctx context.Context, i int) error {
-	u := &basicUser{
+	u := &bunBenchUser{
 		Email:     fmt.Sprintf("bun-insert-%d@example.com", i),
 		Name:      "Bun Insert",
 		Active:    i%2 == 0,
 		Status:    "active",
 		CreatedAt: time.Now().UTC(),
 	}
-	_, err := a.db.NewInsert().Model(u).ModelTableExpr("users").Exec(ctx)
+	_, err := a.db.NewInsert().Model(u).Exec(ctx)
 	return err
 }
 
 func (a *bunAdapter) lookupByPK(ctx context.Context, id int64) error {
-	var u basicUser
-	return a.db.NewSelect().Model(&u).ModelTableExpr("users").Where("id = ?", id).Limit(1).Scan(ctx)
+	var u bunBenchUser
+	return a.db.NewSelect().Model(&u).Where("u.id = ?", id).Limit(1).Scan(ctx)
 }
 
 func (a *bunAdapter) filteredSliceScan(ctx context.Context, limit int) error {
-	rows := make([]basicUser, 0, limit)
-	return a.db.NewSelect().Model(&rows).ModelTableExpr("users").Where("active = ?", true).OrderExpr("id ASC").Limit(limit).Scan(ctx)
+	rows := make([]bunBenchUser, 0, limit)
+	return a.db.NewSelect().Model(&rows).Where("u.active = ?", true).OrderExpr("u.id ASC").Limit(limit).Scan(ctx)
 }
 
 func (a *bunAdapter) joinScan(ctx context.Context, limit int) error {
@@ -590,8 +723,8 @@ func (a *bunAdapter) groupedAggregate(ctx context.Context) error {
 
 func (a *bunAdapter) subqueryReport(ctx context.Context, limit int) error {
 	rows := make([]struct {
-		Email string `db:"email"`
-		Count int64  `db:"post_count"`
+		Email string `bun:"email"`
+		Count int64  `bun:"post_count"`
 	}, 0, limit)
 	postCounts := a.db.NewSelect().
 		TableExpr("posts").
@@ -607,7 +740,24 @@ func (a *bunAdapter) subqueryReport(ctx context.Context, limit int) error {
 		Scan(ctx, &rows)
 }
 
-func (a *bunAdapter) eagerLoadNearestEquivalent(ctx context.Context, limit int) error {
+func (a *bunAdapter) joinUserPostsFlatRows(ctx context.Context, limit int) error {
+	rows := make([]struct {
+		UserID int64          `bun:"id"`
+		Email  string         `bun:"email"`
+		PostID sql.NullInt64  `bun:"post_id"`
+		Title  sql.NullString `bun:"title"`
+	}, 0, limit)
+	return a.db.NewSelect().
+		TableExpr("users AS u").
+		ColumnExpr("u.id, u.email, p.id AS post_id, p.title").
+		Join("LEFT JOIN posts AS p ON p.user_id = u.id").
+		Where("u.active = ?", true).
+		OrderExpr("u.id ASC, p.id ASC").
+		Limit(limit).
+		Scan(ctx, &rows)
+}
+
+func (a *bunAdapter) preloadPosts(ctx context.Context, limit int) error {
 	rows := make([]bunBenchUser, 0, limit)
 	return a.db.NewSelect().
 		Model(&rows).
@@ -722,7 +872,24 @@ func (a *gormAdapter) subqueryReport(ctx context.Context, limit int) error {
 		Scan(&rows).Error
 }
 
-func (a *gormAdapter) eagerLoadNearestEquivalent(ctx context.Context, limit int) error {
+func (a *gormAdapter) joinUserPostsFlatRows(ctx context.Context, limit int) error {
+	var rows []struct {
+		UserID int64          `gorm:"column:id"`
+		Email  string         `gorm:"column:email"`
+		PostID sql.NullInt64  `gorm:"column:post_id"`
+		Title  sql.NullString `gorm:"column:title"`
+	}
+	return a.db.WithContext(ctx).
+		Table("users AS u").
+		Select("u.id, u.email, p.id AS post_id, p.title").
+		Joins("LEFT JOIN posts AS p ON p.user_id = u.id").
+		Where("u.active = ?", true).
+		Order("u.id ASC, p.id ASC").
+		Limit(limit).
+		Scan(&rows).Error
+}
+
+func (a *gormAdapter) preloadPosts(ctx context.Context, limit int) error {
 	var rows []gormBenchUser
 	return a.db.WithContext(ctx).
 		Model(&gormBenchUser{}).
@@ -739,11 +906,3 @@ func (a *gormAdapter) preparedPointLookup(ctx context.Context, id int64) error {
 	var u basicUser
 	return a.preparedPointQuery.QueryRowContext(ctx, id).Scan(&u.ID, &u.Email, &u.Name, &u.Active, &u.Status, &u.CreatedAt)
 }
-
-type sqlcAdapter struct{ rawAdapter }
-
-func (a *sqlcAdapter) name() string { return "sqlc" }
-
-type entAdapter struct{ rawAdapter }
-
-func (a *entAdapter) name() string { return "ent" }

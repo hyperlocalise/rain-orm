@@ -4,7 +4,9 @@ set -euo pipefail
 
 filter="${1:-}"
 timestamp="$(date '+%Y%m%d-%H%M%S')"
-report_dir="artifacts/bench"
+report_dir="artifacts/bench/sqlite/${timestamp}"
+bench_count="${BENCH_COUNT:-3}"
+
 mkdir -p "${report_dir}"
 
 sanitize_name() {
@@ -18,16 +20,7 @@ sanitize_name() {
   print -r -- "${value}"
 }
 
-if [[ -n "${filter}" ]]; then
-  base_name="$(sanitize_name "${filter}")"
-else
-  base_name="sqlite"
-fi
-
-report_path="${report_dir}/${base_name}-${timestamp}.txt"
-bench_count="${BENCH_COUNT:-3}"
 go_test_cmd=(go test -run '^$' -bench . -benchmem -count "${bench_count}" ./pkg/rain)
-
 if [[ -n "${filter}" ]]; then
   go_test_cmd=(go test -run '^$' -bench "${filter}" -benchmem -count "${bench_count}" ./pkg/rain)
 fi
@@ -38,6 +31,27 @@ go_version="$(go version 2>/dev/null || print -r -- unknown)"
 platform="$(go env GOOS 2>/dev/null || print -r -- unknown)/$(go env GOARCH 2>/dev/null || print -r -- unknown)"
 command_string="${(j: :)go_test_cmd}"
 
+suffix="sqlite"
+if [[ -n "${filter}" ]]; then
+  suffix="$(sanitize_name "${filter}")"
+fi
+
+manifest_path="${report_dir}/manifest.txt"
+raw_output_path="${report_dir}/${suffix}.txt"
+
+print -r -- "Rain SQLite benchmark run"
+print -r -- "Timestamp: $(date '+%Y-%m-%d %H:%M:%S %Z')"
+print -r -- "Commit: ${commit_sha}"
+print -r -- "Branch: ${branch_name}"
+print -r -- "Go: ${go_version}"
+print -r -- "Platform: ${platform}"
+print -r -- "Bench count: ${bench_count}"
+if [[ -n "${filter}" ]]; then
+  print -r -- "Benchmark filter: ${filter}"
+fi
+print -r -- "Report directory: ${report_dir}"
+print -r -- ""
+
 {
   print -r -- "Rain SQLite benchmark run"
   print -r -- "Timestamp: $(date '+%Y-%m-%d %H:%M:%S %Z')"
@@ -46,6 +60,7 @@ command_string="${(j: :)go_test_cmd}"
   print -r -- "Go: ${go_version}"
   print -r -- "Platform: ${platform}"
   print -r -- "Command: ${command_string}"
+  print -r -- "Bench count: ${bench_count}"
   if [[ -n "${filter}" ]]; then
     print -r -- "Benchmark filter: ${filter}"
   fi
@@ -54,8 +69,9 @@ command_string="${(j: :)go_test_cmd}"
   print -r -- "- ns/op: average time per benchmark iteration"
   print -r -- "- B/op: average bytes allocated per iteration"
   print -r -- "- allocs/op: average heap allocations per iteration"
-  print -r -- ""
-} > "${report_path}"
+} > "${manifest_path}"
 
-"${go_test_cmd[@]}" | tee -a "${report_path}"
-print -r -- "Saved benchmark report: ${report_path}"
+"${go_test_cmd[@]}" | tee "${raw_output_path}"
+print -r -- ""
+print -r -- "Saved run manifest: ${manifest_path}"
+print -r -- "Saved benchmark output: ${raw_output_path}"
