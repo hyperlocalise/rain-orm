@@ -105,14 +105,11 @@ func (p *PreparedSelectQuery) Scan(ctx context.Context, args PreparedArgs, dest 
 			return cacheErr
 		}
 		if ok {
-			result, err := decodeCachedSelectRows(cached)
-			if err != nil {
-				return err
+			if result, err := decodeCachedSelectRows(cached); err == nil {
+				return scanCachedRowsAgainstTable(result, dest, table)
 			}
-			return scanCachedRowsAgainstTable(result, dest, table)
 		}
 	}
-
 	rows, err := p.selectStmt.QueryContext(ctx, bound...)
 	if err != nil {
 		return err
@@ -159,14 +156,11 @@ func (p *PreparedSelectQuery) Count(ctx context.Context, args PreparedArgs) (int
 			return 0, cacheErr
 		}
 		if ok {
-			count, err := decodeCachedInt64(cached)
-			if err != nil {
-				return 0, err
+			if count, err := decodeCachedInt64(cached); err == nil {
+				return count, nil
 			}
-			return count, nil
 		}
 	}
-
 	rows, err := p.countStmt.QueryContext(ctx, bound...)
 	if err != nil {
 		return 0, err
@@ -204,14 +198,11 @@ func (p *PreparedSelectQuery) Exists(ctx context.Context, args PreparedArgs) (bo
 			return false, cacheErr
 		}
 		if ok {
-			exists, err := decodeCachedBool(cached)
-			if err != nil {
-				return false, err
+			if exists, err := decodeCachedBool(cached); err == nil {
+				return exists, nil
 			}
-			return exists, nil
 		}
 	}
-
 	rows, err := p.existsStmt.QueryContext(ctx, bound...)
 	if err != nil {
 		return false, err

@@ -128,6 +128,7 @@ func (q *SelectQuery) WithRelations(names ...string) *SelectQuery {
 }
 
 // Cache enables opt-in query caching for this SELECT with TTL and optional metadata.
+// Queries that use WithRelations do not read from or write to the query cache.
 func (q *SelectQuery) Cache(options QueryCacheOptions) *SelectQuery {
 	q.cacheOptions = normalizeQueryCacheOptions(options)
 	return q
@@ -289,14 +290,11 @@ func (q *SelectQuery) Scan(ctx context.Context, dest any) error {
 			return cacheErr
 		}
 		if ok {
-			result, err := decodeCachedSelectRows(cached)
-			if err != nil {
-				return err
+			if result, err := decodeCachedSelectRows(cached); err == nil {
+				return scanCachedRowsAgainstTable(result, dest, table)
 			}
-			return scanCachedRowsAgainstTable(result, dest, table)
 		}
 	}
-
 	rows, err := q.runner.queryContext(ctx, query, args...)
 	if err != nil {
 		return err
@@ -343,14 +341,11 @@ func (q *SelectQuery) Count(ctx context.Context) (int64, error) {
 			return 0, cacheErr
 		}
 		if ok {
-			count, err := decodeCachedInt64(cached)
-			if err != nil {
-				return 0, err
+			if count, err := decodeCachedInt64(cached); err == nil {
+				return count, nil
 			}
-			return count, nil
 		}
 	}
-
 	rows, err := q.runner.queryContext(ctx, query, args...)
 	if err != nil {
 		return 0, err
@@ -403,14 +398,11 @@ func (q *SelectQuery) Exists(ctx context.Context) (bool, error) {
 			return false, cacheErr
 		}
 		if ok {
-			exists, err := decodeCachedBool(cached)
-			if err != nil {
-				return false, err
+			if exists, err := decodeCachedBool(cached); err == nil {
+				return exists, nil
 			}
-			return exists, nil
 		}
 	}
-
 	rows, err := q.runner.queryContext(ctx, existsQuery.sql, args...)
 	if err != nil {
 		return false, err

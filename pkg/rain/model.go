@@ -103,9 +103,8 @@ func buildModelMeta(meta *modelMeta, typ reflect.Type, prefix []int) {
 }
 
 func addModelFieldMapping(target map[string]modelField, errp *error, name string, index []int, kind string, explicit bool) {
-	if existing, ok := target[name]; ok {
+	if _, ok := target[name]; ok {
 		*errp = errors.Join(*errp, fmt.Errorf("rain: duplicate model field mapping for %s %q", kind, name))
-		_ = existing
 		return
 	}
 	target[name] = modelField{index: index, explicitColumn: explicit}
@@ -115,7 +114,7 @@ func columnNameForField(field reflect.StructField) (string, bool, bool) {
 	if raw, ok := field.Tag.Lookup("db"); ok {
 		name := strings.TrimSpace(raw)
 		if name == "" {
-			return snakeCaseIdentifier(field.Name), true, true
+			return "", false, true
 		}
 		if name == "-" {
 			return "", false, true

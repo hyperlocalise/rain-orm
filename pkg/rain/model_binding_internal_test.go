@@ -74,6 +74,21 @@ func TestBindTableModelRejectsUnknownColumnsAndDuplicateMappings(t *testing.T) {
 	}
 }
 
+func TestBindTableModelTreatsEmptyDBTagAsExcluded(t *testing.T) {
+	t.Parallel()
+
+	users := defineBindingUsersTable()
+
+	type emptyTagExcluded struct {
+		Email string `db:"email"`
+		Ghost string `db:""`
+	}
+
+	if err := BindTableModel[emptyTagExcluded](users); err != nil {
+		t.Fatalf("expected empty db tag to exclude field, got %v", err)
+	}
+}
+
 func TestBindTableModelRejectsIncompatibleTypes(t *testing.T) {
 	t.Parallel()
 
