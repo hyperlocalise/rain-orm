@@ -35,6 +35,103 @@ func (db *DB) CreateIndexesSQL(table schema.TableReference) ([]string, error) {
 	return createIndexesSQL(db.dialect, table.TableDef())
 }
 
+// ColumnDefinitionSQL compiles one column definition without the ALTER TABLE wrapper.
+func (db *DB) ColumnDefinitionSQL(table schema.TableReference, columnName string) (string, error) {
+	if db == nil || db.dialect == nil {
+		return "", errors.New("rain: column definition requires a configured dialect")
+	}
+	if table == nil || table.TableDef() == nil {
+		return "", errors.New("rain: column definition requires a non-nil table")
+	}
+
+	tableDef := table.TableDef()
+	column, ok := tableDef.ColumnByName(columnName)
+	if !ok {
+		return "", fmt.Errorf("rain: table %q has no column %q", tableDef.Name, columnName)
+	}
+
+	inlinePrimaryKey := false
+	tablePrimaryKey, err := tablePrimaryKeyConstraint(tableDef)
+	if err != nil {
+		return "", err
+	}
+	primaryKeys := primaryKeyColumns(tableDef)
+	if tablePrimaryKey == nil && len(primaryKeys) == 1 && primaryKeys[0] == column {
+		inlinePrimaryKey = true
+	}
+
+	return columnDefinitionSQL(db.dialect, tableDef, column, inlinePrimaryKey)
+}
+
+// AddConstraintSQL compiles one ALTER TABLE ... ADD ... statement for a named table constraint.
+func (db *DB) AddConstraintSQL(table schema.TableReference, constraintName string) (string, error) {
+	if db == nil || db.dialect == nil {
+		return "", errors.New("rain: add constraint requires a configured dialect")
+	}
+	if table == nil || table.TableDef() == nil {
+		return "", errors.New("rain: add constraint requires a non-nil table")
+	}
+
+	tableDef := table.TableDef()
+	for _, constraint := range tableDef.Constraints {
+		if constraint.Name != constraintName {
+			continue
+		}
+		definition, err := constraintDefinitionSQL(db.dialect, tableDef, constraint)
+		if err != nil {
+			return "", err
+		}
+		return "ALTER TABLE " + db.dialect.QuoteIdentifier(tableDef.Name) + " ADD " + definition, nil
+	}
+
+	return "", fmt.Errorf("rain: table %q has no constraint %q", tableDef.Name, constraintName)
+}
+
+// AddForeignKeySQL compiles one ALTER TABLE ... ADD ... statement for a named foreign key.
+func (db *DB) AddForeignKeySQL(table schema.TableReference, foreignKeyName string) (string, error) {
+	if db == nil || db.dialect == nil {
+		return "", errors.New("rain: add foreign key requires a configured dialect")
+	}
+	if table == nil || table.TableDef() == nil {
+		return "", errors.New("rain: add foreign key requires a non-nil table")
+	}
+
+	tableDef := table.TableDef()
+	for _, foreignKey := range tableDef.ForeignKeys {
+		if foreignKey.Name != foreignKeyName {
+			continue
+		}
+		definition, err := foreignKeyConstraintSQL(db.dialect, foreignKey)
+		if err != nil {
+			return "", err
+		}
+		return "ALTER TABLE " + db.dialect.QuoteIdentifier(tableDef.Name) + " ADD " + definition, nil
+	}
+
+	return "", fmt.Errorf("rain: table %q has no foreign key %q", tableDef.Name, foreignKeyName)
+}
+
+// ColumnDefaultSQL renders one column default expression for snapshotting and migration checks.
+func (db *DB) ColumnDefaultSQL(table schema.TableReference, columnName string) (string, error) {
+	if db == nil || db.dialect == nil {
+		return "", errors.New("rain: column default requires a configured dialect")
+	}
+	if table == nil || table.TableDef() == nil {
+		return "", errors.New("rain: column default requires a non-nil table")
+	}
+
+	tableDef := table.TableDef()
+	column, ok := tableDef.ColumnByName(columnName)
+	if !ok {
+		return "", fmt.Errorf("rain: table %q has no column %q", tableDef.Name, columnName)
+	}
+	if !column.HasDefault && column.DefaultSQL == "" {
+		return "", nil
+	}
+
+	return columnDefaultSQL(db.dialect, column)
+}
+
 func createTableSQL(d dialect.Dialect, table *schema.TableDef) (string, error) {
 	if d == nil {
 		return "", errors.New("rain: create table requires a configured dialect")
