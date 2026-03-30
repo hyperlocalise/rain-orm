@@ -40,6 +40,7 @@ rain-orm/
 ├── examples/
 │   ├── basic/main.go      # CRUD, queries, transactions example
 │   ├── schema/main.go     # Schema definition example
+│   └── schema/registry    # Importable schema registry for CLI usage
 │   └── dialect/main.go    # Database dialect example
 ├── pkg/
 │   ├── rain/
@@ -47,8 +48,12 @@ rain-orm/
 │   │   └── query.go       # Query builder (SELECT, INSERT, UPDATE, DELETE)
 │   ├── schema/
 │   │   └── schema.go      # Table/column definitions, types
+│   ├── migrator/
+│   │   └── ...            # Schema snapshots, diffs, and SQL migration helpers
 │   └── dialect/
 │       └── dialect.go     # PostgreSQL, MySQL, SQLite support
+├── cmd/
+│   └── rain/main.go       # CLI entry point
 └── internal/  
 ```
 
@@ -333,7 +338,11 @@ if err != nil {
 }
 ```
 
-This is intentionally limited to schema-to-DDL compilation. Rain does not generate migration diffs or manage migration history.
+Rain also includes a first-party CLI for code-first SQL migration generation and application. The v1 CLI supports additive snapshot diffs with `generate`, migration application with `migrate`, and project validation with `check`. It intentionally does not include Studio, direct schema push, or database introspection commands.
+
+## CLI Migrations
+
+See [cmd/rain/README.md](cmd/rain/README.md) for the CLI design, migration folder format, config examples, and command workflow.
 
 ## Migrations (forward-only v1)
 
