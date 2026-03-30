@@ -504,6 +504,28 @@ type rainUserWithPostsRow struct {
 	Posts []rainPostRow `rain:"relation:posts"`
 }
 
+type rainJoinRow struct {
+	Title string `db:"title"`
+	Email string `db:"email"`
+}
+
+type rainGroupedAggregateRow struct {
+	Status string `db:"status"`
+	Count  int64  `db:"count"`
+}
+
+type rainSubqueryReportRow struct {
+	Email string `db:"email"`
+	Count int64  `db:"post_count"`
+}
+
+type rainFlatUserPostRow struct {
+	ID     int64          `db:"id"`
+	Email  string         `db:"email"`
+	PostID sql.NullInt64  `db:"post_id"`
+	Title  sql.NullString `db:"title"`
+}
+
 type rainAdapter struct {
 	db                 *rain.DB
 	users              *benchUsersTable
@@ -566,68 +588,60 @@ func (a *rainAdapter) filteredSliceScan(ctx context.Context, limit int) error {
 }
 
 func (a *rainAdapter) joinScan(ctx context.Context, limit int) error {
-	rows, err := a.db.Query(ctx, `SELECT p.title, u.email FROM posts p JOIN users u ON p.user_id=u.id WHERE u.active=1 ORDER BY p.id LIMIT ?`, limit)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = rows.Close() }()
-	for rows.Next() {
-		var title, email string
-		if err := rows.Scan(&title, &email); err != nil {
-			return err
-		}
-	}
-	return rows.Err()
+	u := schema.Alias(a.users, "u")
+	p := schema.Alias(a.posts, "p")
+	rows := make([]rainJoinRow, 0, limit)
+	return a.db.Select().
+		Table(p).
+		Column(p.Title, u.Email).
+		Join(u, p.UserID.EqCol(u.ID)).
+		Where(u.Active.Eq(true)).
+		OrderBy(p.ID.Asc()).
+		Limit(limit).
+		Scan(ctx, &rows)
 }
 
 func (a *rainAdapter) groupedAggregate(ctx context.Context) error {
-	rows, err := a.db.Query(ctx, `SELECT status, COUNT(*) AS count FROM users GROUP BY status`)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = rows.Close() }()
-	for rows.Next() {
-		var status string
-		var count int64
-		if err := rows.Scan(&status, &count); err != nil {
-			return err
-		}
-	}
-	return rows.Err()
+	rows := make([]rainGroupedAggregateRow, 0, 3)
+	return a.db.Select().
+		Table(a.users).
+		Column(a.users.Status, schema.Count().As("count")).
+		GroupBy(a.users.Status).
+		Scan(ctx, &rows)
 }
 
 func (a *rainAdapter) subqueryReport(ctx context.Context, limit int) error {
-	rows, err := a.db.Query(ctx, `SELECT u.email, COALESCE(x.post_count,0) AS post_count FROM users u LEFT JOIN (SELECT user_id, COUNT(*) AS post_count FROM posts WHERE published=1 GROUP BY user_id) x ON x.user_id=u.id ORDER BY u.id LIMIT ?`, limit)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = rows.Close() }()
-	for rows.Next() {
-		var email string
-		var count int64
-		if err := rows.Scan(&email, &count); err != nil {
-			return err
-		}
-	}
-	return rows.Err()
+	rows := make([]rainSubqueryReportRow, 0, limit)
+	postCounts := a.db.Select().
+		Table(a.posts).
+		Column(a.posts.UserID.As("user_id"), schema.Count().As("post_count")).
+		Where(a.posts.Published.Eq(true)).
+		GroupBy(a.posts.UserID)
+	return a.db.Select().
+		Table(a.users).
+		Column(a.users.Email, schema.Raw("COALESCE(x.post_count, 0)").As("post_count")).
+		LeftJoinSubquery(postCounts, "x", schema.ComparisonExpr{
+			Left:     a.users.ID,
+			Operator: "=",
+			Right:    schema.Raw("x.user_id"),
+		}).
+		OrderBy(a.users.ID.Asc()).
+		Limit(limit).
+		Scan(ctx, &rows)
 }
 
 func (a *rainAdapter) joinUserPostsFlatRows(ctx context.Context, limit int) error {
-	rows, err := a.db.Query(ctx, `SELECT u.id, u.email, p.id AS post_id, p.title FROM users u LEFT JOIN posts p ON p.user_id=u.id WHERE u.active=1 ORDER BY u.id,p.id LIMIT ?`, limit)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = rows.Close() }()
-	for rows.Next() {
-		var uid int64
-		var email string
-		var postID sql.NullInt64
-		var title sql.NullString
-		if err := rows.Scan(&uid, &email, &postID, &title); err != nil {
-			return err
-		}
-	}
-	return rows.Err()
+	u := schema.Alias(a.users, "u")
+	p := schema.Alias(a.posts, "p")
+	rows := make([]rainFlatUserPostRow, 0, limit)
+	return a.db.Select().
+		Table(u).
+		Column(u.ID, u.Email, p.ID.As("post_id"), p.Title).
+		LeftJoin(p, p.UserID.EqCol(u.ID)).
+		Where(u.Active.Eq(true)).
+		OrderBy(u.ID.Asc(), p.ID.Asc()).
+		Limit(limit).
+		Scan(ctx, &rows)
 }
 
 func (a *rainAdapter) preloadPosts(ctx context.Context, limit int) error {
