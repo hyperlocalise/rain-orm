@@ -33,19 +33,19 @@ type mysqlPostsTable struct {
 }
 
 type mysqlInsertModel struct {
-	Email    string  `db:"email"`
-	Name     string  `db:"name"`
-	Active   bool    `db:"active"`
-	Nickname *string `db:"nickname"`
+	Email    string
+	Name     rain.Set[string]
+	Active   rain.Set[bool]
+	Nickname *string
 }
 
 type mysqlUserRow struct {
-	ID        int64   `db:"id"`
-	Email     string  `db:"email"`
-	Name      string  `db:"name"`
-	Active    bool    `db:"active"`
-	Nickname  *string `db:"nickname"`
-	CreatedAt string  `db:"created_at"`
+	ID        int64
+	Email     string
+	Name      string
+	Active    bool
+	Nickname  *string
+	CreatedAt string
 }
 
 func TestMySQLIntegrationInsertSelectAndJoin(t *testing.T) {
@@ -78,7 +78,11 @@ func TestMySQLIntegrationInsertSelectAndJoin(t *testing.T) {
 
 	if _, err := db.Insert().
 		Table(users).
-		Model(&mysqlInsertModel{Email: "override@example.com"}).
+		Model(&mysqlInsertModel{
+			Email:  "override@example.com",
+			Name:   rain.Set[string]{Value: "Alice", Valid: true},
+			Active: rain.Set[bool]{Value: false, Valid: true},
+		}).
 		Set(users.Name, "Alice").
 		Set(users.Active, false).
 		Set(users.Nickname, "ali").

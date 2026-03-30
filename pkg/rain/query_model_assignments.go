@@ -1,6 +1,7 @@
 package rain
 
 import (
+	"database/sql/driver"
 	"fmt"
 	"reflect"
 	"slices"
@@ -10,26 +11,25 @@ import (
 )
 
 func assignmentsFromModel(table *schema.TableDef, model any, skipAuto bool) ([]assignment, error) {
-	meta, value, err := lookupModelMeta(model)
+	_, value, err := lookupModelMeta(model)
+	if err != nil {
+		return nil, err
+	}
+	plan, err := lookupModelAssignmentPlan(table, value.Type())
 	if err != nil {
 		return nil, err
 	}
 
-	assignments := make([]assignment, 0, len(table.Columns))
-	for _, column := range table.Columns {
-		field, ok := meta.byColumn[column.Name]
-		if !ok {
-			continue
-		}
-
+	assignments := make([]assignment, 0, len(plan.fields))
+	for _, field := range plan.fields {
 		fieldValue := value.FieldByIndex(field.index)
-		resolvedValue, include := fieldValueForInsert(column, fieldValue, skipAuto)
+		resolvedValue, include := fieldValueForInsert(field.column, fieldValue, skipAuto)
 		if !include {
 			continue
 		}
 
 		assignments = append(assignments, assignment{
-			column: schema.Ref(column),
+			column: schema.Ref(field.column),
 			value:  schema.ValueExpr{Value: resolvedValue},
 		})
 	}
@@ -77,7 +77,7 @@ func mergeAssignments(table *schema.TableDef, base, overrides []assignment) ([]a
 
 func validateAssignmentTarget(table *schema.TableDef, item assignment) error {
 	column := item.column.ColumnDef()
-	if column.Table.Name != table.Name {
+	if column.Table != table {
 		return fmt.Errorf("rain: column %s belongs to table %s, not %s", column.Name, column.Table.Name, table.Name)
 	}
 	if _, ok := table.ColumnByName(column.Name); !ok {
@@ -88,19 +88,16 @@ func validateAssignmentTarget(table *schema.TableDef, item assignment) error {
 }
 
 func fieldValueForInsert(column *schema.ColumnDef, fieldValue reflect.Value, skipAuto bool) (any, bool) {
-	resolved, isNil := dereferenceValue(fieldValue)
-	if isNil {
+	resolvedValue, include, explicit := insertValueForField(fieldValue)
+	if !include {
 		return nil, false
 	}
 
-	if skipAuto && column.AutoIncrement && resolved.IsZero() {
-		return nil, false
-	}
-	if column.HasDefault && resolved.IsZero() {
+	if skipAuto && column.AutoIncrement && !explicit && isZeroInsertValue(resolvedValue) {
 		return nil, false
 	}
 
-	return resolved.Interface(), true
+	return resolvedValue, true
 }
 
 func dereferenceValue(value reflect.Value) (reflect.Value, bool) {
@@ -113,4 +110,43 @@ func dereferenceValue(value reflect.Value) (reflect.Value, bool) {
 	}
 
 	return current, false
+}
+
+func insertValueForField(fieldValue reflect.Value) (value any, include bool, explicit bool) {
+	if !fieldValue.IsValid() {
+		return nil, false, false
+	}
+	if fieldValue.CanInterface() {
+		if setter, ok := fieldValue.Interface().(setValueProvider); ok {
+			value, include = setter.rainSetValue()
+			return value, include, true
+		}
+	}
+
+	if fieldValue.Kind() == reflect.Pointer {
+		if fieldValue.IsNil() {
+			return nil, false, false
+		}
+		if fieldValue.Type().Implements(reflect.TypeFor[driver.Valuer]()) {
+			return fieldValue.Interface(), true, true
+		}
+		value, include, _ = insertValueForField(fieldValue.Elem())
+		return value, include, true
+	}
+
+	if fieldValue.CanAddr() && fieldValue.Addr().Type().Implements(reflect.TypeFor[driver.Valuer]()) {
+		return fieldValue.Addr().Interface(), true, false
+	}
+	if fieldValue.Type().Implements(reflect.TypeFor[driver.Valuer]()) {
+		return fieldValue.Interface(), true, false
+	}
+
+	return fieldValue.Interface(), true, false
+}
+
+func isZeroInsertValue(value any) bool {
+	if value == nil {
+		return true
+	}
+	return reflect.ValueOf(value).IsZero()
 }

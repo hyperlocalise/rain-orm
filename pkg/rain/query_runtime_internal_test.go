@@ -3,6 +3,7 @@ package rain
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
@@ -23,7 +24,7 @@ func TestQueryExecutionPaths(t *testing.T) {
 
 	insert := db.Insert().
 		Table(users).
-		Model(&internalInsertModel{Email: "alice@example.com", Name: "Alice"})
+		Model(&internalInsertModel{Email: "alice@example.com", Name: "Alice", Active: true})
 	result, err := insert.Exec(ctx)
 	if err != nil {
 		t.Fatalf("insert exec failed: %v", err)
@@ -186,7 +187,7 @@ func TestPreparedSelectQueryInTransactionLifecycle(t *testing.T) {
 	users, _ := defineInternalQueryTables()
 	createInternalQuerySchema(t, ctx, db)
 
-	if _, err := db.Insert().Table(users).Model(&internalInsertModel{Email: "tx@example.com", Name: "Tx"}).Exec(ctx); err != nil {
+	if _, err := db.Insert().Table(users).Model(&internalInsertModel{Email: "tx@example.com", Name: "Tx", Active: true}).Exec(ctx); err != nil {
 		t.Fatalf("insert user: %v", err)
 	}
 
@@ -281,7 +282,7 @@ func TestSelectQueryCacheHitMissExpiryAndBypass(t *testing.T) {
 	cache.now = func() time.Time { return time.Date(2026, 3, 29, 12, 0, 0, 0, time.UTC) }
 	db.WithQueryCache(cache)
 
-	if _, err := db.Insert().Table(users).Model(&internalInsertModel{Email: "cache@example.com", Name: "Cache"}).Exec(ctx); err != nil {
+	if _, err := db.Insert().Table(users).Model(&internalInsertModel{Email: "cache@example.com", Name: "Cache", Active: true}).Exec(ctx); err != nil {
 		t.Fatalf("insert user: %v", err)
 	}
 
@@ -338,8 +339,8 @@ func TestSelectQueryCacheArgsAndManualInvalidation(t *testing.T) {
 	db.WithQueryCache(NewMemoryQueryCache())
 
 	for _, item := range []internalInsertModel{
-		{Email: "alice@example.com", Name: "Alice"},
-		{Email: "bob@example.com", Name: "Bob"},
+		{Email: "alice@example.com", Name: "Alice", Active: true},
+		{Email: "bob@example.com", Name: "Bob", Active: true},
 	} {
 		if _, err := db.Insert().Table(users).Model(&item).Exec(ctx); err != nil {
 			t.Fatalf("insert user %s: %v", item.Email, err)
@@ -384,6 +385,63 @@ func TestSelectQueryCacheArgsAndManualInvalidation(t *testing.T) {
 	}
 }
 
+func TestSelectQueryCachePayloadIsPortableAcrossDestinations(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db := openInternalQueryDB(t)
+	users, _ := defineInternalQueryTables()
+	createInternalQuerySchema(t, ctx, db)
+
+	cache := NewMemoryQueryCache()
+	db.WithQueryCache(cache)
+
+	if _, err := db.Insert().Table(users).Model(&internalInsertModel{Email: "portable@example.com", Name: "Portable", Active: true}).Exec(ctx); err != nil {
+		t.Fatalf("insert user: %v", err)
+	}
+
+	counter := &countingRunner{base: db}
+	query := (&SelectQuery{runner: counter, dialect: db.Dialect(), cache: cache}).
+		Table(users).
+		Where(users.Email.Eq("portable@example.com")).
+		Cache(QueryCacheOptions{TTL: time.Minute, Tags: []string{"users"}})
+
+	var full []internalUserRow
+	if err := query.Scan(ctx, &full); err != nil {
+		t.Fatalf("full scan: %v", err)
+	}
+	if counter.queryCount != 1 {
+		t.Fatalf("expected first scan to hit DB once, got %d", counter.queryCount)
+	}
+
+	foundJSON := false
+	cache.mu.RLock()
+	for _, entry := range cache.entries {
+		var payload cachedPayload
+		if err := json.Unmarshal(entry.value, &payload); err == nil && payload.Kind == "select" {
+			foundJSON = true
+			break
+		}
+	}
+	cache.mu.RUnlock()
+	if !foundJSON {
+		t.Fatalf("expected cache payload to be JSON select envelope")
+	}
+
+	var projected []struct {
+		Email string
+	}
+	if err := query.Scan(ctx, &projected); err != nil {
+		t.Fatalf("projected cached scan: %v", err)
+	}
+	if counter.queryCount != 1 {
+		t.Fatalf("expected second scan to use cache, got %d DB queries", counter.queryCount)
+	}
+	if len(projected) != 1 || projected[0].Email != "portable@example.com" {
+		t.Fatalf("unexpected projected cached rows: %#v", projected)
+	}
+}
+
 func TestSelectQueryCacheDisabledKeepsNormalBehavior(t *testing.T) {
 	t.Parallel()
 
@@ -391,7 +449,7 @@ func TestSelectQueryCacheDisabledKeepsNormalBehavior(t *testing.T) {
 	db := openInternalQueryDB(t)
 	users, _ := defineInternalQueryTables()
 	createInternalQuerySchema(t, ctx, db)
-	if _, err := db.Insert().Table(users).Model(&internalInsertModel{Email: "nocache@example.com", Name: "No Cache"}).Exec(ctx); err != nil {
+	if _, err := db.Insert().Table(users).Model(&internalInsertModel{Email: "nocache@example.com", Name: "No Cache", Active: true}).Exec(ctx); err != nil {
 		t.Fatalf("insert user: %v", err)
 	}
 
@@ -439,7 +497,7 @@ func TestSelectAggregateCacheForCountAndExists(t *testing.T) {
 	createInternalQuerySchema(t, ctx, db)
 	db.WithQueryCache(NewMemoryQueryCache())
 
-	if _, err := db.Insert().Table(users).Model(&internalInsertModel{Email: "agg@example.com", Name: "Agg"}).Exec(ctx); err != nil {
+	if _, err := db.Insert().Table(users).Model(&internalInsertModel{Email: "agg@example.com", Name: "Agg", Active: true}).Exec(ctx); err != nil {
 		t.Fatalf("insert user: %v", err)
 	}
 

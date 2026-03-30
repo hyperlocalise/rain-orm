@@ -29,63 +29,63 @@ type internalQueryPostsTable struct {
 }
 
 type internalInsertModel struct {
-	ID       int64   `db:"id"`
-	Email    string  `db:"email"`
-	Name     string  `db:"name"`
-	Active   bool    `db:"active"`
-	Nickname *string `db:"nickname"`
+	ID       int64
+	Email    string
+	Name     string
+	Active   bool
+	Nickname *string
 }
 
 type internalUserRow struct {
-	ID       int64   `db:"id"`
-	Email    string  `db:"email"`
-	Name     string  `db:"name"`
-	Nickname *string `db:"nickname"`
+	ID       int64
+	Email    string
+	Name     string
+	Nickname *string
 }
 
 type internalPostWithAuthorRow struct {
-	ID     int64           `db:"id"`
-	UserID int64           `db:"user_id"`
-	Title  string          `db:"title"`
+	ID     int64
+	UserID int64
+	Title  string
 	Author internalUserRow `rain:"relation:author"`
 }
 
 type internalUserWithPostsRow struct {
-	ID    int64                 `db:"id"`
-	Email string                `db:"email"`
-	Name  string                `db:"name"`
+	ID    int64
+	Email string
+	Name  string
 	Posts []internalPostOnlyRow `rain:"relation:posts"`
 }
 
 type internalUserWithPostPointersRow struct {
-	ID    int64                  `db:"id"`
+	ID    int64
 	Posts []*internalPostOnlyRow `rain:"relation:posts"`
 }
 
 type internalPostWithAuthorPointerRow struct {
-	ID     int64            `db:"id"`
-	UserID int64            `db:"user_id"`
-	Title  string           `db:"title"`
+	ID     int64
+	UserID int64
+	Title  string
 	Author *internalUserRow `rain:"relation:author"`
 }
 
 type internalUserWithPostsAndAuthorsRow struct {
-	ID    int64                          `db:"id"`
-	Email string                         `db:"email"`
+	ID    int64
+	Email string
 	Posts []internalPostWithAuthorPtrRow `rain:"relation:posts"`
 }
 
 type internalPostWithAuthorPtrRow struct {
-	ID     int64            `db:"id"`
-	UserID int64            `db:"user_id"`
-	Title  string           `db:"title"`
+	ID     int64
+	UserID int64
+	Title  string
 	Author *internalUserRow `rain:"relation:author"`
 }
 
 type internalPostOnlyRow struct {
-	ID     int64  `db:"id"`
-	UserID int64  `db:"user_id"`
-	Title  string `db:"title"`
+	ID     int64
+	UserID int64
+	Title  string
 }
 
 type countingRunner struct {

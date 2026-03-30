@@ -37,7 +37,7 @@ func TestInsertModelAndSetMergeToSQL(t *testing.T) {
 	}
 }
 
-func TestInsertOmitDefaultBackedZeroValues(t *testing.T) {
+func TestInsertIncludesDefaultBackedZeroValues(t *testing.T) {
 	t.Parallel()
 
 	db, err := rain.OpenDialect("postgres")
@@ -51,15 +51,15 @@ func TestInsertOmitDefaultBackedZeroValues(t *testing.T) {
 		Model(&userModel{Email: "alice@example.com"}).
 		ToSQL()
 	if err != nil {
-		t.Fatalf("insert default omission ToSQL returned error: %v", err)
+		t.Fatalf("insert default inclusion ToSQL returned error: %v", err)
 	}
 
-	wantSQL := `INSERT INTO "users" ("email", "name") VALUES ($1, $2)`
+	wantSQL := `INSERT INTO "users" ("email", "name", "active") VALUES ($1, $2, $3)`
 	if sqlText != wantSQL {
-		t.Fatalf("unexpected default-omitting insert SQL:\nwant: %s\ngot:  %s", wantSQL, sqlText)
+		t.Fatalf("unexpected default-including insert SQL:\nwant: %s\ngot:  %s", wantSQL, sqlText)
 	}
-	if len(args) != 2 || args[0] != "alice@example.com" || args[1] != "" {
-		t.Fatalf("unexpected default-omitting insert args: %#v", args)
+	if len(args) != 3 || args[0] != "alice@example.com" || args[1] != "" || args[2] != false {
+		t.Fatalf("unexpected default-including insert args: %#v", args)
 	}
 }
 
@@ -133,11 +133,17 @@ func TestInsertMultiRowColumnMismatchReturnsError(t *testing.T) {
 	}
 	users, _ := defineTables()
 
+	type partialUserModel struct {
+		Email  string         `db:"email"`
+		Name   string         `db:"name"`
+		Active rain.Set[bool] `db:"active"`
+	}
+
 	_, _, err = db.Insert().
 		Table(users).
-		Models([]userModel{
-			{Email: "alice@example.com", Name: "Alice", Active: true},
-			{Email: "bob@example.com", Name: "", Active: false},
+		Models([]partialUserModel{
+			{Email: "alice@example.com", Name: "Alice", Active: rain.Set[bool]{Value: true, Valid: true}},
+			{Email: "bob@example.com", Name: ""},
 		}).
 		ToSQL()
 	if err == nil || !strings.Contains(err.Error(), "targets 2 columns, expected 3") {

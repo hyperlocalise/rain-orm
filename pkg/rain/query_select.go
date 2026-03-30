@@ -3,7 +3,6 @@ package rain
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -283,13 +282,18 @@ func (q *SelectQuery) Scan(ctx context.Context, dest any) error {
 	if err != nil {
 		return err
 	}
-	if cacheOptions != nil && !cacheOptions.bypass {
+	table := q.scanValidationTable()
+	if cacheOptions != nil && !cacheOptions.bypass && len(q.relationNames) == 0 {
 		cached, ok, cacheErr := q.cache.Get(ctx, cacheKey)
 		if cacheErr != nil {
 			return cacheErr
 		}
 		if ok {
-			return json.Unmarshal(cached, dest)
+			result, err := decodeCachedSelectRows(cached)
+			if err != nil {
+				return err
+			}
+			return scanCachedRowsAgainstTable(result, dest, table)
 		}
 	}
 
@@ -300,15 +304,22 @@ func (q *SelectQuery) Scan(ctx context.Context, dest any) error {
 	defer closeRows(rows, &err)
 
 	if len(q.relationNames) == 0 {
-		err = scanRows(rows, dest)
+		result, readErr := readCachedSelectRows(rows)
+		if readErr != nil {
+			return readErr
+		}
+		err = scanCachedRowsAgainstTable(result, dest, table)
+		if err != nil {
+			return err
+		}
+		return q.writeCachedSelectResult(ctx, cacheKey, cacheOptions, result)
 	} else {
 		err = q.scanRowsWithRelations(ctx, rows, dest)
 	}
 	if err != nil {
 		return err
 	}
-	err = q.writeCachedResult(ctx, cacheKey, cacheOptions, dest)
-	return err
+	return nil
 }
 
 // Count executes SELECT COUNT(*).
@@ -332,8 +343,8 @@ func (q *SelectQuery) Count(ctx context.Context) (int64, error) {
 			return 0, cacheErr
 		}
 		if ok {
-			var count int64
-			if err := json.Unmarshal(cached, &count); err != nil {
+			count, err := decodeCachedInt64(cached)
+			if err != nil {
 				return 0, err
 			}
 			return count, nil
@@ -359,7 +370,7 @@ func (q *SelectQuery) Count(ctx context.Context) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	err = q.writeCachedResult(ctx, cacheKey, cacheOptions, count)
+	err = q.writeCachedInt64(ctx, cacheKey, cacheOptions, count)
 	return count, err
 }
 
@@ -392,8 +403,8 @@ func (q *SelectQuery) Exists(ctx context.Context) (bool, error) {
 			return false, cacheErr
 		}
 		if ok {
-			var exists bool
-			if err := json.Unmarshal(cached, &exists); err != nil {
+			exists, err := decodeCachedBool(cached)
+			if err != nil {
 				return false, err
 			}
 			return exists, nil
@@ -419,7 +430,7 @@ func (q *SelectQuery) Exists(ctx context.Context) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	err = q.writeCachedResult(ctx, cacheKey, cacheOptions, exists)
+	err = q.writeCachedBool(ctx, cacheKey, cacheOptions, exists)
 	return exists, err
 }
 
@@ -434,11 +445,40 @@ func (q *SelectQuery) resolveCacheKey(query string, args []any) (string, *queryC
 	return key, q.cacheOptions, nil
 }
 
-func (q *SelectQuery) writeCachedResult(ctx context.Context, key string, options *queryCacheOptions, value any) error {
+func (q *SelectQuery) scanValidationTable() *schema.TableDef {
+	if len(q.joins) > 0 {
+		return nil
+	}
+	return tableDefFromSelectSource(q.table)
+}
+
+func (q *SelectQuery) writeCachedSelectResult(ctx context.Context, key string, options *queryCacheOptions, value *cachedSelectRows) error {
 	if options == nil || options.bypass {
 		return nil
 	}
-	encoded, err := json.Marshal(value)
+	encoded, err := encodeCachedSelectRows(value)
+	if err != nil {
+		return err
+	}
+	return q.cache.Set(ctx, key, encoded, options.ttl, options.tags)
+}
+
+func (q *SelectQuery) writeCachedInt64(ctx context.Context, key string, options *queryCacheOptions, value int64) error {
+	if options == nil || options.bypass {
+		return nil
+	}
+	encoded, err := encodeCachedInt64(value)
+	if err != nil {
+		return err
+	}
+	return q.cache.Set(ctx, key, encoded, options.ttl, options.tags)
+}
+
+func (q *SelectQuery) writeCachedBool(ctx context.Context, key string, options *queryCacheOptions, value bool) error {
+	if options == nil || options.bypass {
+		return nil
+	}
+	encoded, err := encodeCachedBool(value)
 	if err != nil {
 		return err
 	}

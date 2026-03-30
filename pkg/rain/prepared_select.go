@@ -3,7 +3,6 @@ package rain
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"sync"
 )
@@ -99,13 +98,18 @@ func (p *PreparedSelectQuery) Scan(ctx context.Context, args PreparedArgs, dest 
 	if err != nil {
 		return err
 	}
-	if cacheOptions != nil && !cacheOptions.bypass {
+	table := p.query.scanValidationTable()
+	if cacheOptions != nil && !cacheOptions.bypass && len(p.query.relationNames) == 0 {
 		cached, ok, cacheErr := p.query.cache.Get(ctx, cacheKey)
 		if cacheErr != nil {
 			return cacheErr
 		}
 		if ok {
-			return json.Unmarshal(cached, dest)
+			result, err := decodeCachedSelectRows(cached)
+			if err != nil {
+				return err
+			}
+			return scanCachedRowsAgainstTable(result, dest, table)
 		}
 	}
 
@@ -116,14 +120,22 @@ func (p *PreparedSelectQuery) Scan(ctx context.Context, args PreparedArgs, dest 
 	defer closeRows(rows, &err)
 
 	if len(p.query.relationNames) == 0 {
-		err = scanRows(rows, dest)
+		result, readErr := readCachedSelectRows(rows)
+		if readErr != nil {
+			return readErr
+		}
+		err = scanCachedRowsAgainstTable(result, dest, table)
+		if err != nil {
+			return err
+		}
+		return p.query.writeCachedSelectResult(ctx, cacheKey, cacheOptions, result)
 	} else {
 		err = p.query.scanRowsWithRelations(ctx, rows, dest)
 	}
 	if err != nil {
 		return err
 	}
-	return p.query.writeCachedResult(ctx, cacheKey, cacheOptions, dest)
+	return nil
 }
 
 // Count executes the prepared COUNT(*) query.
@@ -147,8 +159,8 @@ func (p *PreparedSelectQuery) Count(ctx context.Context, args PreparedArgs) (int
 			return 0, cacheErr
 		}
 		if ok {
-			var count int64
-			if err := json.Unmarshal(cached, &count); err != nil {
+			count, err := decodeCachedInt64(cached)
+			if err != nil {
 				return 0, err
 			}
 			return count, nil
@@ -172,7 +184,7 @@ func (p *PreparedSelectQuery) Count(ctx context.Context, args PreparedArgs) (int
 	if err := rows.Err(); err != nil {
 		return 0, err
 	}
-	return count, p.query.writeCachedResult(ctx, cacheKey, cacheOptions, count)
+	return count, p.query.writeCachedInt64(ctx, cacheKey, cacheOptions, count)
 }
 
 // Exists executes the prepared SELECT EXISTS query.
@@ -192,8 +204,8 @@ func (p *PreparedSelectQuery) Exists(ctx context.Context, args PreparedArgs) (bo
 			return false, cacheErr
 		}
 		if ok {
-			var exists bool
-			if err := json.Unmarshal(cached, &exists); err != nil {
+			exists, err := decodeCachedBool(cached)
+			if err != nil {
 				return false, err
 			}
 			return exists, nil
@@ -217,7 +229,7 @@ func (p *PreparedSelectQuery) Exists(ctx context.Context, args PreparedArgs) (bo
 	if err := rows.Err(); err != nil {
 		return false, err
 	}
-	return exists, p.query.writeCachedResult(ctx, cacheKey, cacheOptions, exists)
+	return exists, p.query.writeCachedBool(ctx, cacheKey, cacheOptions, exists)
 }
 
 // Close closes all prepared statements.

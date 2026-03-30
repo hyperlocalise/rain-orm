@@ -86,8 +86,8 @@ func BenchmarkSQLiteInsertModel(b *testing.B) {
 				Table(fixture.users).
 				Model(&sqliteInsertModel{
 					Email:    fmt.Sprintf("model-%s-%d@example.com", dataset.name, idx),
-					Name:     fmt.Sprintf("Model User %d", idx),
-					Active:   idx%2 == 0,
+					Name:     rain.Set[string]{Value: fmt.Sprintf("Model User %d", idx), Valid: true},
+					Active:   rain.Set[bool]{Value: idx%2 == 0, Valid: true},
 					Nickname: &nickname,
 				}).
 				Exec(ctx); err != nil {

@@ -279,10 +279,10 @@ func TestModelAssignmentAndValueHelpers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("assignmentsFromModel failed: %v", err)
 	}
-	if len(assignments) != 2 {
-		t.Fatalf("expected 2 assignments after skipping default-backed zero values, got %d", len(assignments))
+	if len(assignments) != 4 {
+		t.Fatalf("expected 4 assignments with explicit zero-value writes, got %d", len(assignments))
 	}
-	if assignments[0].column.ColumnDef().Name != "email" || assignments[1].column.ColumnDef().Name != "nickname" {
+	if assignments[0].column.ColumnDef().Name != "email" || assignments[1].column.ColumnDef().Name != "name" || assignments[2].column.ColumnDef().Name != "active" || assignments[3].column.ColumnDef().Name != "nickname" {
 		t.Fatalf("unexpected assignments: %#v", assignments)
 	}
 
@@ -302,11 +302,17 @@ func TestModelAssignmentAndValueHelpers(t *testing.T) {
 	if _, include := fieldValueForInsert(users.ID.ColumnDef(), reflect.ValueOf(int64(0)), true); include {
 		t.Fatalf("expected zero auto-increment id to be skipped")
 	}
-	if _, include := fieldValueForInsert(users.Name.ColumnDef(), reflect.ValueOf(""), true); include {
-		t.Fatalf("expected default-backed zero string to be skipped")
+	if value, include := fieldValueForInsert(users.Name.ColumnDef(), reflect.ValueOf(""), true); !include || value != "" {
+		t.Fatalf("expected default-backed zero string to be included, got %#v include=%v", value, include)
 	}
 	if _, include := fieldValueForInsert(users.Nickname.ColumnDef(), reflect.ValueOf((*string)(nil)), true); include {
 		t.Fatalf("expected nil pointer to be skipped")
+	}
+	if _, include := fieldValueForInsert(users.Active.ColumnDef(), reflect.ValueOf(Set[bool]{}), true); include {
+		t.Fatalf("expected invalid set value to be skipped")
+	}
+	if value, include := fieldValueForInsert(users.Active.ColumnDef(), reflect.ValueOf(Set[bool]{Value: false, Valid: true}), true); !include || value != false {
+		t.Fatalf("expected explicit false set value to be included, got %#v include=%v", value, include)
 	}
 	if value, include := fieldValueForInsert(users.Name.ColumnDef(), reflect.ValueOf("Alice"), true); !include || value != "Alice" {
 		t.Fatalf("expected non-zero string to be included, got %#v include=%v", value, include)

@@ -2,11 +2,14 @@ package rain
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"reflect"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/hyperlocalise/rain-orm/pkg/schema"
 )
 
 type scannerInterface = interface {
@@ -14,16 +17,19 @@ type scannerInterface = interface {
 }
 
 type modelField struct {
-	index []int
+	index          []int
+	explicitColumn bool
 }
 
 type modelMeta struct {
 	byColumn   map[string]modelField
 	byRelation map[string]modelField
+	err        error
 }
 
 type scanColumnPlan struct {
 	discard    bool
+	columnName string
 	fieldIndex []int
 }
 
@@ -50,12 +56,14 @@ func lookupModelMeta(model any) (*modelMeta, reflect.Value, error) {
 		return nil, reflect.Value{}, fmt.Errorf("rain: model must be a struct or pointer to struct")
 	}
 
-	return lookupModelMetaForType(value.Type()), value, nil
+	meta, err := lookupModelMetaForType(value.Type())
+	return meta, value, err
 }
 
-func lookupModelMetaForType(typ reflect.Type) *modelMeta {
+func lookupModelMetaForType(typ reflect.Type) (*modelMeta, error) {
 	if cached, ok := modelMetaCache.Load(typ); ok {
-		return cached.(*modelMeta)
+		meta := cached.(*modelMeta)
+		return meta, meta.err
 	}
 
 	meta := &modelMeta{
@@ -65,7 +73,8 @@ func lookupModelMetaForType(typ reflect.Type) *modelMeta {
 	buildModelMeta(meta, typ, nil)
 	actual, _ := modelMetaCache.LoadOrStore(typ, meta)
 
-	return actual.(*modelMeta)
+	resolved := actual.(*modelMeta)
+	return resolved, resolved.err
 }
 
 func buildModelMeta(meta *modelMeta, typ reflect.Type, prefix []int) {
@@ -81,16 +90,43 @@ func buildModelMeta(meta *modelMeta, typ reflect.Type, prefix []int) {
 			continue
 		}
 
-		columnName := field.Tag.Get("db")
-		if columnName != "" && columnName != "-" {
-			meta.byColumn[columnName] = modelField{index: current}
+		columnName, includeColumn, explicitColumn := columnNameForField(field)
+		if includeColumn {
+			addModelFieldMapping(meta.byColumn, &meta.err, columnName, current, "column", explicitColumn)
 		}
 
 		relationName := relationTagName(field.Tag.Get("rain"))
 		if relationName != "" {
-			meta.byRelation[relationName] = modelField{index: current}
+			addModelFieldMapping(meta.byRelation, &meta.err, relationName, current, "relation", true)
 		}
 	}
+}
+
+func addModelFieldMapping(target map[string]modelField, errp *error, name string, index []int, kind string, explicit bool) {
+	if existing, ok := target[name]; ok {
+		*errp = errors.Join(*errp, fmt.Errorf("rain: duplicate model field mapping for %s %q", kind, name))
+		_ = existing
+		return
+	}
+	target[name] = modelField{index: index, explicitColumn: explicit}
+}
+
+func columnNameForField(field reflect.StructField) (string, bool, bool) {
+	if raw, ok := field.Tag.Lookup("db"); ok {
+		name := strings.TrimSpace(raw)
+		if name == "" {
+			return snakeCaseIdentifier(field.Name), true, true
+		}
+		if name == "-" {
+			return "", false, true
+		}
+		return name, true, true
+	}
+	if relationTagName(field.Tag.Get("rain")) != "" {
+		return "", false, false
+	}
+
+	return snakeCaseIdentifier(field.Name), true, false
 }
 
 func embeddedStructType(field reflect.StructField) reflect.Type {
@@ -121,6 +157,18 @@ func relationTagName(tag string) string {
 }
 
 func scanRows(rows *sql.Rows, dest any) error {
+	return scanRowsAgainstTable(rows, dest, nil)
+}
+
+func scanRowsAgainstTable(rows *sql.Rows, dest any, table *schema.TableDef) error {
+	result, err := readCachedSelectRows(rows)
+	if err != nil {
+		return err
+	}
+	return scanCachedRowsAgainstTable(result, dest, table)
+}
+
+func scanCachedRowsAgainstTable(result *cachedSelectRows, dest any, table *schema.TableDef) error {
 	value := reflect.ValueOf(dest)
 	if value.Kind() != reflect.Pointer || value.IsNil() {
 		return fmt.Errorf("rain: destination must be a non-nil pointer")
@@ -129,37 +177,30 @@ func scanRows(rows *sql.Rows, dest any) error {
 	target := value.Elem()
 	switch target.Kind() {
 	case reflect.Struct:
-		plan, err := newRowScanPlan(rows, target.Type())
+		plan, err := newRowScanPlanForColumns(result.Columns, target.Type(), table)
 		if err != nil {
 			return err
 		}
-		targets := make([]any, len(plan.columns))
-		finalizers := make([]func() error, len(plan.columns))
-		if !rows.Next() {
-			if err := rows.Err(); err != nil {
-				return err
-			}
+		if len(result.Rows) == 0 {
 			return sql.ErrNoRows
 		}
-		if err := scanCurrentRowWithPlan(rows, target, plan, targets, finalizers); err != nil {
+		if err := scanCachedRowWithPlan(result.Rows[0], target, plan, table); err != nil {
 			return err
 		}
-		return rows.Err()
+		return nil
 	case reflect.Slice:
 		elemType := target.Type().Elem()
 		structType, pointerElems, err := sliceElementStructType(elemType)
 		if err != nil {
 			return err
 		}
-		plan, err := newRowScanPlan(rows, structType)
+		plan, err := newRowScanPlanForColumns(result.Columns, structType, table)
 		if err != nil {
 			return err
 		}
-		targets := make([]any, len(plan.columns))
-		finalizers := make([]func() error, len(plan.columns))
-		for rows.Next() {
+		for _, row := range result.Rows {
 			elemPtr := reflect.New(structType)
-			if err := scanCurrentRowWithPlan(rows, elemPtr.Elem(), plan, targets, finalizers); err != nil {
+			if err := scanCachedRowWithPlan(row, elemPtr.Elem(), plan, table); err != nil {
 				return err
 			}
 			if pointerElems {
@@ -168,7 +209,7 @@ func scanRows(rows *sql.Rows, dest any) error {
 			}
 			target.Set(reflect.Append(target, elemPtr.Elem()))
 		}
-		return rows.Err()
+		return nil
 	default:
 		return fmt.Errorf("rain: destination must point to a struct or slice")
 	}
@@ -184,64 +225,80 @@ func sliceElementStructType(elemType reflect.Type) (reflect.Type, bool, error) {
 	return nil, false, fmt.Errorf("rain: destination slice element must be a struct or pointer to struct")
 }
 
-func newRowScanPlan(rows *sql.Rows, modelType reflect.Type) (*rowScanPlan, error) {
-	cols, err := rows.Columns()
+func newRowScanPlanForColumns(cols []string, modelType reflect.Type, table *schema.TableDef) (*rowScanPlan, error) {
+	if err := validateScanColumnsAgainstTable(modelType, table, cols); err != nil {
+		return nil, err
+	}
+	meta, err := lookupModelMetaForType(modelType)
 	if err != nil {
 		return nil, err
 	}
-	meta := lookupModelMetaForType(modelType)
 	plan := &rowScanPlan{columns: make([]scanColumnPlan, len(cols))}
 	for idx, name := range cols {
 		fieldInfo, ok := meta.byColumn[name]
 		if !ok {
-			plan.columns[idx] = scanColumnPlan{discard: true}
+			plan.columns[idx] = scanColumnPlan{discard: true, columnName: name}
 			continue
 		}
-		plan.columns[idx] = scanColumnPlan{fieldIndex: fieldInfo.index}
+		plan.columns[idx] = scanColumnPlan{columnName: name, fieldIndex: fieldInfo.index}
 	}
 	return plan, nil
 }
 
-func scanCurrentRowWithPlan(
-	rows *sql.Rows,
-	target reflect.Value,
-	plan *rowScanPlan,
-	targets []any,
-	finalizers []func() error,
-) error {
+func readCachedSelectRows(rows *sql.Rows) (*cachedSelectRows, error) {
+	cols, err := rows.Columns()
+	if err != nil {
+		return nil, err
+	}
+	result := &cachedSelectRows{
+		Columns: append([]string(nil), cols...),
+		Rows:    make([][]cachedValue, 0),
+	}
+	scanTargets := make([]any, len(cols))
+	scanned := make([]any, len(cols))
+	for idx := range cols {
+		scanTargets[idx] = &scanned[idx]
+	}
+	for rows.Next() {
+		for idx := range scanned {
+			scanned[idx] = nil
+		}
+		if err := rows.Scan(scanTargets...); err != nil {
+			return nil, err
+		}
+		row := make([]cachedValue, len(scanned))
+		for idx, value := range scanned {
+			cell, err := encodeCachedValue(value)
+			if err != nil {
+				return nil, err
+			}
+			row[idx] = cell
+		}
+		result.Rows = append(result.Rows, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func scanCachedRowWithPlan(row []cachedValue, target reflect.Value, plan *rowScanPlan, table *schema.TableDef) error {
 	for idx, column := range plan.columns {
-		finalizers[idx] = nil
 		if column.discard {
-			var discard any
-			targets[idx] = &discard
 			continue
 		}
-
 		field, err := fieldByIndexAlloc(target, column.fieldIndex)
 		if err != nil {
 			return err
 		}
-		scanTarget, finalize, err := prepareScanTarget(field)
-		if err != nil {
-			return err
+		var columnDef *schema.ColumnDef
+		if table != nil {
+			columnDef, _ = table.ColumnByName(column.columnName)
 		}
-		targets[idx] = scanTarget
-		finalizers[idx] = finalize
-	}
-
-	if err := rows.Scan(targets...); err != nil {
-		return err
-	}
-
-	for _, finalize := range finalizers {
-		if finalize == nil {
-			continue
-		}
-		if err := finalize(); err != nil {
+		if err := assignCachedValueToField(field, row[idx], columnDef); err != nil {
 			return err
 		}
 	}
-
 	return nil
 }
 
@@ -262,40 +319,6 @@ func fieldByIndexAlloc(value reflect.Value, index []int) (reflect.Value, error) 
 		current = field
 	}
 	return current, nil
-}
-
-func prepareScanTarget(field reflect.Value) (any, func() error, error) {
-	if scanTarget, finalize, ok := scannerTarget(field); ok {
-		return scanTarget, finalize, nil
-	}
-
-	if field.Kind() != reflect.Pointer {
-		if !field.CanAddr() {
-			return nil, nil, fmt.Errorf("rain: field %s is not addressable", field.Type())
-		}
-		return field.Addr().Interface(), nil, nil
-	}
-
-	for _, handler := range nullablePrimitiveHandlers() {
-		if scanTarget, finalize, ok := handler(field); ok {
-			return scanTarget, finalize, nil
-		}
-	}
-
-	return nil, nil, fmt.Errorf("rain: unsupported nullable field type %s", field.Type())
-}
-
-type nullableHandler func(field reflect.Value) (target any, finalize func() error, ok bool)
-
-func nullablePrimitiveHandlers() []nullableHandler {
-	return []nullableHandler{
-		nullableStringTarget,
-		nullableSignedIntTarget,
-		nullableUnsignedIntTarget,
-		nullableFloatTarget,
-		nullableBoolTarget,
-		nullableTimeTarget,
-	}
 }
 
 func scannerTarget(field reflect.Value) (any, func() error, bool) {
@@ -328,117 +351,185 @@ func scannerTarget(field reflect.Value) (any, func() error, bool) {
 	return nil, nil, false
 }
 
-func nullableStringTarget(field reflect.Value) (any, func() error, bool) {
-	if field.Type().Elem().Kind() != reflect.String {
-		return nil, nil, false
+func assignCachedValueToField(field reflect.Value, value cachedValue, column *schema.ColumnDef) error {
+	raw, err := decodeCachedValue(value, column)
+	if err != nil {
+		return err
 	}
-
-	holder := sql.Null[string]{}
-	return &holder, func() error {
-		if !holder.Valid {
-			field.Set(reflect.Zero(field.Type()))
-			return nil
-		}
-		value := holder.V
-		field.Set(reflect.ValueOf(&value))
-		return nil
-	}, true
+	return assignRawValueToField(field, raw)
 }
 
-func nullableSignedIntTarget(field reflect.Value) (any, func() error, bool) {
-	elemType := field.Type().Elem()
-	switch elemType.Kind() {
+func assignRawValueToField(field reflect.Value, raw any) error {
+	if scanTarget, finalize, ok := scannerTarget(field); ok {
+		scanner := scanTarget.(scannerInterface)
+		if err := scanner.Scan(raw); err != nil {
+			return err
+		}
+		if finalize != nil {
+			return finalize()
+		}
+		return nil
+	}
+
+	if raw == nil {
+		if field.Kind() == reflect.Pointer {
+			field.SetZero()
+			return nil
+		}
+		return fmt.Errorf("rain: cannot assign NULL to non-pointer field %s", field.Type())
+	}
+
+	if field.Kind() == reflect.Pointer {
+		if !supportsCachedPointerAssignment(field.Type()) {
+			return fmt.Errorf("rain: unsupported nullable field type %s", field.Type())
+		}
+		if field.IsNil() {
+			field.Set(reflect.New(field.Type().Elem()))
+		}
+		return assignRawValueToField(field.Elem(), raw)
+	}
+
+	switch field.Kind() {
+	case reflect.String:
+		switch value := raw.(type) {
+		case string:
+			field.SetString(value)
+			return nil
+		case []byte:
+			field.SetString(string(value))
+			return nil
+		case time.Time:
+			field.SetString(value.Format(time.RFC3339Nano))
+			return nil
+		}
+	case reflect.Bool:
+		switch value := raw.(type) {
+		case bool:
+			field.SetBool(value)
+			return nil
+		case int64:
+			field.SetBool(value != 0)
+			return nil
+		}
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-	default:
-		return nil, nil, false
-	}
-
-	holder := sql.Null[int64]{}
-	return &holder, func() error {
-		if !holder.Valid {
-			field.Set(reflect.Zero(field.Type()))
+		if value, ok := raw.(int64); ok {
+			if field.OverflowInt(value) {
+				return fmt.Errorf("rain: value %d overflows field %s", value, field.Type())
+			}
+			field.SetInt(value)
 			return nil
 		}
-		ptr := reflect.New(elemType)
-		ptr.Elem().SetInt(holder.V)
-		field.Set(ptr)
-		return nil
-	}, true
-}
-
-func nullableUnsignedIntTarget(field reflect.Value) (any, func() error, bool) {
-	elemType := field.Type().Elem()
-	switch elemType.Kind() {
 	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		if value, ok := raw.(int64); ok {
+			if value < 0 || field.OverflowUint(uint64(value)) {
+				return fmt.Errorf("rain: value %d overflows field %s", value, field.Type())
+			}
+			field.SetUint(uint64(value))
+			return nil
+		}
+	case reflect.Float32, reflect.Float64:
+		if value, ok := raw.(float64); ok {
+			if field.OverflowFloat(value) {
+				return fmt.Errorf("rain: value %f overflows field %s", value, field.Type())
+			}
+			field.SetFloat(value)
+			return nil
+		}
+	case reflect.Slice:
+		if isBytesType(field.Type()) {
+			if value, ok := raw.([]byte); ok {
+				field.SetBytes(value)
+				return nil
+			}
+		}
+	case reflect.Struct:
+		if field.Type() == reflect.TypeFor[time.Time]() {
+			if value, ok := raw.(time.Time); ok {
+				field.Set(reflect.ValueOf(value))
+				return nil
+			}
+		}
+	}
+
+	if converted := reflect.ValueOf(raw); converted.IsValid() && converted.Type().AssignableTo(field.Type()) {
+		field.Set(converted)
+		return nil
+	}
+
+	return fmt.Errorf("rain: cannot assign cached %T to field %s", raw, field.Type())
+}
+
+func supportsCachedPointerAssignment(typ reflect.Type) bool {
+	if typ.Kind() != reflect.Pointer {
+		return true
+	}
+	elem := typ.Elem()
+	switch elem.Kind() {
+	case reflect.String,
+		reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64,
+		reflect.Float32, reflect.Float64,
+		reflect.Bool:
+		return true
+	case reflect.Slice:
+		return isBytesType(elem)
+	case reflect.Struct:
+		return elem == reflect.TypeFor[time.Time]() || supportsScanner(typ) || supportsScanner(elem)
 	default:
-		return nil, nil, false
+		return supportsScanner(typ) || supportsScanner(elem)
 	}
-
-	holder := sql.Null[int64]{}
-	return &holder, func() error {
-		if !holder.Valid {
-			field.Set(reflect.Zero(field.Type()))
-			return nil
-		}
-		if holder.V < 0 {
-			return fmt.Errorf("rain: cannot scan negative value %d into %s", holder.V, field.Type())
-		}
-		ptr := reflect.New(elemType)
-		ptr.Elem().SetUint(uint64(holder.V))
-		field.Set(ptr)
-		return nil
-	}, true
 }
 
-func nullableFloatTarget(field reflect.Value) (any, func() error, bool) {
-	elemType := field.Type().Elem()
-	if elemType.Kind() != reflect.Float32 && elemType.Kind() != reflect.Float64 {
-		return nil, nil, false
+func snakeCaseIdentifier(name string) string {
+	if name == "" {
+		return ""
 	}
 
-	holder := sql.Null[float64]{}
-	return &holder, func() error {
-		if !holder.Valid {
-			field.Set(reflect.Zero(field.Type()))
-			return nil
+	var builder strings.Builder
+	builder.Grow(len(name) + len(name)/2)
+	runes := []rune(name)
+	for idx, current := range runes {
+		if idx > 0 && shouldInsertUnderscore(runes, idx) {
+			builder.WriteByte('_')
 		}
-		ptr := reflect.New(elemType)
-		ptr.Elem().SetFloat(holder.V)
-		field.Set(ptr)
-		return nil
-	}, true
+		builder.WriteRune(toLowerRune(current))
+	}
+
+	return builder.String()
 }
 
-func nullableBoolTarget(field reflect.Value) (any, func() error, bool) {
-	if field.Type().Elem().Kind() != reflect.Bool {
-		return nil, nil, false
+func shouldInsertUnderscore(runes []rune, idx int) bool {
+	current := runes[idx]
+	prev := runes[idx-1]
+
+	if !isUpperASCII(current) {
+		return false
+	}
+	if isLowerASCII(prev) || isDigitASCII(prev) {
+		return true
+	}
+	if idx+1 < len(runes) && isLowerASCII(runes[idx+1]) {
+		return true
 	}
 
-	holder := sql.Null[bool]{}
-	return &holder, func() error {
-		if !holder.Valid {
-			field.Set(reflect.Zero(field.Type()))
-			return nil
-		}
-		value := holder.V
-		field.Set(reflect.ValueOf(&value))
-		return nil
-	}, true
+	return false
 }
 
-func nullableTimeTarget(field reflect.Value) (any, func() error, bool) {
-	if field.Type().Elem() != reflect.TypeFor[time.Time]() {
-		return nil, nil, false
-	}
+func isUpperASCII(r rune) bool {
+	return r >= 'A' && r <= 'Z'
+}
 
-	holder := sql.Null[time.Time]{}
-	return &holder, func() error {
-		if !holder.Valid {
-			field.Set(reflect.Zero(field.Type()))
-			return nil
-		}
-		value := holder.V
-		field.Set(reflect.ValueOf(&value))
-		return nil
-	}, true
+func isLowerASCII(r rune) bool {
+	return r >= 'a' && r <= 'z'
+}
+
+func isDigitASCII(r rune) bool {
+	return r >= '0' && r <= '9'
+}
+
+func toLowerRune(r rune) rune {
+	if isUpperASCII(r) {
+		return r + ('a' - 'A')
+	}
+	return r
 }

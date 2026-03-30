@@ -79,10 +79,10 @@ type UsersTable struct {
 }
 
 type User struct {
-    ID     int64  `db:"id"`
-    Email  string `db:"email"`
-    Name   string `db:"name"`
-    Active bool   `db:"active"`
+    ID     int64
+    Email  string
+    Name   string
+    Active bool
 }
 
 var Users = schema.Define("users", func(t *UsersTable) {

@@ -115,6 +115,6 @@ func (q *DeleteQuery) Scan(ctx context.Context, dest any) error {
 	}
 	defer closeRows(rows, &err)
 
-	err = scanRows(rows, dest)
+	err = scanRowsAgainstTable(rows, dest, q.table)
 	return err
 }

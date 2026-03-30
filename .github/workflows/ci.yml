@@ -111,27 +111,3 @@ jobs:
         env:
           RAIN_MYSQL_DSN: rain:rain@tcp(127.0.0.1:3306)/rain_test?parseTime=true
         run: go test -race ./pkg/rain -run '^TestMySQLIntegration'
-
-  benchmark:
-    name: SQLite Benchmark Report
-    runs-on: ubuntu-latest
-    needs: [precommit]
-    timeout-minutes: 20
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: "1.26"
-
-      - name: Generate annotated benchmark report
-        run: make bench-report
-
-      - name: Upload benchmark artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: sqlite-benchmark-report
-          path: artifacts/bench/*.txt
