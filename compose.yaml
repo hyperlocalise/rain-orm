@@ -1,0 +1,33 @@
+services:
+  postgres:
+    image: postgres:17
+    container_name: rain-orm-postgres
+    environment:
+      POSTGRES_DB: rain_test
+      POSTGRES_USER: rain
+      POSTGRES_PASSWORD: rain
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rain -d rain_test"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+      start_period: 5s
+
+  mysql:
+    image: mysql:8.4
+    container_name: rain-orm-mysql
+    environment:
+      MYSQL_DATABASE: rain_test
+      MYSQL_USER: rain
+      MYSQL_PASSWORD: rain
+      MYSQL_ROOT_PASSWORD: rain-root
+    ports:
+      - "3306:3306"
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -u$$MYSQL_USER -p$$MYSQL_PASSWORD --silent"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
