@@ -273,9 +273,16 @@ func TestComputedExpressionHelpers(t *testing.T) {
 	if got := schema.Sum(users.ID); got.Function != "SUM" || got.Expr == nil {
 		t.Fatalf("expected SUM aggregate helper, got %#v", got)
 	}
+	if got := schema.Coalesce(users.Email, schema.ValueExpr{Value: ""}); len(got.Exprs) != 2 {
+		t.Fatalf("expected COALESCE helper with 2 expressions, got %#v", got)
+	}
 	aliased := schema.Max(users.ID).As("max_id")
 	if aliased.Alias != "max_id" {
 		t.Fatalf("expected alias max_id, got %q", aliased.Alias)
+	}
+	coalesceAlias := schema.Coalesce(users.Email, schema.ValueExpr{Value: ""}).As("safe_email")
+	if coalesceAlias.Alias != "safe_email" {
+		t.Fatalf("expected alias safe_email, got %q", coalesceAlias.Alias)
 	}
 	columnAlias := users.Email.As("user_email")
 	if columnAlias.Alias != "user_email" {

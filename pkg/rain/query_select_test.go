@@ -194,6 +194,17 @@ func TestSelectAdvancedComposition(t *testing.T) {
 			wantArgs: []any{10, 50},
 		},
 		{
+			name:    "coalesce helper in select postgres",
+			dialect: "postgres",
+			build: func(db *rain.DB) *rain.SelectQuery {
+				return db.Select().
+					Table(users).
+					Column(schema.Coalesce(users.Email, schema.ValueExpr{Value: ""}).As("safe_email"))
+			},
+			wantSQL:  `SELECT COALESCE("users"."email", $1) AS "safe_email" FROM "users"`,
+			wantArgs: []any{""},
+		},
+		{
 			name:    "column alias helper in select postgres",
 			dialect: "postgres",
 			build: func(db *rain.DB) *rain.SelectQuery {

@@ -819,6 +819,18 @@ func (a AggregateExpr) As(alias string) AliasExpr {
 	return As(a, alias)
 }
 
+// CoalesceExpr renders COALESCE(expr1, expr2, ...).
+type CoalesceExpr struct {
+	Exprs []Expression
+}
+
+func (CoalesceExpr) isExpression() {}
+
+// As aliases this computed expression in a SELECT list.
+func (c CoalesceExpr) As(alias string) AliasExpr {
+	return As(c, alias)
+}
+
 // AliasExpr renames a computed expression in a select list.
 type AliasExpr struct {
 	Expr  Expression
@@ -869,6 +881,19 @@ func Max(expr Expression) AggregateExpr {
 		panic("schema: Max requires a non-nil expression")
 	}
 	return AggregateExpr{Function: "MAX", Expr: expr}
+}
+
+// Coalesce renders COALESCE(expr1, expr2, ...).
+func Coalesce(exprs ...Expression) CoalesceExpr {
+	if len(exprs) < 2 {
+		panic("schema: Coalesce requires at least two expressions")
+	}
+	for _, expr := range exprs {
+		if expr == nil {
+			panic("schema: Coalesce requires non-nil expressions")
+		}
+	}
+	return CoalesceExpr{Exprs: exprs}
 }
 
 // As aliases an expression in a SELECT list.

@@ -260,6 +260,23 @@ func (c *compileContext) writeExpressionInContext(expr schema.Expression, contex
 			return fmt.Errorf("rain: aggregate %s requires an expression", value.Function)
 		}
 		c.writeByte(')')
+	case schema.CoalesceExpr:
+		if len(value.Exprs) < 2 {
+			return errors.New("rain: COALESCE requires at least two expressions")
+		}
+		c.writeString("COALESCE(")
+		for idx, part := range value.Exprs {
+			if part == nil {
+				return errors.New("rain: COALESCE requires non-nil expressions")
+			}
+			if idx > 0 {
+				c.writeString(", ")
+			}
+			if err := c.writeExpression(part); err != nil {
+				return err
+			}
+		}
+		c.writeByte(')')
 	case schema.AliasExpr:
 		if !context.allowAlias {
 			return errors.New("rain: aliased expressions are only supported in SELECT columns")

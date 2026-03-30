@@ -619,7 +619,7 @@ func (a *rainAdapter) subqueryReport(ctx context.Context, limit int) error {
 		GroupBy(a.posts.UserID)
 	return a.db.Select().
 		Table(a.users).
-		Column(a.users.Email, schema.Raw("COALESCE(x.post_count, 0)").As("post_count")).
+		Column(a.users.Email, schema.Coalesce(schema.Raw("x.post_count"), schema.ValueExpr{Value: 0}).As("post_count")).
 		LeftJoinSubquery(postCounts, "x", schema.ComparisonExpr{
 			Left:     a.users.ID,
 			Operator: "=",
