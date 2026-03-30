@@ -20,6 +20,10 @@ test: ## run tests with coverage
 	go test -race -coverprofile=coverage.out $$(go list ./... | grep -v '/examples/')
 	go tool cover -func=coverage.out | sort -rnk3
 
+.PHONY: test-integration-db
+test-integration-db: ## run mysql and postgres integration tests against local docker services
+	./scripts/test-integration-databases.sh
+
 .PHONY: bench
 bench: ## run sqlite benchmark suite with allocation metrics
 	go test -run '^$$' -bench . -benchmem -count=3 ./pkg/rain

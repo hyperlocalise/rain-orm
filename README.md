@@ -420,6 +420,12 @@ RAIN_MYSQL_DSN="user:pass@tcp(localhost:3306)/rain_test" \
 
 You can also set `RAIN_MYSQL_HOST`, `RAIN_MYSQL_PORT` (default `3306`), `RAIN_MYSQL_USER`, `RAIN_MYSQL_PASSWORD` (optional), and `RAIN_MYSQL_DB` instead of a DSN.
 
+For a repo-managed local workflow that starts Postgres and MySQL, runs both integration suites, and tears the containers down afterward:
+
+```sh
+make test-integration-db
+```
+
 # Performance Benchmarks
 
 Rain includes a SQLite-first benchmark suite for measuring end-to-end ORM performance and memory usage across representative CRUD and join workloads.
