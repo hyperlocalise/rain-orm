@@ -236,22 +236,13 @@ func orderManagedTables(tables []schema.TableReference) ([]schema.TableReference
 		tableDef := table.TableDef()
 		seenDeps := make(map[string]struct{})
 		for _, foreignKey := range tableDef.ForeignKeys {
-			if foreignKey.ReferencedTable == nil {
+			addTableDependency(tableByName, inDegree, dependents, seenDeps, tableDef.Name, foreignKey.ReferencedTable)
+		}
+		for _, constraint := range tableDef.Constraints {
+			if constraint.Type != schema.ConstraintForeignKey {
 				continue
 			}
-			dependencyName := foreignKey.ReferencedTable.Name
-			if dependencyName == tableDef.Name {
-				continue
-			}
-			if _, managed := tableByName[dependencyName]; !managed {
-				continue
-			}
-			if _, exists := seenDeps[dependencyName]; exists {
-				continue
-			}
-			seenDeps[dependencyName] = struct{}{}
-			inDegree[tableDef.Name]++
-			dependents[dependencyName] = append(dependents[dependencyName], tableDef.Name)
+			addTableDependency(tableByName, inDegree, dependents, seenDeps, tableDef.Name, constraint.ReferencedTable)
 		}
 	}
 
@@ -285,4 +276,30 @@ func orderManagedTables(tables []schema.TableReference) ([]schema.TableReference
 	}
 
 	return ordered, nil
+}
+
+func addTableDependency(
+	tableByName map[string]schema.TableReference,
+	inDegree map[string]int,
+	dependents map[string][]string,
+	seenDeps map[string]struct{},
+	tableName string,
+	referencedTable *schema.TableDef,
+) {
+	if referencedTable == nil {
+		return
+	}
+	dependencyName := referencedTable.Name
+	if dependencyName == tableName {
+		return
+	}
+	if _, managed := tableByName[dependencyName]; !managed {
+		return
+	}
+	if _, exists := seenDeps[dependencyName]; exists {
+		return
+	}
+	seenDeps[dependencyName] = struct{}{}
+	inDegree[tableName]++
+	dependents[dependencyName] = append(dependents[dependencyName], tableName)
 }

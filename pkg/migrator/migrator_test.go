@@ -40,6 +40,53 @@ func TestBuildSnapshotDeterministic(t *testing.T) {
 	}
 }
 
+func TestBuildSnapshotOrdersTablesByDependencies(t *testing.T) {
+	t.Parallel()
+
+	snapshot, err := BuildSnapshot("postgres", exampleregistry.ManagedTables())
+	if err != nil {
+		t.Fatalf("BuildSnapshot returned error: %v", err)
+	}
+	if len(snapshot.Tables) != 3 {
+		t.Fatalf("expected 3 tables, got %d", len(snapshot.Tables))
+	}
+	if snapshot.Tables[0].Name != "users" {
+		t.Fatalf("expected users first, got %q", snapshot.Tables[0].Name)
+	}
+	if snapshot.Tables[1].Name != "memberships" && snapshot.Tables[1].Name != "posts" {
+		t.Fatalf("expected dependent table second, got %q", snapshot.Tables[1].Name)
+	}
+}
+
+func TestBuildSnapshotRejectsCircularForeignKeyDependencies(t *testing.T) {
+	t.Parallel()
+
+	left := schema.Define("left_nodes", func(t *postsTable) {
+		t.ID = t.BigSerial("id").PrimaryKey()
+		t.UserID = t.BigInt("right_id").NotNull()
+	})
+	right := schema.Define("right_nodes", func(t *postsTable) {
+		t.ID = t.BigSerial("id").PrimaryKey()
+		t.UserID = t.BigInt("left_id").NotNull()
+	})
+	left.TableDef().ForeignKeys = append(left.TableDef().ForeignKeys, schema.ForeignKeyDef{
+		Name:             "left_right_fk",
+		Column:           left.TableDef().Columns[1],
+		ReferencedTable:  right.TableDef(),
+		ReferencedColumn: right.TableDef().Columns[0],
+	})
+	right.TableDef().ForeignKeys = append(right.TableDef().ForeignKeys, schema.ForeignKeyDef{
+		Name:             "right_left_fk",
+		Column:           right.TableDef().Columns[1],
+		ReferencedTable:  left.TableDef(),
+		ReferencedColumn: left.TableDef().Columns[0],
+	})
+
+	if _, err := BuildSnapshot("postgres", []schema.TableReference{left, right}); err == nil || !strings.Contains(err.Error(), "circular foreign-key dependency") {
+		t.Fatalf("expected circular dependency error, got %v", err)
+	}
+}
+
 func TestDiffSnapshotsCreateAllFromEmpty(t *testing.T) {
 	t.Parallel()
 
@@ -226,6 +273,33 @@ func TestWriteMigrationFilesUsesDrizzleStyleFoldersAndAvoidsCollision(t *testing
 	}
 }
 
+func TestWriteMigrationFilesRejectsEmptyPlan(t *testing.T) {
+	t.Parallel()
+
+	snapshot := mustBuildSnapshot(t, "sqlite", []schema.TableReference{usersTableWithoutNickname()})
+	if _, err := WriteMigrationFiles(t.TempDir(), "init", Plan{}, snapshot, time.Now()); err == nil || !strings.Contains(err.Error(), "empty migration") {
+		t.Fatalf("expected empty migration error, got %v", err)
+	}
+}
+
+func TestWriteMigrationFilesStoresChecksum(t *testing.T) {
+	t.Parallel()
+
+	snapshot := mustBuildSnapshot(t, "sqlite", []schema.TableReference{usersTableWithoutNickname()})
+	plan := Plan{Statements: []string{`CREATE TABLE "users" ("id" INTEGER PRIMARY KEY)`}}
+
+	migration, err := WriteMigrationFiles(t.TempDir(), "init", plan, snapshot, time.Date(2026, time.March, 30, 12, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("WriteMigrationFiles returned error: %v", err)
+	}
+	if migration.Checksum == "" {
+		t.Fatalf("expected checksum to be populated")
+	}
+	if migration.Checksum != checksumSQL(migration.SQL) {
+		t.Fatalf("expected checksum to match SQL contents")
+	}
+}
+
 func TestLoadDiskMigrationsAndReadLatestSnapshotFromChain(t *testing.T) {
 	t.Parallel()
 
@@ -311,6 +385,38 @@ func TestLoadDiskMigrationsRejectsMissingMigrationSQLFile(t *testing.T) {
 
 	if _, err := LoadDiskMigrations(dir); err == nil || !strings.Contains(err.Error(), "missing migration.sql") {
 		t.Fatalf("expected missing migration.sql error, got %v", err)
+	}
+}
+
+func TestReadLatestSnapshotFromMigrationsReturnsNilForEmptyDir(t *testing.T) {
+	t.Parallel()
+
+	latest, err := ReadLatestSnapshotFromMigrations(t.TempDir())
+	if err != nil {
+		t.Fatalf("ReadLatestSnapshotFromMigrations returned error: %v", err)
+	}
+	if latest != nil {
+		t.Fatalf("expected nil latest snapshot, got %#v", latest)
+	}
+}
+
+func TestSlugifyAndChecksumSQL(t *testing.T) {
+	t.Parallel()
+
+	if got := slugify(" Add users!!! "); got != "add_users" {
+		t.Fatalf("expected slug add_users, got %q", got)
+	}
+	first := checksumSQL("SELECT 1;\n")
+	second := checksumSQL("SELECT 1;\n")
+	third := checksumSQL("SELECT 2;\n")
+	if first == "" {
+		t.Fatalf("expected checksum to be non-empty")
+	}
+	if first != second {
+		t.Fatalf("expected stable checksum, got %q and %q", first, second)
+	}
+	if first == third {
+		t.Fatalf("expected different SQL to produce different checksum")
 	}
 }
 
@@ -409,6 +515,41 @@ func TestAcquireMigrationLockRejectsConcurrentOwner(t *testing.T) {
 
 	if _, _, err := acquireMigrationLock(ctx, db, "sqlite", "rain_schema_migrations"); err == nil || !strings.Contains(err.Error(), "another migration run is active") {
 		t.Fatalf("expected concurrent lock error, got %v", err)
+	}
+}
+
+func TestIsDuplicateKeyError(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "postgres", err: errors.New(`duplicate key value violates unique constraint "rain_schema_migration_locks_pkey"`), want: true},
+		{name: "sqlite", err: errors.New(`UNIQUE constraint failed: rain_schema_migration_locks.lock_name`), want: true},
+		{name: "mysql", err: errors.New(`Error 1062 (23000): Duplicate entry 'default' for key 'PRIMARY'`), want: true},
+		{name: "other", err: errors.New(`permission denied for table rain_schema_migration_locks`), want: false},
+	}
+
+	for _, tc := range cases {
+		if got := isDuplicateKeyError(tc.err); got != tc.want {
+			t.Fatalf("%s: expected %v, got %v", tc.name, tc.want, got)
+		}
+	}
+}
+
+func TestMigrationLockFailStoresError(t *testing.T) {
+	t.Parallel()
+
+	lock := &migrationLock{}
+	lock.fail(errors.New("boom"))
+	if err := lock.Err(); err == nil || err.Error() != "boom" {
+		t.Fatalf("expected stored error, got %v", err)
+	}
+	lock.fail(errors.New("later"))
+	if err := lock.Err(); err == nil || err.Error() != "boom" {
+		t.Fatalf("expected first error to be preserved, got %v", err)
 	}
 }
 
