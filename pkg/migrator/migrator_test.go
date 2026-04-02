@@ -572,6 +572,17 @@ func TestQuoteMigrationIdentifierUsesDialectQuoting(t *testing.T) {
 	}
 }
 
+func TestLockNameColumnDDL(t *testing.T) {
+	t.Parallel()
+
+	if got := lockNameColumnDDL("mysql"); got != "VARCHAR(191) PRIMARY KEY" {
+		t.Fatalf("expected MySQL lock column DDL, got %q", got)
+	}
+	if got := lockNameColumnDDL("postgres"); got != "TEXT PRIMARY KEY" {
+		t.Fatalf("expected default lock column DDL, got %q", got)
+	}
+}
+
 func mustBuildSnapshot(t *testing.T, dialectName string, tables []schema.TableReference) Snapshot {
 	t.Helper()
 

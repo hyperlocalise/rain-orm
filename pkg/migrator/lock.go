@@ -106,16 +106,24 @@ func (l *migrationLock) heartbeat(ctx context.Context) {
 func (l *migrationLock) ensureTable(ctx context.Context) error {
 	query := fmt.Sprintf(`
 CREATE TABLE IF NOT EXISTS %s (
-  lock_name TEXT PRIMARY KEY,
+  lock_name %s,
   owner TEXT NOT NULL,
   expires_at TIMESTAMP NOT NULL
-);`, quoteMigrationIdentifier(l.dialectName, l.tableName))
+);`, quoteMigrationIdentifier(l.dialectName, l.tableName), lockNameColumnDDL(l.dialectName))
 
 	if _, err := l.db.ExecContext(ctx, query); err != nil {
 		return fmt.Errorf("migrator: create migration lock table %q: %w", l.tableName, err)
 	}
 
 	return nil
+}
+
+func lockNameColumnDDL(dialectName string) string {
+	if dialectName == "mysql" {
+		return "VARCHAR(191) PRIMARY KEY"
+	}
+
+	return "TEXT PRIMARY KEY"
 }
 
 func (l *migrationLock) tryAcquire(ctx context.Context, now time.Time) error {

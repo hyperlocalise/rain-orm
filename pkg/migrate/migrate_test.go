@@ -378,3 +378,24 @@ func TestExecWithPlaceholderFallbackResultRetriesOnPlaceholderSyntaxError(t *tes
 		t.Fatalf("expected both scripted calls to be consumed, remaining calls: %d", len(exec.calls))
 	}
 }
+
+func TestIsDuplicateColumnError(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "sqlite", err: errors.New(`duplicate column name: checksum`), want: true},
+		{name: "mysql", err: errors.New(`Error 1060 (42S21): Duplicate column name 'checksum'`), want: true},
+		{name: "postgres", err: errors.New(`ERROR: column "checksum" of relation "rain_schema_migrations" already exists (SQLSTATE 42701)`), want: true},
+		{name: "other", err: errors.New(`ERROR: relation "rain_schema_migrations" does not exist (SQLSTATE 42P01)`), want: false},
+	}
+
+	for _, tc := range cases {
+		if got := isDuplicateColumnError(tc.err); got != tc.want {
+			t.Fatalf("%s: expected %v, got %v", tc.name, tc.want, got)
+		}
+	}
+}

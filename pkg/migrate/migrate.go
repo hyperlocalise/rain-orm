@@ -310,7 +310,8 @@ func isDuplicateColumnError(err error) bool {
 	lowerErr := strings.ToLower(err.Error())
 	return strings.Contains(lowerErr, "duplicate column") ||
 		(strings.Contains(lowerErr, "column") && strings.Contains(lowerErr, "already exists")) ||
-		strings.Contains(lowerErr, "duplicate column name")
+		strings.Contains(lowerErr, "duplicate column name") ||
+		strings.Contains(lowerErr, "sqlstate 42701")
 }
 
 func replaceWithDollarPlaceholders(query string) string {
