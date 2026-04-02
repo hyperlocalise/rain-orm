@@ -74,7 +74,7 @@ dsn: `+dsn+`
 	if err != nil {
 		t.Fatalf("sql.Open postgres: %v", err)
 	}
-	defer func() { _ = db.Close() }()
+	t.Cleanup(func() { _ = db.Close() })
 
 	resetPostgresCLIIntegrationState(t, ctx, db, migrationTable)
 	t.Cleanup(func() {

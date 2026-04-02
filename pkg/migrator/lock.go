@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -22,11 +23,13 @@ type migrationLock struct {
 	tableName   string
 	lockName    string
 	owner       string
+	mu          sync.Mutex
+	err         error
 }
 
 var placeholderPattern = regexp.MustCompile(`\?`)
 
-func acquireMigrationLock(ctx context.Context, db *sql.DB, dialectName, migrationTableName string) (*migrationLock, error) {
+func acquireMigrationLock(ctx context.Context, db *sql.DB, dialectName, migrationTableName string) (context.Context, *migrationLock, error) {
 	lock := &migrationLock{
 		db:          db,
 		dialectName: dialectName,
@@ -38,18 +41,18 @@ func acquireMigrationLock(ctx context.Context, db *sql.DB, dialectName, migratio
 		lock.lockName = migrationTableName
 	}
 	if err := lock.ensureTable(ctx); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if err := lock.tryAcquire(ctx, time.Now().UTC()); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	heartbeatCtx, cancel := context.WithCancel(context.Background())
+	heartbeatCtx, cancel := context.WithCancel(ctx)
 	lock.cancel = cancel
 	lock.done = make(chan struct{})
 	go lock.heartbeat(heartbeatCtx)
 
-	return lock, nil
+	return heartbeatCtx, lock, nil
 }
 
 func (l *migrationLock) Unlock(ctx context.Context) error {
@@ -74,6 +77,12 @@ func (l *migrationLock) Unlock(ctx context.Context) error {
 	return nil
 }
 
+func (l *migrationLock) Err() error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.err
+}
+
 func (l *migrationLock) heartbeat(ctx context.Context) {
 	ticker := time.NewTicker(defaultLockLease / 2)
 	defer ticker.Stop()
@@ -85,7 +94,11 @@ func (l *migrationLock) heartbeat(ctx context.Context) {
 			return
 		case <-ticker.C:
 			renewCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			_ = l.renew(renewCtx, time.Now().UTC())
+			if err := l.renew(renewCtx, time.Now().UTC()); err != nil {
+				cancel()
+				l.fail(fmt.Errorf("migrator: renew migration lock %q: %w", l.lockName, err))
+				return
+			}
 			cancel()
 		}
 	}
@@ -112,8 +125,12 @@ func (l *migrationLock) tryAcquire(ctx context.Context, now time.Time) error {
 		`INSERT INTO %s (lock_name, owner, expires_at) VALUES (?, ?, ?)`,
 		quoteMigrationIdentifier(l.dialectName, l.tableName),
 	)
-	if _, err := execWithPlaceholders(ctx, l.db, insertQuery, l.lockName, l.owner, expiresAt); err == nil {
+	_, insertErr := execWithPlaceholders(ctx, l.db, insertQuery, l.lockName, l.owner, expiresAt)
+	if insertErr == nil {
 		return nil
+	}
+	if !isDuplicateKeyError(insertErr) {
+		return fmt.Errorf("migrator: acquire migration lock %q: %w", l.lockName, insertErr)
 	}
 
 	updateQuery := fmt.Sprintf(
@@ -137,8 +154,26 @@ func (l *migrationLock) renew(ctx context.Context, now time.Time) error {
 		`UPDATE %s SET expires_at = ? WHERE lock_name = ? AND owner = ?`,
 		quoteMigrationIdentifier(l.dialectName, l.tableName),
 	)
-	_, err := execWithPlaceholders(ctx, l.db, query, now.Add(defaultLockLease), l.lockName, l.owner)
-	return err
+	result, err := execWithPlaceholders(ctx, l.db, query, now.Add(defaultLockLease), l.lockName, l.owner)
+	if err != nil {
+		return err
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err == nil && rowsAffected != 1 {
+		return fmt.Errorf("migration lock row is missing")
+	}
+	return nil
+}
+
+func (l *migrationLock) fail(err error) {
+	l.mu.Lock()
+	if l.err == nil {
+		l.err = err
+	}
+	l.mu.Unlock()
+	if l.cancel != nil {
+		l.cancel()
+	}
 }
 
 func execWithPlaceholders(ctx context.Context, db *sql.DB, query string, args ...any) (sql.Result, error) {
@@ -165,4 +200,11 @@ func execWithPlaceholders(ctx context.Context, db *sql.DB, query string, args ..
 		return fmt.Sprintf("$%d", counter)
 	})
 	return db.ExecContext(ctx, fallbackQuery, args...)
+}
+
+func isDuplicateKeyError(err error) bool {
+	lowerErr := strings.ToLower(err.Error())
+	return strings.Contains(lowerErr, "duplicate key value violates unique constraint") ||
+		strings.Contains(lowerErr, "unique constraint failed") ||
+		strings.Contains(lowerErr, "duplicate entry")
 }

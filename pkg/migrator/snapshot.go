@@ -50,8 +50,9 @@ type ConstraintSnapshot struct {
 
 // ForeignKeySnapshot stores one single-column foreign key.
 type ForeignKeySnapshot struct {
-	Name string `json:"name"`
-	SQL  string `json:"sql"`
+	Name            string `json:"name"`
+	ReferencedTable string `json:"referenced_table,omitempty"`
+	SQL             string `json:"sql"`
 }
 
 // IndexSnapshot stores one standalone index.
@@ -67,10 +68,10 @@ func BuildSnapshot(dialectName string, tables []schema.TableReference) (Snapshot
 		return Snapshot{}, err
 	}
 
-	cloned := slices.Clone(tables)
-	slices.SortFunc(cloned, func(a, b schema.TableReference) int {
-		return compareStrings(a.TableDef().Name, b.TableDef().Name)
-	})
+	cloned, err := orderManagedTables(tables)
+	if err != nil {
+		return Snapshot{}, err
+	}
 
 	tableSnapshots := make([]TableSnapshot, 0, len(cloned))
 	seenTables := make(map[string]struct{}, len(cloned))
@@ -142,8 +143,9 @@ func BuildSnapshot(dialectName string, tables []schema.TableReference) (Snapshot
 				return Snapshot{}, foreignKeyErr
 			}
 			foreignKeySnapshots = append(foreignKeySnapshots, ForeignKeySnapshot{
-				Name: foreignKey.Name,
-				SQL:  foreignKeySQL,
+				Name:            foreignKey.Name,
+				ReferencedTable: foreignKey.ReferencedTable.Name,
+				SQL:             foreignKeySQL,
 			})
 		}
 		slices.SortFunc(foreignKeySnapshots, func(a, b ForeignKeySnapshot) int {
@@ -210,4 +212,77 @@ func compareStrings(left, right string) int {
 	default:
 		return 0
 	}
+}
+
+func orderManagedTables(tables []schema.TableReference) ([]schema.TableReference, error) {
+	cloned := slices.Clone(tables)
+	tableByName := make(map[string]schema.TableReference, len(cloned))
+	inDegree := make(map[string]int, len(cloned))
+	dependents := make(map[string][]string, len(cloned))
+
+	for _, table := range cloned {
+		if table == nil || table.TableDef() == nil {
+			return nil, fmt.Errorf("migrator: managed tables must be non-nil")
+		}
+		name := table.TableDef().Name
+		if _, exists := tableByName[name]; exists {
+			return nil, fmt.Errorf("migrator: duplicate table %q in registry", name)
+		}
+		tableByName[name] = table
+		inDegree[name] = 0
+	}
+
+	for _, table := range cloned {
+		tableDef := table.TableDef()
+		seenDeps := make(map[string]struct{})
+		for _, foreignKey := range tableDef.ForeignKeys {
+			if foreignKey.ReferencedTable == nil {
+				continue
+			}
+			dependencyName := foreignKey.ReferencedTable.Name
+			if dependencyName == tableDef.Name {
+				continue
+			}
+			if _, managed := tableByName[dependencyName]; !managed {
+				continue
+			}
+			if _, exists := seenDeps[dependencyName]; exists {
+				continue
+			}
+			seenDeps[dependencyName] = struct{}{}
+			inDegree[tableDef.Name]++
+			dependents[dependencyName] = append(dependents[dependencyName], tableDef.Name)
+		}
+	}
+
+	ready := make([]string, 0, len(cloned))
+	for name, degree := range inDegree {
+		if degree == 0 {
+			ready = append(ready, name)
+		}
+	}
+	slices.Sort(ready)
+
+	ordered := make([]schema.TableReference, 0, len(cloned))
+	for len(ready) != 0 {
+		name := ready[0]
+		ready = ready[1:]
+		ordered = append(ordered, tableByName[name])
+
+		children := append([]string(nil), dependents[name]...)
+		slices.Sort(children)
+		for _, child := range children {
+			inDegree[child]--
+			if inDegree[child] == 0 {
+				ready = append(ready, child)
+				slices.Sort(ready)
+			}
+		}
+	}
+
+	if len(ordered) != len(cloned) {
+		return nil, fmt.Errorf("migrator: managed tables contain a circular foreign-key dependency")
+	}
+
+	return ordered, nil
 }

@@ -309,7 +309,7 @@ func shouldRetryWithDollarPlaceholders(query string, err error) bool {
 func isDuplicateColumnError(err error) bool {
 	lowerErr := strings.ToLower(err.Error())
 	return strings.Contains(lowerErr, "duplicate column") ||
-		strings.Contains(lowerErr, "already exists") ||
+		(strings.Contains(lowerErr, "column") && strings.Contains(lowerErr, "already exists")) ||
 		strings.Contains(lowerErr, "duplicate column name")
 }
 

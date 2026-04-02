@@ -3,6 +3,7 @@ package migrator
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -11,16 +12,19 @@ import (
 
 // ApplySQLMigrations applies ordered SQL migrations using the existing migration table tracking.
 func ApplySQLMigrations(ctx context.Context, db *sql.DB, dialectName, tableName string, migrationsOnDisk []DiskMigration) (migrate.ApplyResult, error) {
-	lock, err := acquireMigrationLock(ctx, db, dialectName, tableName)
+	lockCtx, lock, err := acquireMigrationLock(ctx, db, dialectName, tableName)
 	if err != nil {
 		return migrate.ApplyResult{}, err
 	}
 	defer func() { _ = lock.Unlock(context.Background()) }()
 
-	if _, err := migrate.NewRunner(tableName).ApplyPending(ctx, db, nil); err != nil {
+	if _, err := migrate.NewRunner(tableName).ApplyPending(lockCtx, db, nil); err != nil {
+		if lockErr := lock.Err(); lockErr != nil {
+			return migrate.ApplyResult{}, errors.Join(err, lockErr)
+		}
 		return migrate.ApplyResult{}, err
 	}
-	if err := validateMigrationState(ctx, db, dialectName, tableName, migrationsOnDisk); err != nil {
+	if err := validateMigrationState(lockCtx, db, dialectName, tableName, migrationsOnDisk); err != nil {
 		return migrate.ApplyResult{}, err
 	}
 
@@ -49,7 +53,14 @@ func ApplySQLMigrations(ctx context.Context, db *sql.DB, dialectName, tableName 
 		})
 	}
 
-	return migrate.NewRunner(tableName).ApplyPending(ctx, db, migrations)
+	result, err := migrate.NewRunner(tableName).ApplyPending(lockCtx, db, migrations)
+	if lockErr := lock.Err(); lockErr != nil {
+		if err != nil {
+			return result, errors.Join(err, lockErr)
+		}
+		return result, lockErr
+	}
+	return result, err
 }
 
 func isMissingTableError(err error) bool {

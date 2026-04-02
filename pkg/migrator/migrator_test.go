@@ -401,13 +401,13 @@ func TestAcquireMigrationLockRejectsConcurrentOwner(t *testing.T) {
 	}
 	defer func() { _ = db.Close() }()
 
-	first, err := acquireMigrationLock(ctx, db, "sqlite", "rain_schema_migrations")
+	_, first, err := acquireMigrationLock(ctx, db, "sqlite", "rain_schema_migrations")
 	if err != nil {
 		t.Fatalf("acquire first lock: %v", err)
 	}
 	defer func() { _ = first.Unlock(context.Background()) }()
 
-	if _, err := acquireMigrationLock(ctx, db, "sqlite", "rain_schema_migrations"); err == nil || !strings.Contains(err.Error(), "another migration run is active") {
+	if _, _, err := acquireMigrationLock(ctx, db, "sqlite", "rain_schema_migrations"); err == nil || !strings.Contains(err.Error(), "another migration run is active") {
 		t.Fatalf("expected concurrent lock error, got %v", err)
 	}
 }
