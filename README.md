@@ -372,7 +372,7 @@ func applyMigrations(ctx context.Context, db *sql.DB) error {
 }
 ```
 
-`ApplyPending` creates a migration tracking table (`rain_schema_migrations`) if needed, applies pending migrations in deterministic ID order, records applied IDs and timing metadata, and skips already-applied migrations. In v1, migration execution is forward-only: `Down` callbacks are accepted for future compatibility but are not run by the runner.
+`ApplyPending` creates a migration tracking table (`rain_schema_migrations`) if needed, applies pending migrations in deterministic ID order, records applied IDs plus checksum and timing metadata, and skips already-applied migrations. In v1, migration execution is forward-only: `Down` callbacks are accepted for future compatibility but are not run by the runner.
 
 ## Database Dialects
 

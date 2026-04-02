@@ -194,14 +194,14 @@ func validateWriteCompatibility(column *schema.ColumnDef, fieldType reflect.Type
 }
 
 func supportsScanForColumn(column *schema.ColumnDef, fieldType reflect.Type) bool {
+	if fieldType == nil {
+		return false
+	}
 	if supportsScanner(fieldType) {
 		return true
 	}
 
 	baseType, _ := unwrapFieldType(fieldType)
-	if baseType == nil {
-		return false
-	}
 
 	switch column.Type.DataType {
 	case schema.TypeBigSerial, schema.TypeSmallInt, schema.TypeInteger, schema.TypeBigInt:
@@ -226,14 +226,14 @@ func supportsScanForColumn(column *schema.ColumnDef, fieldType reflect.Type) boo
 }
 
 func supportsWriteForColumn(column *schema.ColumnDef, fieldType reflect.Type) bool {
+	if fieldType == nil {
+		return false
+	}
 	if supportsValuer(fieldType) {
 		return true
 	}
 
 	baseType, _ := unwrapFieldType(fieldType)
-	if baseType == nil {
-		return false
-	}
 
 	switch column.Type.DataType {
 	case schema.TypeBigSerial, schema.TypeSmallInt, schema.TypeInteger, schema.TypeBigInt:
@@ -289,11 +289,17 @@ func extractSetFieldType(fieldType reflect.Type) (reflect.Type, bool) {
 }
 
 func supportsScanner(fieldType reflect.Type) bool {
+	if fieldType == nil {
+		return false
+	}
 	scannerType := reflect.TypeFor[sql.Scanner]()
 	return fieldType.Implements(scannerType) || reflect.PointerTo(fieldType).Implements(scannerType)
 }
 
 func supportsValuer(fieldType reflect.Type) bool {
+	if fieldType == nil {
+		return false
+	}
 	valuerType := reflect.TypeFor[driver.Valuer]()
 	return fieldType.Implements(valuerType) || reflect.PointerTo(fieldType).Implements(valuerType)
 }

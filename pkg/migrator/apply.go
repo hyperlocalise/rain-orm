@@ -3,15 +3,53 @@ package migrator
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/hyperlocalise/rain-orm/pkg/migrate"
 )
 
+type migrationLockHandle interface {
+	Unlock(context.Context) error
+	Err() error
+}
+
+type migrationApplier interface {
+	ApplyPending(context.Context, *sql.DB, []migrate.Migration) (migrate.ApplyResult, error)
+}
+
+var acquireMigrationLockFunc = func(ctx context.Context, db *sql.DB, dialectName, tableName string) (context.Context, migrationLockHandle, error) {
+	return acquireMigrationLock(ctx, db, dialectName, tableName)
+}
+
+var newMigrationRunner = func(tableName, dialectName string) migrationApplier {
+	return migrate.NewRunnerForDialect(tableName, dialectName)
+}
+
 // ApplySQLMigrations applies ordered SQL migrations using the existing migration table tracking.
-func ApplySQLMigrations(ctx context.Context, db *sql.DB, dialectName, tableName string, migrationsOnDisk []DiskMigration) (migrate.ApplyResult, error) {
-	if err := validatePendingMigrationOrder(ctx, db, dialectName, tableName, migrationsOnDisk); err != nil {
+func ApplySQLMigrations(ctx context.Context, db *sql.DB, dialectName, tableName string, migrationsOnDisk []DiskMigration) (result migrate.ApplyResult, err error) {
+	if err := validateMigrateDialect(dialectName); err != nil {
+		return migrate.ApplyResult{}, err
+	}
+
+	lockCtx, lock, err := acquireMigrationLockFunc(ctx, db, dialectName, tableName)
+	if err != nil {
+		return migrate.ApplyResult{}, err
+	}
+	defer func() {
+		if unlockErr := lock.Unlock(context.Background()); unlockErr != nil {
+			err = errors.Join(err, unlockErr)
+		}
+	}()
+
+	if _, err := newMigrationRunner(tableName, dialectName).ApplyPending(lockCtx, db, nil); err != nil {
+		if lockErr := lock.Err(); lockErr != nil {
+			return migrate.ApplyResult{}, errors.Join(err, lockErr)
+		}
+		return migrate.ApplyResult{}, err
+	}
+	if err := validateMigrationState(lockCtx, db, dialectName, tableName, migrationsOnDisk); err != nil {
 		return migrate.ApplyResult{}, err
 	}
 
@@ -24,12 +62,10 @@ func ApplySQLMigrations(ctx context.Context, db *sql.DB, dialectName, tableName 
 
 		currentStatements := append([]string(nil), statements...)
 		migrations = append(migrations, migrate.Migration{
-			ID: diskMigration.ID,
+			ID:       diskMigration.ID,
+			Checksum: diskMigration.Checksum,
 			Up: func(ctx context.Context, exec migrate.Executor) error {
 				for _, statement := range currentStatements {
-					if strings.TrimSpace(statement) == "" {
-						continue
-					}
 					if _, execErr := exec.ExecContext(ctx, statement); execErr != nil {
 						return execErr
 					}
@@ -39,59 +75,50 @@ func ApplySQLMigrations(ctx context.Context, db *sql.DB, dialectName, tableName 
 		})
 	}
 
-	return migrate.NewRunner(tableName).ApplyPending(ctx, db, migrations)
+	result, err = newMigrationRunner(tableName, dialectName).ApplyPending(lockCtx, db, migrations)
+	if lockErr := lock.Err(); lockErr != nil {
+		if err != nil {
+			return result, errors.Join(err, lockErr)
+		}
+		return result, lockErr
+	}
+	return result, err
 }
 
-func validatePendingMigrationOrder(ctx context.Context, db *sql.DB, dialectName, tableName string, migrationsOnDisk []DiskMigration) error {
-	appliedIDs, lastAppliedID, err := loadAppliedMigrationIDs(ctx, db, dialectName, tableName)
-	if err != nil {
-		return err
-	}
-	if lastAppliedID == "" {
+func validateMigrateDialect(dialectName string) error {
+	switch normalizeMigratorDialectName(dialectName) {
+	case "sqlite", "postgres":
 		return nil
+	case "mysql":
+		return errors.New("migrator: mysql migrate is not supported yet because whole-run locking and DDL failure semantics are not safe enough")
+	default:
+		return fmt.Errorf("migrator: migrate is not supported for dialect %q", dialectName)
 	}
-
-	for _, migrationOnDisk := range migrationsOnDisk {
-		if migrationOnDisk.ID >= lastAppliedID {
-			continue
-		}
-		if _, applied := appliedIDs[migrationOnDisk.ID]; applied {
-			continue
-		}
-		return fmt.Errorf("migrator: pending migration %q is older than the last applied migration %q", migrationOnDisk.ID, lastAppliedID)
-	}
-
-	return nil
 }
 
-func loadAppliedMigrationIDs(ctx context.Context, db *sql.DB, dialectName, tableName string) (map[string]struct{}, string, error) {
-	query := fmt.Sprintf(`SELECT id FROM %s ORDER BY id DESC`, quoteMigrationIdentifier(dialectName, tableName))
-	rows, err := db.QueryContext(ctx, query)
-	if err != nil {
-		if isMissingTableError(err) {
-			return nil, "", nil
-		}
-		return nil, "", fmt.Errorf("migrator: load applied migrations: %w", err)
+func normalizeMigratorDialectName(name string) string {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "postgres", "postgresql":
+		return "postgres"
+	case "sqlite", "sqlite3":
+		return "sqlite"
+	case "mysql":
+		return "mysql"
+	default:
+		return strings.ToLower(strings.TrimSpace(name))
 	}
-	defer func() { _ = rows.Close() }()
+}
 
-	applied := make(map[string]struct{})
-	lastAppliedID := ""
-	for rows.Next() {
-		var id string
-		if scanErr := rows.Scan(&id); scanErr != nil {
-			return nil, "", fmt.Errorf("migrator: scan applied migration id: %w", scanErr)
-		}
-		if lastAppliedID == "" {
-			lastAppliedID = id
-		}
-		applied[id] = struct{}{}
-	}
-	if rowsErr := rows.Err(); rowsErr != nil {
-		return nil, "", fmt.Errorf("migrator: read applied migrations: %w", rowsErr)
+func replacePlaceholdersForDialect(dialectName, query string) string {
+	if normalizeMigratorDialectName(dialectName) != "postgres" {
+		return query
 	}
 
-	return applied, lastAppliedID, nil
+	counter := 0
+	return placeholderPattern.ReplaceAllStringFunc(query, func(_ string) string {
+		counter++
+		return fmt.Sprintf("$%d", counter)
+	})
 }
 
 func isMissingTableError(err error) bool {

@@ -297,10 +297,7 @@ func columnDefinitionSQL(d dialect.Dialect, table *schema.TableDef, column *sche
 	var parts []string
 	parts = append(parts, d.QuoteIdentifier(column.Name))
 
-	typeSQL, err := columnTypeSQL(d, column)
-	if err != nil {
-		return "", err
-	}
+	typeSQL := columnTypeSQL(d, column)
 	parts = append(parts, typeSQL)
 
 	if inlinePrimaryKey {
@@ -329,7 +326,7 @@ func columnDefinitionSQL(d dialect.Dialect, table *schema.TableDef, column *sche
 	return strings.Join(parts, " "), nil
 }
 
-func columnTypeSQL(d dialect.Dialect, column *schema.ColumnDef) (string, error) {
+func columnTypeSQL(d dialect.Dialect, column *schema.ColumnDef) string {
 	typeSQL := d.DataType(column.Type)
 
 	if column.Type.DataType == schema.TypeVarChar && column.Type.Size > 0 && strings.EqualFold(typeSQL, "VARCHAR") {
@@ -341,10 +338,10 @@ func columnTypeSQL(d dialect.Dialect, column *schema.ColumnDef) (string, error) 
 	}
 
 	if column.AutoIncrement && d.Name() == "sqlite" && column.Type.DataType == schema.TypeBigSerial {
-		return "INTEGER", nil
+		return "INTEGER"
 	}
 
-	return typeSQL, nil
+	return typeSQL
 }
 
 func shouldEmitAutoIncrementKeyword(d dialect.Dialect, column *schema.ColumnDef, inlinePrimaryKey bool) bool {

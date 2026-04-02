@@ -1,6 +1,8 @@
 package migrator
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -20,6 +22,7 @@ const (
 type DiskMigration struct {
 	ID           string
 	Name         string
+	Checksum     string
 	DirPath      string
 	SQLPath      string
 	SnapshotPath string
@@ -83,6 +86,7 @@ func WriteMigrationFiles(dir, name string, plan Plan, snapshot Snapshot, now tim
 	return DiskMigration{
 		ID:           id,
 		Name:         migrationName(id),
+		Checksum:     checksumSQL(sqlBody),
 		DirPath:      dirPath,
 		SQLPath:      sqlPath,
 		SnapshotPath: snapshotPath,
@@ -138,6 +142,7 @@ func LoadDiskMigrations(dir string) ([]DiskMigration, error) {
 		migrationByID[id] = DiskMigration{
 			ID:           id,
 			Name:         migrationName(id),
+			Checksum:     checksumSQL(string(sqlData)),
 			DirPath:      dirPath,
 			SQLPath:      sqlPath,
 			SnapshotPath: snapshotPath,
@@ -216,4 +221,9 @@ func slugify(value string) string {
 	}
 
 	return strings.Trim(builder.String(), "_")
+}
+
+func checksumSQL(sqlText string) string {
+	sum := sha256.Sum256([]byte(sqlText))
+	return hex.EncodeToString(sum[:])
 }
