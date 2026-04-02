@@ -28,7 +28,7 @@ var newMigrationRunner = func(tableName, dialectName string) migrationApplier {
 }
 
 // ApplySQLMigrations applies ordered SQL migrations using the existing migration table tracking.
-func ApplySQLMigrations(ctx context.Context, db *sql.DB, dialectName, tableName string, migrationsOnDisk []DiskMigration) (migrate.ApplyResult, error) {
+func ApplySQLMigrations(ctx context.Context, db *sql.DB, dialectName, tableName string, migrationsOnDisk []DiskMigration) (result migrate.ApplyResult, err error) {
 	if err := validateMigrateDialect(dialectName); err != nil {
 		return migrate.ApplyResult{}, err
 	}
@@ -37,7 +37,11 @@ func ApplySQLMigrations(ctx context.Context, db *sql.DB, dialectName, tableName 
 	if err != nil {
 		return migrate.ApplyResult{}, err
 	}
-	defer func() { _ = lock.Unlock(context.Background()) }()
+	defer func() {
+		if unlockErr := lock.Unlock(context.Background()); unlockErr != nil {
+			err = errors.Join(err, unlockErr)
+		}
+	}()
 
 	if _, err := newMigrationRunner(tableName, dialectName).ApplyPending(lockCtx, db, nil); err != nil {
 		if lockErr := lock.Err(); lockErr != nil {
@@ -71,7 +75,7 @@ func ApplySQLMigrations(ctx context.Context, db *sql.DB, dialectName, tableName 
 		})
 	}
 
-	result, err := newMigrationRunner(tableName, dialectName).ApplyPending(lockCtx, db, migrations)
+	result, err = newMigrationRunner(tableName, dialectName).ApplyPending(lockCtx, db, migrations)
 	if lockErr := lock.Err(); lockErr != nil {
 		if err != nil {
 			return result, errors.Join(err, lockErr)

@@ -4,15 +4,20 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"os"
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
 const defaultLockTable = "rain_schema_migration_locks"
 
-var defaultLockLease = 30 * time.Second
+var (
+	defaultLockLease      = 30 * time.Second
+	migrationLockOwnerSeq uint64
+)
 
 type migrationLock struct {
 	cancel      context.CancelFunc
@@ -39,7 +44,7 @@ func acquireMigrationLock(ctx context.Context, db *sql.DB, dialectName, migratio
 		dialectName: dialectName,
 		tableName:   defaultLockTable,
 		lockName:    "default",
-		owner:       fmt.Sprintf("%d", time.Now().UTC().UnixNano()),
+		owner:       newMigrationLockOwner(),
 	}
 	if strings.TrimSpace(migrationTableName) != "" {
 		lock.lockName = migrationTableName
@@ -59,6 +64,10 @@ func acquireMigrationLock(ctx context.Context, db *sql.DB, dialectName, migratio
 	go lock.heartbeat(heartbeatCtx)
 
 	return heartbeatCtx, lock, nil
+}
+
+func newMigrationLockOwner() string {
+	return fmt.Sprintf("%d-%d-%d", os.Getpid(), time.Now().UTC().UnixNano(), atomic.AddUint64(&migrationLockOwnerSeq, 1))
 }
 
 func (l *migrationLock) Unlock(ctx context.Context) error {

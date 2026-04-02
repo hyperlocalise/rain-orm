@@ -283,6 +283,62 @@ func TestApplySQLMigrationsBranchCoverage(t *testing.T) {
 			t.Fatalf("unexpected partial result: %#v", result.AppliedIDs)
 		}
 	})
+
+	t.Run("returns unlock error when apply succeeds", func(t *testing.T) {
+		db := openSQLiteTestDB(t, "branch-unlock.sqlite")
+		defer func() { _ = db.Close() }()
+
+		lock := &testMigrationLock{unlockErr: errors.New("unlock lost")}
+		acquireMigrationLockFunc = func(ctx context.Context, db *sql.DB, dialectName, tableName string) (context.Context, migrationLockHandle, error) {
+			return ctx, lock, nil
+		}
+		newMigrationRunner = func(tableName, dialectName string) migrationApplier {
+			return testMigrationApplier{
+				apply: func(ctx context.Context, db *sql.DB, migrations []migrate.Migration) (migrate.ApplyResult, error) {
+					return migrate.ApplyResult{AppliedIDs: []string{"ok"}}, nil
+				},
+			}
+		}
+
+		result, err := ApplySQLMigrations(context.Background(), db, "sqlite", "rain_schema_migrations", nil)
+		if err == nil || !strings.Contains(err.Error(), "unlock lost") {
+			t.Fatalf("expected unlock error, got %v", err)
+		}
+		if !slices.Equal(result.AppliedIDs, []string{"ok"}) {
+			t.Fatalf("unexpected result when unlock fails: %#v", result.AppliedIDs)
+		}
+	})
+
+	t.Run("joins unlock error with apply error", func(t *testing.T) {
+		db := openSQLiteTestDB(t, "branch-unlock-join.sqlite")
+		defer func() { _ = db.Close() }()
+
+		lock := &testMigrationLock{unlockErr: errors.New("unlock lost")}
+		acquireMigrationLockFunc = func(ctx context.Context, db *sql.DB, dialectName, tableName string) (context.Context, migrationLockHandle, error) {
+			return ctx, lock, nil
+		}
+		newMigrationRunner = func(tableName, dialectName string) migrationApplier {
+			return testMigrationApplier{
+				apply: func(ctx context.Context, db *sql.DB, migrations []migrate.Migration) (migrate.ApplyResult, error) {
+					if migrations == nil {
+						return migrate.ApplyResult{}, nil
+					}
+					return migrate.ApplyResult{AppliedIDs: []string{"partial"}}, errors.New("apply failed")
+				},
+			}
+		}
+
+		result, err := ApplySQLMigrations(context.Background(), db, "sqlite", "rain_schema_migrations", []DiskMigration{{
+			ID:  "20260402010606_unlock_join",
+			SQL: "DELETE FROM users;",
+		}})
+		if err == nil || !strings.Contains(err.Error(), "apply failed") || !strings.Contains(err.Error(), "unlock lost") {
+			t.Fatalf("expected joined apply and unlock error, got %v", err)
+		}
+		if !slices.Equal(result.AppliedIDs, []string{"partial"}) {
+			t.Fatalf("unexpected partial result: %#v", result.AppliedIDs)
+		}
+	})
 }
 
 func TestSplitSQLStatementsAndDollarMarkers(t *testing.T) {
@@ -718,11 +774,28 @@ func TestMigrationLockHeartbeatSuccessThenCancel(t *testing.T) {
 type execScriptFunc func(query string, args []driver.NamedValue) (driver.Result, error)
 
 type testMigrationLock struct {
-	err error
+	err       error
+	unlockErr error
 }
 
-func (l *testMigrationLock) Unlock(context.Context) error { return nil }
+func (l *testMigrationLock) Unlock(context.Context) error { return l.unlockErr }
 func (l *testMigrationLock) Err() error                   { return l.err }
+
+func TestNewMigrationLockOwnerUniqueness(t *testing.T) {
+	t.Parallel()
+
+	owners := map[string]struct{}{}
+	for range 16 {
+		owner := newMigrationLockOwner()
+		if _, exists := owners[owner]; exists {
+			t.Fatalf("expected unique owner, got duplicate %q", owner)
+		}
+		if strings.Count(owner, "-") < 2 {
+			t.Fatalf("expected owner to include pid and sequence, got %q", owner)
+		}
+		owners[owner] = struct{}{}
+	}
+}
 
 type testMigrationApplier struct {
 	apply func(context.Context, *sql.DB, []migrate.Migration) (migrate.ApplyResult, error)
