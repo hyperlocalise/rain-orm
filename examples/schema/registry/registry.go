@@ -37,7 +37,7 @@ var Users = schema.Define("users", func(t *UsersTable) {
 	t.Name = t.Text("name").NotNull()
 	t.Active = t.Boolean("active").NotNull().Default(true)
 	t.CreatedAt = t.TimestampTZ("created_at").NotNull().DefaultNow()
-	t.Index("users_email_key").On(t.Email)
+	t.Index("users_email_idx").On(t.Email)
 	t.UniqueIndex("users_active_email_idx").On(t.Active, t.Email.Desc())
 })
 

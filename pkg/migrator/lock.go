@@ -10,10 +10,9 @@ import (
 	"time"
 )
 
-const (
-	defaultLockLease = 30 * time.Second
-	defaultLockTable = "rain_schema_migration_locks"
-)
+const defaultLockTable = "rain_schema_migration_locks"
+
+var defaultLockLease = 30 * time.Second
 
 type migrationLock struct {
 	cancel      context.CancelFunc

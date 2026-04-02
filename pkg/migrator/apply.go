@@ -10,15 +10,32 @@ import (
 	"github.com/hyperlocalise/rain-orm/pkg/migrate"
 )
 
+type migrationLockHandle interface {
+	Unlock(context.Context) error
+	Err() error
+}
+
+type migrationApplier interface {
+	ApplyPending(context.Context, *sql.DB, []migrate.Migration) (migrate.ApplyResult, error)
+}
+
+var acquireMigrationLockFunc = func(ctx context.Context, db *sql.DB, dialectName, tableName string) (context.Context, migrationLockHandle, error) {
+	return acquireMigrationLock(ctx, db, dialectName, tableName)
+}
+
+var newMigrationRunner = func(tableName string) migrationApplier {
+	return migrate.NewRunner(tableName)
+}
+
 // ApplySQLMigrations applies ordered SQL migrations using the existing migration table tracking.
 func ApplySQLMigrations(ctx context.Context, db *sql.DB, dialectName, tableName string, migrationsOnDisk []DiskMigration) (migrate.ApplyResult, error) {
-	lockCtx, lock, err := acquireMigrationLock(ctx, db, dialectName, tableName)
+	lockCtx, lock, err := acquireMigrationLockFunc(ctx, db, dialectName, tableName)
 	if err != nil {
 		return migrate.ApplyResult{}, err
 	}
 	defer func() { _ = lock.Unlock(context.Background()) }()
 
-	if _, err := migrate.NewRunner(tableName).ApplyPending(lockCtx, db, nil); err != nil {
+	if _, err := newMigrationRunner(tableName).ApplyPending(lockCtx, db, nil); err != nil {
 		if lockErr := lock.Err(); lockErr != nil {
 			return migrate.ApplyResult{}, errors.Join(err, lockErr)
 		}
@@ -41,9 +58,6 @@ func ApplySQLMigrations(ctx context.Context, db *sql.DB, dialectName, tableName 
 			Checksum: diskMigration.Checksum,
 			Up: func(ctx context.Context, exec migrate.Executor) error {
 				for _, statement := range currentStatements {
-					if strings.TrimSpace(statement) == "" {
-						continue
-					}
 					if _, execErr := exec.ExecContext(ctx, statement); execErr != nil {
 						return execErr
 					}
@@ -53,7 +67,7 @@ func ApplySQLMigrations(ctx context.Context, db *sql.DB, dialectName, tableName 
 		})
 	}
 
-	result, err := migrate.NewRunner(tableName).ApplyPending(lockCtx, db, migrations)
+	result, err := newMigrationRunner(tableName).ApplyPending(lockCtx, db, migrations)
 	if lockErr := lock.Err(); lockErr != nil {
 		if err != nil {
 			return result, errors.Join(err, lockErr)

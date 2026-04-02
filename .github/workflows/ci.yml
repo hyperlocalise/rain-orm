@@ -119,3 +119,8 @@ jobs:
         env:
           RAIN_MYSQL_DSN: rain:rain@tcp(127.0.0.1:3306)/rain_test?parseTime=true
         run: go test -race ./pkg/rain -run '^TestMySQLIntegration'
+
+      - name: Run MySQL CLI integration tests
+        env:
+          RAIN_MYSQL_DSN: rain:rain@tcp(127.0.0.1:3306)/rain_test?parseTime=true
+        run: go test -race ./internal/raincli -run '^TestMySQLCLIIntegrationGenerateCheckMigrate$'

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/go-sql-driver/mysql"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	_ "modernc.org/sqlite"
 )
@@ -87,6 +88,47 @@ dsn: `+dsn+`
 	assertPostgresTableExists(t, ctx, db, "posts")
 	assertPostgresTableExists(t, ctx, db, "memberships")
 	assertMigrationChecksumsRecordedPostgres(t, ctx, db, migrationTable, 1)
+}
+
+func TestMySQLCLIIntegrationGenerateCheckMigrate(t *testing.T) {
+	dsn, ok := mysqlCLIIntegrationDSN()
+	if !ok {
+		t.Skip("set RAIN_MYSQL_DSN or RAIN_MYSQL_HOST/RAIN_MYSQL_USER/RAIN_MYSQL_DB to run mysql CLI integration tests")
+	}
+
+	ctx := context.Background()
+	cwd := repoRoot(t)
+	tempDir := t.TempDir()
+	outputDir := filepath.Join(tempDir, "migrations")
+	configPath := filepath.Join(tempDir, "rain.yml")
+	migrationTable := "rain_schema_migrations_cli_it"
+
+	writeConfig(t, configPath, `
+dialect: mysql
+schema_package: ./examples/schema/registry
+schema_function: ManagedTables
+out: `+outputDir+`
+migration_table: `+migrationTable+`
+dsn: `+dsn+`
+`)
+
+	db, err := sql.Open("mysql", dsn)
+	if err != nil {
+		t.Fatalf("sql.Open mysql: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	resetMySQLCLIIntegrationState(t, ctx, db, migrationTable)
+	t.Cleanup(func() {
+		resetMySQLCLIIntegrationState(t, context.Background(), db, migrationTable)
+	})
+
+	runHappyPathCLIIntegration(t, ctx, cwd, configPath, outputDir)
+
+	assertMySQLTableExists(t, ctx, db, "users")
+	assertMySQLTableExists(t, ctx, db, "posts")
+	assertMySQLTableExists(t, ctx, db, "memberships")
+	assertMigrationChecksumsRecordedMySQL(t, ctx, db, migrationTable, 1)
 }
 
 func runHappyPathCLIIntegration(t *testing.T, ctx context.Context, cwd, configPath, outputDir string) {
@@ -196,6 +238,41 @@ func assertMigrationChecksumsRecordedPostgres(t *testing.T, ctx context.Context,
 	}
 }
 
+func assertMySQLTableExists(t *testing.T, ctx context.Context, db *sql.DB, table string) {
+	t.Helper()
+
+	row := db.QueryRowContext(ctx, `
+SELECT COUNT(*)
+FROM information_schema.tables
+WHERE table_schema = DATABASE() AND table_name = ?
+`, table)
+	var count int
+	if err := row.Scan(&count); err != nil {
+		t.Fatalf("scan mysql table existence for %s: %v", table, err)
+	}
+	if count != 1 {
+		t.Fatalf("expected mysql table %q to exist, count=%d", table, count)
+	}
+}
+
+func assertMigrationChecksumsRecordedMySQL(t *testing.T, ctx context.Context, db *sql.DB, table string, expectedCount int) {
+	t.Helper()
+
+	query := fmt.Sprintf(`SELECT COUNT(*), SUM(CASE WHEN checksum <> '' THEN 1 ELSE 0 END) FROM %s`, quoteMySQLIdentifier(table))
+	row := db.QueryRowContext(ctx, query)
+	var count int
+	var withChecksum int
+	if err := row.Scan(&count, &withChecksum); err != nil {
+		t.Fatalf("scan migration checksums for %s: %v", table, err)
+	}
+	if count != expectedCount {
+		t.Fatalf("expected %d migration rows in %s, got %d", expectedCount, table, count)
+	}
+	if withChecksum != expectedCount {
+		t.Fatalf("expected %d migration checksums in %s, got %d", expectedCount, table, withChecksum)
+	}
+}
+
 func resetPostgresCLIIntegrationState(t *testing.T, ctx context.Context, db *sql.DB, migrationTable string) {
 	t.Helper()
 
@@ -208,6 +285,31 @@ func resetPostgresCLIIntegrationState(t *testing.T, ctx context.Context, db *sql
 	} {
 		if _, err := db.ExecContext(ctx, statement); err != nil {
 			t.Fatalf("reset postgres state with %q: %v", statement, err)
+		}
+	}
+}
+
+func resetMySQLCLIIntegrationState(t *testing.T, ctx context.Context, db *sql.DB, migrationTable string) {
+	t.Helper()
+
+	if _, err := db.ExecContext(ctx, `SET FOREIGN_KEY_CHECKS = 0`); err != nil {
+		t.Fatalf("disable mysql foreign key checks: %v", err)
+	}
+	defer func() {
+		if _, err := db.ExecContext(context.Background(), `SET FOREIGN_KEY_CHECKS = 1`); err != nil {
+			t.Fatalf("enable mysql foreign key checks: %v", err)
+		}
+	}()
+
+	for _, statement := range []string{
+		fmt.Sprintf(`DROP TABLE IF EXISTS %s`, quoteMySQLIdentifier("memberships")),
+		fmt.Sprintf(`DROP TABLE IF EXISTS %s`, quoteMySQLIdentifier("posts")),
+		fmt.Sprintf(`DROP TABLE IF EXISTS %s`, quoteMySQLIdentifier("users")),
+		fmt.Sprintf(`DROP TABLE IF EXISTS %s`, quoteMySQLIdentifier(migrationTable)),
+		fmt.Sprintf(`DROP TABLE IF EXISTS %s`, quoteMySQLIdentifier("rain_schema_migration_locks")),
+	} {
+		if _, err := db.ExecContext(ctx, statement); err != nil {
+			t.Fatalf("reset mysql state with %q: %v", statement, err)
 		}
 	}
 }
@@ -251,6 +353,39 @@ func postgresCLIIntegrationDSN() (string, bool) {
 	return dsn.String(), true
 }
 
+func mysqlCLIIntegrationDSN() (string, bool) {
+	if dsn := strings.TrimSpace(os.Getenv("RAIN_MYSQL_DSN")); dsn != "" {
+		return dsn, true
+	}
+
+	host := strings.TrimSpace(os.Getenv("RAIN_MYSQL_HOST"))
+	user := strings.TrimSpace(os.Getenv("RAIN_MYSQL_USER"))
+	dbName := strings.TrimSpace(os.Getenv("RAIN_MYSQL_DB"))
+	if host == "" || user == "" || dbName == "" {
+		return "", false
+	}
+
+	port := strings.TrimSpace(os.Getenv("RAIN_MYSQL_PORT"))
+	if port == "" {
+		port = "3306"
+	}
+
+	cfg := mysql.Config{
+		Net:       "tcp",
+		Addr:      net.JoinHostPort(host, port),
+		User:      user,
+		Passwd:    strings.TrimSpace(os.Getenv("RAIN_MYSQL_PASSWORD")),
+		DBName:    dbName,
+		ParseTime: true,
+	}
+
+	return cfg.FormatDSN(), true
+}
+
 func quoteSQLIdentifier(name string) string {
 	return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
+}
+
+func quoteMySQLIdentifier(name string) string {
+	return "`" + strings.ReplaceAll(name, "`", "``") + "`"
 }
