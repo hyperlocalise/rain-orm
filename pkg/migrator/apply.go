@@ -87,10 +87,8 @@ func ApplySQLMigrations(ctx context.Context, db *sql.DB, dialectName, tableName 
 
 func validateMigrateDialect(dialectName string) error {
 	switch normalizeMigratorDialectName(dialectName) {
-	case "sqlite", "postgres":
+	case "sqlite", "postgres", "mysql":
 		return nil
-	case "mysql":
-		return errors.New("migrator: mysql migrate is not supported yet because whole-run locking and DDL failure semantics are not safe enough")
 	default:
 		return fmt.Errorf("migrator: migrate is not supported for dialect %q", dialectName)
 	}

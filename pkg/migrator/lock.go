@@ -27,6 +27,7 @@ type migrationLock struct {
 	tableName   string
 	lockName    string
 	owner       string
+	sessionLock bool
 	mu          sync.Mutex
 	err         error
 }
@@ -48,6 +49,13 @@ func acquireMigrationLock(ctx context.Context, db *sql.DB, dialectName, migratio
 	}
 	if strings.TrimSpace(migrationTableName) != "" {
 		lock.lockName = migrationTableName
+	}
+	if normalizeMigratorDialectName(dialectName) == "mysql" {
+		if err := lock.tryAcquireMySQLSessionLock(ctx); err != nil {
+			_ = conn.Close()
+			return nil, nil, err
+		}
+		return ctx, lock, nil
 	}
 	if err := lock.ensureTable(ctx); err != nil {
 		_ = conn.Close()
@@ -76,6 +84,10 @@ func (l *migrationLock) Unlock(ctx context.Context) error {
 			_ = l.conn.Close()
 		}
 	}()
+
+	if l.sessionLock {
+		return l.releaseMySQLSessionLock(ctx)
+	}
 
 	if l.cancel != nil {
 		l.cancel()
@@ -203,6 +215,31 @@ func (l *migrationLock) fail(err error) {
 	if l.cancel != nil {
 		l.cancel()
 	}
+}
+
+func (l *migrationLock) tryAcquireMySQLSessionLock(ctx context.Context) error {
+	row := l.conn.QueryRowContext(ctx, `SELECT GET_LOCK(?, 0)`, l.lockName)
+	var acquired sql.NullInt64
+	if err := row.Scan(&acquired); err != nil {
+		return fmt.Errorf("migrator: acquire mysql migration lock %q: %w", l.lockName, err)
+	}
+	if !acquired.Valid || acquired.Int64 != 1 {
+		return fmt.Errorf("migrator: acquire migration lock %q: another migration run is active", l.lockName)
+	}
+	l.sessionLock = true
+	return nil
+}
+
+func (l *migrationLock) releaseMySQLSessionLock(ctx context.Context) error {
+	row := l.conn.QueryRowContext(ctx, `SELECT RELEASE_LOCK(?)`, l.lockName)
+	var released sql.NullInt64
+	if err := row.Scan(&released); err != nil {
+		return fmt.Errorf("migrator: release migration lock: %w", err)
+	}
+	if !released.Valid || released.Int64 != 1 {
+		return fmt.Errorf("migrator: migration lock was lost before release")
+	}
+	return nil
 }
 
 type execContext interface {

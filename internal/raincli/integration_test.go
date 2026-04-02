@@ -140,8 +140,11 @@ dsn: `+dsn+`
 	}
 
 	stdout.Reset()
-	if err := Run(ctx, cwd, []string{"migrate", "--config", configPath}, &stdout, &stdout); err == nil || !strings.Contains(err.Error(), "mysql migrate is not supported yet") {
-		t.Fatalf("expected mysql migrate policy error, got %v", err)
+	if err := Run(ctx, cwd, []string{"migrate", "--config", configPath}, &stdout, &stdout); err != nil {
+		t.Fatalf("migrate returned error: %v", err)
+	}
+	if !strings.Contains(stdout.String(), "Applied migrations:") {
+		t.Fatalf("expected applied migration output, got %q", stdout.String())
 	}
 }
 

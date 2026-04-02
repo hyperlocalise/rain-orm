@@ -497,7 +497,7 @@ func TestApplySQLMigrationsRejectsChecksumMismatch(t *testing.T) {
 	}
 }
 
-func TestApplySQLMigrationsRejectsMySQLMigratePolicy(t *testing.T) {
+func TestApplySQLMigrationsRejectsUnknownDialect(t *testing.T) {
 	t.Parallel()
 
 	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "migrator-policy.sqlite"))
@@ -506,8 +506,8 @@ func TestApplySQLMigrationsRejectsMySQLMigratePolicy(t *testing.T) {
 	}
 	defer func() { _ = db.Close() }()
 
-	if _, err := ApplySQLMigrations(context.Background(), db, "mysql", "rain_schema_migrations", nil); err == nil || !strings.Contains(err.Error(), "mysql migrate is not supported yet") {
-		t.Fatalf("expected mysql policy error, got %v", err)
+	if _, err := ApplySQLMigrations(context.Background(), db, "oracle", "rain_schema_migrations", nil); err == nil || !strings.Contains(err.Error(), `not supported for dialect "oracle"`) {
+		t.Fatalf("expected unsupported-dialect error, got %v", err)
 	}
 }
 

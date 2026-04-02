@@ -57,6 +57,7 @@ type Runner struct {
 type appliedMigration struct {
 	ID       string
 	Checksum string
+	State    string
 }
 
 // ApplyResult summarizes one ApplyPending run.
@@ -109,7 +110,16 @@ func (r *Runner) ApplyPending(ctx context.Context, db *sql.DB, migrations []Migr
 					migration.Checksum,
 				)
 			}
-			continue
+			switch applied.State {
+			case "applied":
+				continue
+			case "failed":
+				return result, fmt.Errorf("migrate: migration %q is marked failed and must be recovered before retry", migration.ID)
+			case "in_progress":
+				return result, fmt.Errorf("migrate: migration %q is already in_progress and requires operator recovery", migration.ID)
+			default:
+				return result, fmt.Errorf("migrate: migration %q is in unsupported state %q", migration.ID, applied.State)
+			}
 		}
 
 		if err := r.applyOne(ctx, db, migration); err != nil {
@@ -157,8 +167,12 @@ func (r *Runner) ensureTable(ctx context.Context, db *sql.DB) error {
 CREATE TABLE IF NOT EXISTS %s (
   id TEXT PRIMARY KEY,
   checksum TEXT NOT NULL DEFAULT '',
-  applied_at TIMESTAMP NOT NULL,
+  state TEXT NOT NULL DEFAULT 'applied',
+  started_at TIMESTAMP NULL,
+  applied_at TIMESTAMP NULL,
+  failed_at TIMESTAMP NULL,
   runtime_ms INTEGER NOT NULL,
+  error_message TEXT NOT NULL DEFAULT '',
   tool_version TEXT NOT NULL DEFAULT '',
   notes TEXT NOT NULL DEFAULT ''
 );`, quoteIdentifierForDialect(r.dialectName, r.tableName))
@@ -176,17 +190,42 @@ CREATE TABLE IF NOT EXISTS %s (
 			`ALTER TABLE %s ADD COLUMN tool_version TEXT NOT NULL DEFAULT ''`,
 			quoteIdentifierForDialect(r.dialectName, r.tableName),
 		),
+		fmt.Sprintf(
+			`ALTER TABLE %s ADD COLUMN state TEXT NOT NULL DEFAULT 'applied'`,
+			quoteIdentifierForDialect(r.dialectName, r.tableName),
+		),
+		fmt.Sprintf(
+			`ALTER TABLE %s ADD COLUMN started_at TIMESTAMP NULL`,
+			quoteIdentifierForDialect(r.dialectName, r.tableName),
+		),
+		fmt.Sprintf(
+			`ALTER TABLE %s ADD COLUMN failed_at TIMESTAMP NULL`,
+			quoteIdentifierForDialect(r.dialectName, r.tableName),
+		),
+		fmt.Sprintf(
+			`ALTER TABLE %s ADD COLUMN error_message TEXT NOT NULL DEFAULT ''`,
+			quoteIdentifierForDialect(r.dialectName, r.tableName),
+		),
 	} {
 		if _, err := db.ExecContext(ctx, statement); err != nil && !isDuplicateColumnError(err) {
 			return fmt.Errorf("migrate: evolve migration table %q: %w", r.tableName, err)
 		}
+	}
+	if _, err := db.ExecContext(
+		ctx,
+		fmt.Sprintf(
+			`UPDATE %s SET state = 'applied' WHERE state = '' AND applied_at IS NOT NULL`,
+			quoteIdentifierForDialect(r.dialectName, r.tableName),
+		),
+	); err != nil {
+		return fmt.Errorf("migrate: backfill migration state for %q: %w", r.tableName, err)
 	}
 
 	return nil
 }
 
 func (r *Runner) loadApplied(ctx context.Context, db *sql.DB) (map[string]appliedMigration, error) {
-	query := fmt.Sprintf("SELECT id, checksum FROM %s", quoteIdentifierForDialect(r.dialectName, r.tableName))
+	query := fmt.Sprintf("SELECT id, checksum, state FROM %s", quoteIdentifierForDialect(r.dialectName, r.tableName))
 
 	rows, err := db.QueryContext(ctx, query)
 	if err != nil {
@@ -197,7 +236,7 @@ func (r *Runner) loadApplied(ctx context.Context, db *sql.DB) (map[string]applie
 	applied := make(map[string]appliedMigration)
 	for rows.Next() {
 		var migration appliedMigration
-		if scanErr := rows.Scan(&migration.ID, &migration.Checksum); scanErr != nil {
+		if scanErr := rows.Scan(&migration.ID, &migration.Checksum, &migration.State); scanErr != nil {
 			return nil, fmt.Errorf("migrate: scan applied migration id: %w", scanErr)
 		}
 		applied[migration.ID] = migration
@@ -211,6 +250,9 @@ func (r *Runner) loadApplied(ctx context.Context, db *sql.DB) (map[string]applie
 
 func (r *Runner) applyOne(ctx context.Context, db *sql.DB, migration Migration) error {
 	started := time.Now().UTC()
+	if normalizeDialectName(r.dialectName) == "mysql" {
+		return r.applyOneMySQLSafe(ctx, db, migration, started)
+	}
 
 	execute := func(exec Executor) error {
 		if err := migration.Up(ctx, exec); err != nil {
@@ -218,7 +260,7 @@ func (r *Runner) applyOne(ctx context.Context, db *sql.DB, migration Migration) 
 		}
 		runtimeMS := time.Since(started).Milliseconds()
 		insertQuery := fmt.Sprintf(
-			"INSERT INTO %s (id, checksum, applied_at, runtime_ms, tool_version, notes) VALUES (?, ?, ?, ?, ?, ?)",
+			"INSERT INTO %s (id, checksum, state, started_at, applied_at, runtime_ms, error_message, tool_version, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
 			quoteIdentifierForDialect(r.dialectName, r.tableName),
 		)
 		if _, err := execWithPlaceholdersResult(
@@ -228,8 +270,11 @@ func (r *Runner) applyOne(ctx context.Context, db *sql.DB, migration Migration) 
 			insertQuery,
 			migration.ID,
 			migration.Checksum,
+			"applied",
+			started,
 			started,
 			runtimeMS,
+			"",
 			"",
 			"",
 		); err != nil {
@@ -261,6 +306,72 @@ func (r *Runner) applyOne(ctx context.Context, db *sql.DB, migration Migration) 
 		return fmt.Errorf("migrate: commit transaction for %q: %w", migration.ID, err)
 	}
 
+	return nil
+}
+
+func (r *Runner) applyOneMySQLSafe(ctx context.Context, db *sql.DB, migration Migration, started time.Time) error {
+	insertQuery := fmt.Sprintf(
+		"INSERT INTO %s (id, checksum, state, started_at, runtime_ms, error_message, tool_version, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+		quoteIdentifierForDialect(r.dialectName, r.tableName),
+	)
+	if _, err := execWithPlaceholdersResult(
+		ctx,
+		db,
+		r.dialectName,
+		insertQuery,
+		migration.ID,
+		migration.Checksum,
+		"in_progress",
+		started,
+		int64(0),
+		"",
+		"",
+		"",
+	); err != nil {
+		return fmt.Errorf("migrate: mark migration %q in_progress: %w", migration.ID, err)
+	}
+
+	if err := migration.Up(ctx, db); err != nil {
+		runtimeMS := time.Since(started).Milliseconds()
+		updateFailure := fmt.Sprintf(
+			"UPDATE %s SET state = ?, failed_at = ?, runtime_ms = ?, error_message = ? WHERE id = ? AND state = ?",
+			quoteIdentifierForDialect(r.dialectName, r.tableName),
+		)
+		if _, markErr := execWithPlaceholdersResult(
+			ctx,
+			db,
+			r.dialectName,
+			updateFailure,
+			"failed",
+			time.Now().UTC(),
+			runtimeMS,
+			truncateMigrationError(err.Error()),
+			migration.ID,
+			"in_progress",
+		); markErr != nil {
+			return errors.Join(fmt.Errorf("migrate: run migration %q: %w", migration.ID, err), fmt.Errorf("migrate: mark migration %q failed: %w", migration.ID, markErr))
+		}
+		return fmt.Errorf("migrate: run migration %q: %w", migration.ID, err)
+	}
+
+	runtimeMS := time.Since(started).Milliseconds()
+	updateSuccess := fmt.Sprintf(
+		"UPDATE %s SET state = ?, applied_at = ?, runtime_ms = ?, failed_at = NULL, error_message = '' WHERE id = ? AND state = ?",
+		quoteIdentifierForDialect(r.dialectName, r.tableName),
+	)
+	if _, err := execWithPlaceholdersResult(
+		ctx,
+		db,
+		r.dialectName,
+		updateSuccess,
+		"applied",
+		time.Now().UTC(),
+		runtimeMS,
+		migration.ID,
+		"in_progress",
+	); err != nil {
+		return fmt.Errorf("migrate: mark migration %q applied: %w", migration.ID, err)
+	}
 	return nil
 }
 
@@ -344,6 +455,14 @@ func isDuplicateColumnError(err error) bool {
 		(strings.Contains(lowerErr, "column") && strings.Contains(lowerErr, "already exists")) ||
 		strings.Contains(lowerErr, "duplicate column name") ||
 		strings.Contains(lowerErr, "sqlstate 42701")
+}
+
+func truncateMigrationError(message string) string {
+	const maxLen = 1024
+	if len(message) <= maxLen {
+		return message
+	}
+	return message[:maxLen]
 }
 
 func replaceWithDollarPlaceholders(query string) string {
