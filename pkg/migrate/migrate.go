@@ -50,7 +50,8 @@ type Migration struct {
 
 // Runner applies migrations and tracks their state in a schema table.
 type Runner struct {
-	tableName string
+	tableName   string
+	dialectName string
 }
 
 type appliedMigration struct {
@@ -65,11 +66,16 @@ type ApplyResult struct {
 
 // NewRunner creates a migration runner.
 func NewRunner(tableName string) *Runner {
+	return NewRunnerForDialect(tableName, "")
+}
+
+// NewRunnerForDialect creates a migration runner configured for one SQL dialect.
+func NewRunnerForDialect(tableName, dialectName string) *Runner {
 	if strings.TrimSpace(tableName) == "" {
 		tableName = DefaultTableName
 	}
 
-	return &Runner{tableName: tableName}
+	return &Runner{tableName: tableName, dialectName: normalizeDialectName(dialectName)}
 }
 
 // ApplyPending applies migrations that are not yet recorded in the migration table.
@@ -155,7 +161,7 @@ CREATE TABLE IF NOT EXISTS %s (
   runtime_ms INTEGER NOT NULL,
   tool_version TEXT NOT NULL DEFAULT '',
   notes TEXT NOT NULL DEFAULT ''
-);`, quoteIdentifier(r.tableName))
+);`, quoteIdentifierForDialect(r.dialectName, r.tableName))
 
 	if _, err := db.ExecContext(ctx, query); err != nil {
 		return fmt.Errorf("migrate: create migration table %q: %w", r.tableName, err)
@@ -164,11 +170,11 @@ CREATE TABLE IF NOT EXISTS %s (
 	for _, statement := range []string{
 		fmt.Sprintf(
 			`ALTER TABLE %s ADD COLUMN checksum TEXT NOT NULL DEFAULT ''`,
-			quoteIdentifier(r.tableName),
+			quoteIdentifierForDialect(r.dialectName, r.tableName),
 		),
 		fmt.Sprintf(
 			`ALTER TABLE %s ADD COLUMN tool_version TEXT NOT NULL DEFAULT ''`,
-			quoteIdentifier(r.tableName),
+			quoteIdentifierForDialect(r.dialectName, r.tableName),
 		),
 	} {
 		if _, err := db.ExecContext(ctx, statement); err != nil && !isDuplicateColumnError(err) {
@@ -180,7 +186,7 @@ CREATE TABLE IF NOT EXISTS %s (
 }
 
 func (r *Runner) loadApplied(ctx context.Context, db *sql.DB) (map[string]appliedMigration, error) {
-	query := fmt.Sprintf("SELECT id, checksum FROM %s", quoteIdentifier(r.tableName))
+	query := fmt.Sprintf("SELECT id, checksum FROM %s", quoteIdentifierForDialect(r.dialectName, r.tableName))
 
 	rows, err := db.QueryContext(ctx, query)
 	if err != nil {
@@ -213,11 +219,12 @@ func (r *Runner) applyOne(ctx context.Context, db *sql.DB, migration Migration) 
 		runtimeMS := time.Since(started).Milliseconds()
 		insertQuery := fmt.Sprintf(
 			"INSERT INTO %s (id, checksum, applied_at, runtime_ms, tool_version, notes) VALUES (?, ?, ?, ?, ?, ?)",
-			quoteIdentifier(r.tableName),
+			quoteIdentifierForDialect(r.dialectName, r.tableName),
 		)
-		if _, err := execWithPlaceholderFallbackResult(
+		if _, err := execWithPlaceholdersResult(
 			ctx,
 			exec,
+			r.dialectName,
 			insertQuery,
 			migration.ID,
 			migration.Checksum,
@@ -257,30 +264,55 @@ func (r *Runner) applyOne(ctx context.Context, db *sql.DB, migration Migration) 
 	return nil
 }
 
-func quoteIdentifier(name string) string {
+func quoteIdentifierForDialect(dialectName, name string) string {
+	if normalizeDialectName(dialectName) == "mysql" {
+		return "`" + strings.ReplaceAll(name, "`", "``") + "`"
+	}
 	escaped := strings.ReplaceAll(name, `"`, `""`)
 	return `"` + escaped + `"`
 }
 
 var placeholderPattern = regexp.MustCompile(`\?`)
 
-func execWithPlaceholderFallbackResult(
+func execWithPlaceholdersResult(
 	ctx context.Context,
 	exec Executor,
+	dialectName string,
 	query string,
 	args ...any,
 ) (sql.Result, error) {
-	result, err := exec.ExecContext(ctx, query, args...)
+	preparedQuery := replacePlaceholdersForDialect(normalizeDialectName(dialectName), query)
+	result, err := exec.ExecContext(ctx, preparedQuery, args...)
 	if err == nil {
 		return result, nil
 	}
 
-	if !shouldRetryWithDollarPlaceholders(query, err) {
+	if preparedQuery != query || !shouldRetryWithDollarPlaceholders(query, err) {
 		return nil, err
 	}
 
 	fallbackQuery := replaceWithDollarPlaceholders(query)
 	return exec.ExecContext(ctx, fallbackQuery, args...)
+}
+
+func replacePlaceholdersForDialect(dialectName, query string) string {
+	if dialectName == "postgres" || dialectName == "postgresql" {
+		return replaceWithDollarPlaceholders(query)
+	}
+	return query
+}
+
+func normalizeDialectName(name string) string {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "postgres", "postgresql":
+		return "postgres"
+	case "sqlite", "sqlite3":
+		return "sqlite"
+	case "mysql":
+		return "mysql"
+	default:
+		return strings.ToLower(strings.TrimSpace(name))
+	}
 }
 
 func shouldRetryWithDollarPlaceholders(query string, err error) bool {

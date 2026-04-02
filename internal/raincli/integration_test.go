@@ -123,12 +123,26 @@ dsn: `+dsn+`
 		resetMySQLCLIIntegrationState(t, context.Background(), db, migrationTable)
 	})
 
-	runHappyPathCLIIntegration(t, ctx, cwd, configPath, outputDir)
+	var stdout strings.Builder
+	if err := Run(ctx, cwd, []string{"generate", "--config", configPath, "--name", "init"}, &stdout, &stdout); err != nil {
+		t.Fatalf("generate returned error: %v", err)
+	}
+	if !strings.Contains(stdout.String(), "migration.sql") {
+		t.Fatalf("expected generate output to mention migration.sql, got %q", stdout.String())
+	}
 
-	assertMySQLTableExists(t, ctx, db, "users")
-	assertMySQLTableExists(t, ctx, db, "posts")
-	assertMySQLTableExists(t, ctx, db, "memberships")
-	assertMigrationChecksumsRecordedMySQL(t, ctx, db, migrationTable, 1)
+	stdout.Reset()
+	if err := Run(ctx, cwd, []string{"check", "--config", configPath}, &stdout, &stdout); err != nil {
+		t.Fatalf("check returned error: %v", err)
+	}
+	if strings.TrimSpace(stdout.String()) != "OK" {
+		t.Fatalf("expected OK from check, got %q", stdout.String())
+	}
+
+	stdout.Reset()
+	if err := Run(ctx, cwd, []string{"migrate", "--config", configPath}, &stdout, &stdout); err == nil || !strings.Contains(err.Error(), "mysql migrate is not supported yet") {
+		t.Fatalf("expected mysql migrate policy error, got %v", err)
+	}
 }
 
 func runHappyPathCLIIntegration(t *testing.T, ctx context.Context, cwd, configPath, outputDir string) {
@@ -224,41 +238,6 @@ func assertMigrationChecksumsRecordedPostgres(t *testing.T, ctx context.Context,
 	t.Helper()
 
 	query := fmt.Sprintf(`SELECT COUNT(*), COUNT(*) FILTER (WHERE checksum <> '') FROM %s`, quoteSQLIdentifier(table))
-	row := db.QueryRowContext(ctx, query)
-	var count int
-	var withChecksum int
-	if err := row.Scan(&count, &withChecksum); err != nil {
-		t.Fatalf("scan migration checksums for %s: %v", table, err)
-	}
-	if count != expectedCount {
-		t.Fatalf("expected %d migration rows in %s, got %d", expectedCount, table, count)
-	}
-	if withChecksum != expectedCount {
-		t.Fatalf("expected %d migration checksums in %s, got %d", expectedCount, table, withChecksum)
-	}
-}
-
-func assertMySQLTableExists(t *testing.T, ctx context.Context, db *sql.DB, table string) {
-	t.Helper()
-
-	row := db.QueryRowContext(ctx, `
-SELECT COUNT(*)
-FROM information_schema.tables
-WHERE table_schema = DATABASE() AND table_name = ?
-`, table)
-	var count int
-	if err := row.Scan(&count); err != nil {
-		t.Fatalf("scan mysql table existence for %s: %v", table, err)
-	}
-	if count != 1 {
-		t.Fatalf("expected mysql table %q to exist, count=%d", table, count)
-	}
-}
-
-func assertMigrationChecksumsRecordedMySQL(t *testing.T, ctx context.Context, db *sql.DB, table string, expectedCount int) {
-	t.Helper()
-
-	query := fmt.Sprintf(`SELECT COUNT(*), SUM(CASE WHEN checksum <> '' THEN 1 ELSE 0 END) FROM %s`, quoteMySQLIdentifier(table))
 	row := db.QueryRowContext(ctx, query)
 	var count int
 	var withChecksum int

@@ -497,6 +497,20 @@ func TestApplySQLMigrationsRejectsChecksumMismatch(t *testing.T) {
 	}
 }
 
+func TestApplySQLMigrationsRejectsMySQLMigratePolicy(t *testing.T) {
+	t.Parallel()
+
+	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "migrator-policy.sqlite"))
+	if err != nil {
+		t.Fatalf("sql.Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	if _, err := ApplySQLMigrations(context.Background(), db, "mysql", "rain_schema_migrations", nil); err == nil || !strings.Contains(err.Error(), "mysql migrate is not supported yet") {
+		t.Fatalf("expected mysql policy error, got %v", err)
+	}
+}
+
 func TestAcquireMigrationLockRejectsConcurrentOwner(t *testing.T) {
 	t.Parallel()
 

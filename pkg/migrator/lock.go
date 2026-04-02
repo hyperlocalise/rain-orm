@@ -17,7 +17,7 @@ var defaultLockLease = 30 * time.Second
 type migrationLock struct {
 	cancel      context.CancelFunc
 	done        chan struct{}
-	db          *sql.DB
+	conn        *sql.Conn
 	dialectName string
 	tableName   string
 	lockName    string
@@ -29,8 +29,13 @@ type migrationLock struct {
 var placeholderPattern = regexp.MustCompile(`\?`)
 
 func acquireMigrationLock(ctx context.Context, db *sql.DB, dialectName, migrationTableName string) (context.Context, *migrationLock, error) {
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return nil, nil, fmt.Errorf("migrator: acquire migration lock connection: %w", err)
+	}
+
 	lock := &migrationLock{
-		db:          db,
+		conn:        conn,
 		dialectName: dialectName,
 		tableName:   defaultLockTable,
 		lockName:    "default",
@@ -40,9 +45,11 @@ func acquireMigrationLock(ctx context.Context, db *sql.DB, dialectName, migratio
 		lock.lockName = migrationTableName
 	}
 	if err := lock.ensureTable(ctx); err != nil {
+		_ = conn.Close()
 		return nil, nil, err
 	}
 	if err := lock.tryAcquire(ctx, time.Now().UTC()); err != nil {
+		_ = conn.Close()
 		return nil, nil, err
 	}
 
@@ -55,6 +62,12 @@ func acquireMigrationLock(ctx context.Context, db *sql.DB, dialectName, migratio
 }
 
 func (l *migrationLock) Unlock(ctx context.Context) error {
+	defer func() {
+		if l.conn != nil {
+			_ = l.conn.Close()
+		}
+	}()
+
 	if l.cancel != nil {
 		l.cancel()
 		<-l.done
@@ -64,7 +77,7 @@ func (l *migrationLock) Unlock(ctx context.Context) error {
 		`DELETE FROM %s WHERE lock_name = ? AND owner = ?`,
 		quoteMigrationIdentifier(l.dialectName, l.tableName),
 	)
-	result, err := execWithPlaceholders(ctx, l.db, deleteQuery, l.lockName, l.owner)
+	result, err := execWithPlaceholders(ctx, l.conn, l.dialectName, deleteQuery, l.lockName, l.owner)
 	if err != nil {
 		return fmt.Errorf("migrator: release migration lock: %w", err)
 	}
@@ -111,7 +124,7 @@ CREATE TABLE IF NOT EXISTS %s (
   expires_at TIMESTAMP NOT NULL
 );`, quoteMigrationIdentifier(l.dialectName, l.tableName), lockNameColumnDDL(l.dialectName))
 
-	if _, err := l.db.ExecContext(ctx, query); err != nil {
+	if _, err := l.conn.ExecContext(ctx, query); err != nil {
 		return fmt.Errorf("migrator: create migration lock table %q: %w", l.tableName, err)
 	}
 
@@ -132,7 +145,7 @@ func (l *migrationLock) tryAcquire(ctx context.Context, now time.Time) error {
 		`INSERT INTO %s (lock_name, owner, expires_at) VALUES (?, ?, ?)`,
 		quoteMigrationIdentifier(l.dialectName, l.tableName),
 	)
-	_, insertErr := execWithPlaceholders(ctx, l.db, insertQuery, l.lockName, l.owner, expiresAt)
+	_, insertErr := execWithPlaceholders(ctx, l.conn, l.dialectName, insertQuery, l.lockName, l.owner, expiresAt)
 	if insertErr == nil {
 		return nil
 	}
@@ -144,7 +157,7 @@ func (l *migrationLock) tryAcquire(ctx context.Context, now time.Time) error {
 		`UPDATE %s SET owner = ?, expires_at = ? WHERE lock_name = ? AND expires_at <= ?`,
 		quoteMigrationIdentifier(l.dialectName, l.tableName),
 	)
-	result, err := execWithPlaceholders(ctx, l.db, updateQuery, l.owner, expiresAt, l.lockName, now)
+	result, err := execWithPlaceholders(ctx, l.conn, l.dialectName, updateQuery, l.owner, expiresAt, l.lockName, now)
 	if err != nil {
 		return fmt.Errorf("migrator: acquire migration lock %q: another migration run is active", l.lockName)
 	}
@@ -161,7 +174,7 @@ func (l *migrationLock) renew(ctx context.Context, now time.Time) error {
 		`UPDATE %s SET expires_at = ? WHERE lock_name = ? AND owner = ?`,
 		quoteMigrationIdentifier(l.dialectName, l.tableName),
 	)
-	result, err := execWithPlaceholders(ctx, l.db, query, now.Add(defaultLockLease), l.lockName, l.owner)
+	result, err := execWithPlaceholders(ctx, l.conn, l.dialectName, query, now.Add(defaultLockLease), l.lockName, l.owner)
 	if err != nil {
 		return err
 	}
@@ -183,13 +196,18 @@ func (l *migrationLock) fail(err error) {
 	}
 }
 
-func execWithPlaceholders(ctx context.Context, db *sql.DB, query string, args ...any) (sql.Result, error) {
-	result, err := db.ExecContext(ctx, query, args...)
+type execContext interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}
+
+func execWithPlaceholders(ctx context.Context, exec execContext, dialectName, query string, args ...any) (sql.Result, error) {
+	preparedQuery := replacePlaceholdersForDialect(normalizeMigratorDialectName(dialectName), query)
+	result, err := exec.ExecContext(ctx, preparedQuery, args...)
 	if err == nil {
 		return result, nil
 	}
 
-	if !strings.Contains(query, "?") {
+	if preparedQuery != query || !strings.Contains(query, "?") {
 		return nil, err
 	}
 
@@ -206,7 +224,7 @@ func execWithPlaceholders(ctx context.Context, db *sql.DB, query string, args ..
 		counter++
 		return fmt.Sprintf("$%d", counter)
 	})
-	return db.ExecContext(ctx, fallbackQuery, args...)
+	return exec.ExecContext(ctx, fallbackQuery, args...)
 }
 
 func isDuplicateKeyError(err error) bool {

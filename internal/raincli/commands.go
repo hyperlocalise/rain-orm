@@ -120,6 +120,12 @@ func runMigrate(ctx context.Context, cwd string, args []string, stdout, stderr i
 	}
 
 	outputDir := resolveOutputDir(cwd, config.Out)
+	if _, err := os.Stat(outputDir); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("raincli: migration output directory %q does not exist", outputDir)
+		}
+		return err
+	}
 	migrationsOnDisk, err := migrator.LoadDiskMigrations(outputDir)
 	if err != nil {
 		return err

@@ -90,6 +90,8 @@ go run ./cmd/rain migrate
 ```
 
 `migrate` acquires a migration lock for the duration of the run and verifies that already-applied migration checksums still match the local `migration.sql` artifacts before executing pending SQL.
+It also fails fast when the configured migration directory is missing instead of treating that as an empty chain.
+Today `migrate` is supported for `sqlite` and `postgres`. MySQL migration apply is intentionally blocked until locking and DDL-failure semantics are hardened further.
 
 Check that the live schema registry matches the newest migration snapshot:
 

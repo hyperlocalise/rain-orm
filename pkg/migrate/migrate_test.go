@@ -57,7 +57,7 @@ func openTestDB(t *testing.T) *sql.DB {
 func migrationCount(t *testing.T, ctx context.Context, db *sql.DB, table string) int {
 	t.Helper()
 
-	query := `SELECT COUNT(*) FROM ` + quoteIdentifier(table)
+	query := `SELECT COUNT(*) FROM ` + quoteIdentifierForDialect("", table)
 	row := db.QueryRowContext(ctx, query)
 
 	var count int
@@ -319,7 +319,7 @@ func TestApplyPendingFailsFastOnDuplicateIdentifiers(t *testing.T) {
 	}
 }
 
-func TestExecWithPlaceholderFallbackResultReturnsPrimaryErrorWhenNotPlaceholderRelated(t *testing.T) {
+func TestExecWithPlaceholdersResultReturnsPrimaryErrorWhenNotPlaceholderRelated(t *testing.T) {
 	t.Parallel()
 
 	primaryErr := errors.New("UNIQUE constraint failed: users.email")
@@ -329,9 +329,10 @@ func TestExecWithPlaceholderFallbackResultReturnsPrimaryErrorWhenNotPlaceholderR
 		},
 	}
 
-	_, err := execWithPlaceholderFallbackResult(
+	_, err := execWithPlaceholdersResult(
 		context.Background(),
 		exec,
+		"",
 		"INSERT INTO users (email) VALUES (?)",
 		"dupe@example.com",
 	)
@@ -343,7 +344,7 @@ func TestExecWithPlaceholderFallbackResultReturnsPrimaryErrorWhenNotPlaceholderR
 	}
 }
 
-func TestExecWithPlaceholderFallbackResultRetriesOnPlaceholderSyntaxError(t *testing.T) {
+func TestExecWithPlaceholdersResultRetriesOnPlaceholderSyntaxError(t *testing.T) {
 	t.Parallel()
 
 	exec := &scriptedExecutor{
@@ -360,9 +361,10 @@ func TestExecWithPlaceholderFallbackResultRetriesOnPlaceholderSyntaxError(t *tes
 		},
 	}
 
-	_, err := execWithPlaceholderFallbackResult(
+	_, err := execWithPlaceholdersResult(
 		context.Background(),
 		exec,
+		"",
 		"INSERT INTO rain_schema_migrations (id, checksum, applied_at, runtime_ms, tool_version, notes) VALUES (?, ?, ?, ?, ?, ?)",
 		"202603011200_create_users",
 		"abc123",
@@ -376,6 +378,37 @@ func TestExecWithPlaceholderFallbackResultRetriesOnPlaceholderSyntaxError(t *tes
 	}
 	if len(exec.calls) != 0 {
 		t.Fatalf("expected both scripted calls to be consumed, remaining calls: %d", len(exec.calls))
+	}
+}
+
+func TestExecWithPlaceholdersResultUsesPostgresPlaceholdersFirst(t *testing.T) {
+	t.Parallel()
+
+	exec := &scriptedExecutor{
+		calls: []execCall{{
+			query:  "INSERT INTO rain_schema_migrations (id, checksum, applied_at, runtime_ms, tool_version, notes) VALUES ($1, $2, $3, $4, $5, $6)",
+			err:    nil,
+			result: stubResult{},
+		}},
+	}
+
+	_, err := execWithPlaceholdersResult(
+		context.Background(),
+		exec,
+		"postgres",
+		"INSERT INTO rain_schema_migrations (id, checksum, applied_at, runtime_ms, tool_version, notes) VALUES (?, ?, ?, ?, ?, ?)",
+		"202603011200_create_users",
+		"abc123",
+		"2026-03-01T12:00:00Z",
+		int64(42),
+		"",
+		"",
+	)
+	if err != nil {
+		t.Fatalf("expected postgres execution to succeed, got %v", err)
+	}
+	if len(exec.calls) != 0 {
+		t.Fatalf("expected scripted postgres call to be consumed, remaining calls: %d", len(exec.calls))
 	}
 }
 

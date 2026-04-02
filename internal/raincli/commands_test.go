@@ -128,6 +128,28 @@ dsn: `+dbPath+`
 	}
 }
 
+func TestRunMigrateFailsWhenMigrationArtifactsAreMissing(t *testing.T) {
+	t.Parallel()
+
+	cwd := repoRoot(t)
+	tempDir := t.TempDir()
+	configPath := filepath.Join(tempDir, "rain.yml")
+	dbPath := filepath.Join(tempDir, "app.sqlite")
+	outputDir := filepath.Join(tempDir, "missing-migrations")
+
+	writeConfig(t, configPath, `
+dialect: sqlite
+out: `+outputDir+`
+migration_table: rain_schema_migrations
+dsn: `+dbPath+`
+`)
+
+	var stdout strings.Builder
+	if err := Run(context.Background(), cwd, []string{"migrate", "--config", configPath}, &stdout, &stdout); err == nil || !strings.Contains(err.Error(), "migration output directory") {
+		t.Fatalf("expected missing migration directory error, got %v", err)
+	}
+}
+
 func writeConfig(t *testing.T, path, body string) {
 	t.Helper()
 	writeFile(t, path, strings.TrimSpace(body)+"\n")

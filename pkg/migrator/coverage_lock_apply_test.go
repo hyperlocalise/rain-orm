@@ -103,7 +103,7 @@ func TestApplySQLMigrationsBranchCoverage(t *testing.T) {
 		acquireMigrationLockFunc = func(ctx context.Context, db *sql.DB, dialectName, tableName string) (context.Context, migrationLockHandle, error) {
 			return ctx, lock, nil
 		}
-		newMigrationRunner = func(tableName string) migrationApplier {
+		newMigrationRunner = func(tableName, dialectName string) migrationApplier {
 			return testMigrationApplier{
 				apply: func(ctx context.Context, db *sql.DB, migrations []migrate.Migration) (migrate.ApplyResult, error) {
 					if migrations != nil {
@@ -127,7 +127,7 @@ func TestApplySQLMigrationsBranchCoverage(t *testing.T) {
 		acquireMigrationLockFunc = func(ctx context.Context, db *sql.DB, dialectName, tableName string) (context.Context, migrationLockHandle, error) {
 			return ctx, lock, nil
 		}
-		newMigrationRunner = func(tableName string) migrationApplier {
+		newMigrationRunner = func(tableName, dialectName string) migrationApplier {
 			return testMigrationApplier{
 				apply: func(ctx context.Context, db *sql.DB, migrations []migrate.Migration) (migrate.ApplyResult, error) {
 					if migrations != nil {
@@ -154,7 +154,7 @@ func TestApplySQLMigrationsBranchCoverage(t *testing.T) {
 
 		var gotStatements []string
 		call := 0
-		newMigrationRunner = func(tableName string) migrationApplier {
+		newMigrationRunner = func(tableName, dialectName string) migrationApplier {
 			return testMigrationApplier{
 				apply: func(ctx context.Context, db *sql.DB, migrations []migrate.Migration) (migrate.ApplyResult, error) {
 					call++
@@ -205,7 +205,7 @@ func TestApplySQLMigrationsBranchCoverage(t *testing.T) {
 		acquireMigrationLockFunc = func(ctx context.Context, db *sql.DB, dialectName, tableName string) (context.Context, migrationLockHandle, error) {
 			return ctx, lock, nil
 		}
-		newMigrationRunner = func(tableName string) migrationApplier {
+		newMigrationRunner = func(tableName, dialectName string) migrationApplier {
 			return testMigrationApplier{
 				apply: func(ctx context.Context, db *sql.DB, migrations []migrate.Migration) (migrate.ApplyResult, error) {
 					if migrations == nil {
@@ -236,7 +236,7 @@ func TestApplySQLMigrationsBranchCoverage(t *testing.T) {
 		acquireMigrationLockFunc = func(ctx context.Context, db *sql.DB, dialectName, tableName string) (context.Context, migrationLockHandle, error) {
 			return ctx, lock, nil
 		}
-		newMigrationRunner = func(tableName string) migrationApplier {
+		newMigrationRunner = func(tableName, dialectName string) migrationApplier {
 			return testMigrationApplier{
 				apply: func(ctx context.Context, db *sql.DB, migrations []migrate.Migration) (migrate.ApplyResult, error) {
 					return migrate.ApplyResult{AppliedIDs: []string{"ok"}}, nil
@@ -261,7 +261,7 @@ func TestApplySQLMigrationsBranchCoverage(t *testing.T) {
 		acquireMigrationLockFunc = func(ctx context.Context, db *sql.DB, dialectName, tableName string) (context.Context, migrationLockHandle, error) {
 			return ctx, lock, nil
 		}
-		newMigrationRunner = func(tableName string) migrationApplier {
+		newMigrationRunner = func(tableName, dialectName string) migrationApplier {
 			return testMigrationApplier{
 				apply: func(ctx context.Context, db *sql.DB, migrations []migrate.Migration) (migrate.ApplyResult, error) {
 					if migrations == nil {
@@ -414,7 +414,11 @@ func TestMigrationLockHelpers(t *testing.T) {
 		})
 		defer func() { _ = db.Close() }()
 
-		lock := &migrationLock{db: db, dialectName: "sqlite", tableName: defaultLockTable, lockName: "locks", owner: "owner-1"}
+		lock := testMigrationLockWithConn(t, db)
+		lock.dialectName = "sqlite"
+		lock.tableName = defaultLockTable
+		lock.lockName = "locks"
+		lock.owner = "owner-1"
 		if err := lock.tryAcquire(context.Background(), time.Now().UTC()); err != nil {
 			t.Fatalf("tryAcquire returned error: %v", err)
 		}
@@ -428,7 +432,11 @@ func TestMigrationLockHelpers(t *testing.T) {
 		})
 		defer func() { _ = db.Close() }()
 
-		lock := &migrationLock{db: db, dialectName: "sqlite", tableName: defaultLockTable, lockName: "locks", owner: "owner-1"}
+		lock := testMigrationLockWithConn(t, db)
+		lock.dialectName = "sqlite"
+		lock.tableName = defaultLockTable
+		lock.lockName = "locks"
+		lock.owner = "owner-1"
 		if err := lock.tryAcquire(context.Background(), time.Now().UTC()); err != nil {
 			t.Fatalf("tryAcquire returned error: %v", err)
 		}
@@ -447,7 +455,11 @@ func TestMigrationLockHelpers(t *testing.T) {
 		})
 		defer func() { _ = db.Close() }()
 
-		lock := &migrationLock{db: db, dialectName: "sqlite", tableName: defaultLockTable, lockName: "locks", owner: "owner-1"}
+		lock := testMigrationLockWithConn(t, db)
+		lock.dialectName = "sqlite"
+		lock.tableName = defaultLockTable
+		lock.lockName = "locks"
+		lock.owner = "owner-1"
 		if err := lock.tryAcquire(context.Background(), time.Now().UTC()); err == nil || !strings.Contains(err.Error(), "another migration run is active") {
 			t.Fatalf("expected active-lock error, got %v", err)
 		}
@@ -461,7 +473,11 @@ func TestMigrationLockHelpers(t *testing.T) {
 		})
 		defer func() { _ = db.Close() }()
 
-		lock := &migrationLock{db: db, dialectName: "sqlite", tableName: defaultLockTable, lockName: "locks", owner: "owner-1"}
+		lock := testMigrationLockWithConn(t, db)
+		lock.dialectName = "sqlite"
+		lock.tableName = defaultLockTable
+		lock.lockName = "locks"
+		lock.owner = "owner-1"
 		if err := lock.renew(context.Background(), time.Now().UTC()); err == nil || !strings.Contains(err.Error(), "missing") {
 			t.Fatalf("expected missing-row renew error, got %v", err)
 		}
@@ -475,7 +491,11 @@ func TestMigrationLockHelpers(t *testing.T) {
 		})
 		defer func() { _ = db.Close() }()
 
-		lock := &migrationLock{db: db, dialectName: "sqlite", tableName: defaultLockTable, lockName: "locks", owner: "owner-1"}
+		lock := testMigrationLockWithConn(t, db)
+		lock.dialectName = "sqlite"
+		lock.tableName = defaultLockTable
+		lock.lockName = "locks"
+		lock.owner = "owner-1"
 		if err := lock.renew(context.Background(), time.Now().UTC()); err == nil || !strings.Contains(err.Error(), "renew failed") {
 			t.Fatalf("expected renew exec error, got %v", err)
 		}
@@ -489,7 +509,11 @@ func TestMigrationLockHelpers(t *testing.T) {
 		})
 		defer func() { _ = db.Close() }()
 
-		lock := &migrationLock{db: db, dialectName: "sqlite", tableName: defaultLockTable, lockName: "locks", owner: "owner-1"}
+		lock := testMigrationLockWithConn(t, db)
+		lock.dialectName = "sqlite"
+		lock.tableName = defaultLockTable
+		lock.lockName = "locks"
+		lock.owner = "owner-1"
 		if err := lock.Unlock(context.Background()); err == nil || !strings.Contains(err.Error(), "was lost before release") {
 			t.Fatalf("expected lost-lock error, got %v", err)
 		}
@@ -503,7 +527,11 @@ func TestMigrationLockHelpers(t *testing.T) {
 		})
 		defer func() { _ = db.Close() }()
 
-		lock := &migrationLock{db: db, dialectName: "sqlite", tableName: defaultLockTable, lockName: "locks", owner: "owner-1"}
+		lock := testMigrationLockWithConn(t, db)
+		lock.dialectName = "sqlite"
+		lock.tableName = defaultLockTable
+		lock.lockName = "locks"
+		lock.owner = "owner-1"
 		if err := lock.Unlock(context.Background()); err == nil || !strings.Contains(err.Error(), "release migration lock") {
 			t.Fatalf("expected release error, got %v", err)
 		}
@@ -550,7 +578,7 @@ func TestExecWithPlaceholdersFallback(t *testing.T) {
 		})
 		defer func() { _ = db.Close() }()
 
-		if _, err := execWithPlaceholders(context.Background(), db, `DELETE FROM "locks" WHERE lock_name = ? AND owner = ?`, "name", "owner"); err != nil {
+		if _, err := execWithPlaceholders(context.Background(), db, "", `DELETE FROM "locks" WHERE lock_name = ? AND owner = ?`, "name", "owner"); err != nil {
 			t.Fatalf("execWithPlaceholders returned error: %v", err)
 		}
 	})
@@ -564,7 +592,7 @@ func TestExecWithPlaceholdersFallback(t *testing.T) {
 		})
 		defer func() { _ = db.Close() }()
 
-		_, err := execWithPlaceholders(context.Background(), db, `DELETE FROM "locks"`, "ignored")
+		_, err := execWithPlaceholders(context.Background(), db, "", `DELETE FROM "locks"`, "ignored")
 		if !errors.Is(err, wantErr) {
 			t.Fatalf("expected original error, got %v", err)
 		}
@@ -579,9 +607,25 @@ func TestExecWithPlaceholdersFallback(t *testing.T) {
 		})
 		defer func() { _ = db.Close() }()
 
-		_, err := execWithPlaceholders(context.Background(), db, `DELETE FROM "locks" WHERE lock_name = ?`, "name")
+		_, err := execWithPlaceholders(context.Background(), db, "", `DELETE FROM "locks" WHERE lock_name = ?`, "name")
 		if !errors.Is(err, wantErr) {
 			t.Fatalf("expected original error, got %v", err)
+		}
+	})
+
+	t.Run("uses postgres placeholders without retrying", func(t *testing.T) {
+		t.Parallel()
+
+		db := openExecScriptDB(t, func(query string, args []driver.NamedValue) (driver.Result, error) {
+			if !strings.Contains(query, "$1") || !strings.Contains(query, "$2") {
+				t.Fatalf("expected postgres query to use numbered placeholders, got %q", query)
+			}
+			return driver.RowsAffected(1), nil
+		})
+		defer func() { _ = db.Close() }()
+
+		if _, err := execWithPlaceholders(context.Background(), db, "postgres", `DELETE FROM "locks" WHERE lock_name = ? AND owner = ?`, "name", "owner"); err != nil {
+			t.Fatalf("execWithPlaceholders returned error: %v", err)
 		}
 	})
 }
@@ -602,7 +646,7 @@ func TestMigrationLockHeartbeatFailure(t *testing.T) {
 	lock := &migrationLock{
 		cancel:      cancel,
 		done:        make(chan struct{}),
-		db:          db,
+		conn:        testConn(t, db),
 		dialectName: "sqlite",
 		tableName:   defaultLockTable,
 		lockName:    "locks",
@@ -643,7 +687,7 @@ func TestMigrationLockHeartbeatSuccessThenCancel(t *testing.T) {
 	lock := &migrationLock{
 		cancel:      cancel,
 		done:        make(chan struct{}),
-		db:          db,
+		conn:        testConn(t, db),
 		dialectName: "sqlite",
 		tableName:   defaultLockTable,
 		lockName:    "locks",
@@ -725,6 +769,23 @@ func openSQLiteTestDB(t *testing.T, name string) *sql.DB {
 		t.Fatalf("sql.Open sqlite: %v", err)
 	}
 	return db
+}
+
+func testConn(t *testing.T, db *sql.DB) *sql.Conn {
+	t.Helper()
+
+	conn, err := db.Conn(context.Background())
+	if err != nil {
+		t.Fatalf("db.Conn: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	return conn
+}
+
+func testMigrationLockWithConn(t *testing.T, db *sql.DB) *migrationLock {
+	t.Helper()
+
+	return &migrationLock{conn: testConn(t, db)}
 }
 
 func (d execScriptDriver) Open(name string) (driver.Conn, error) {

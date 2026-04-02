@@ -23,19 +23,23 @@ var acquireMigrationLockFunc = func(ctx context.Context, db *sql.DB, dialectName
 	return acquireMigrationLock(ctx, db, dialectName, tableName)
 }
 
-var newMigrationRunner = func(tableName string) migrationApplier {
-	return migrate.NewRunner(tableName)
+var newMigrationRunner = func(tableName, dialectName string) migrationApplier {
+	return migrate.NewRunnerForDialect(tableName, dialectName)
 }
 
 // ApplySQLMigrations applies ordered SQL migrations using the existing migration table tracking.
 func ApplySQLMigrations(ctx context.Context, db *sql.DB, dialectName, tableName string, migrationsOnDisk []DiskMigration) (migrate.ApplyResult, error) {
+	if err := validateMigrateDialect(dialectName); err != nil {
+		return migrate.ApplyResult{}, err
+	}
+
 	lockCtx, lock, err := acquireMigrationLockFunc(ctx, db, dialectName, tableName)
 	if err != nil {
 		return migrate.ApplyResult{}, err
 	}
 	defer func() { _ = lock.Unlock(context.Background()) }()
 
-	if _, err := newMigrationRunner(tableName).ApplyPending(lockCtx, db, nil); err != nil {
+	if _, err := newMigrationRunner(tableName, dialectName).ApplyPending(lockCtx, db, nil); err != nil {
 		if lockErr := lock.Err(); lockErr != nil {
 			return migrate.ApplyResult{}, errors.Join(err, lockErr)
 		}
@@ -67,7 +71,7 @@ func ApplySQLMigrations(ctx context.Context, db *sql.DB, dialectName, tableName 
 		})
 	}
 
-	result, err := newMigrationRunner(tableName).ApplyPending(lockCtx, db, migrations)
+	result, err := newMigrationRunner(tableName, dialectName).ApplyPending(lockCtx, db, migrations)
 	if lockErr := lock.Err(); lockErr != nil {
 		if err != nil {
 			return result, errors.Join(err, lockErr)
@@ -75,6 +79,42 @@ func ApplySQLMigrations(ctx context.Context, db *sql.DB, dialectName, tableName 
 		return result, lockErr
 	}
 	return result, err
+}
+
+func validateMigrateDialect(dialectName string) error {
+	switch normalizeMigratorDialectName(dialectName) {
+	case "sqlite", "postgres":
+		return nil
+	case "mysql":
+		return errors.New("migrator: mysql migrate is not supported yet because whole-run locking and DDL failure semantics are not safe enough")
+	default:
+		return fmt.Errorf("migrator: migrate is not supported for dialect %q", dialectName)
+	}
+}
+
+func normalizeMigratorDialectName(name string) string {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "postgres", "postgresql":
+		return "postgres"
+	case "sqlite", "sqlite3":
+		return "sqlite"
+	case "mysql":
+		return "mysql"
+	default:
+		return strings.ToLower(strings.TrimSpace(name))
+	}
+}
+
+func replacePlaceholdersForDialect(dialectName, query string) string {
+	if normalizeMigratorDialectName(dialectName) != "postgres" {
+		return query
+	}
+
+	counter := 0
+	return placeholderPattern.ReplaceAllStringFunc(query, func(_ string) string {
+		counter++
+		return fmt.Sprintf("$%d", counter)
+	})
 }
 
 func isMissingTableError(err error) bool {
