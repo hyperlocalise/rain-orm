@@ -43,6 +43,9 @@ jobs:
       - name: Run SQLite integration tests
         run: go test -race ./pkg/rain -run '^TestSQLiteIntegration'
 
+      - name: Run SQLite CLI integration tests
+        run: go test -race ./internal/raincli -run '^TestSQLiteCLIIntegrationGenerateCheckMigrate$'
+
   postgres-integration:
     name: Postgres Integration Tests
     runs-on: ubuntu-latest
@@ -76,6 +79,11 @@ jobs:
         env:
           RAIN_POSTGRES_DSN: postgres://rain:rain@127.0.0.1:5432/rain_test?sslmode=disable
         run: go test -race ./pkg/rain -run '^TestPostgresIntegration'
+
+      - name: Run Postgres CLI integration tests
+        env:
+          RAIN_POSTGRES_DSN: postgres://rain:rain@127.0.0.1:5432/rain_test?sslmode=disable
+        run: go test -race ./internal/raincli -run '^TestPostgresCLIIntegrationGenerateCheckMigrate$'
 
   mysql-integration:
     name: MySQL Integration Tests

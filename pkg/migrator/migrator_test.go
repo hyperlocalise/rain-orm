@@ -324,10 +324,10 @@ func TestApplySQLMigrationsRejectsPendingOlderThanLastApplied(t *testing.T) {
 	}
 	defer func() { _ = db.Close() }()
 
-	if _, err := db.ExecContext(ctx, `CREATE TABLE "rain_schema_migrations" (id TEXT PRIMARY KEY, applied_at TIMESTAMP NOT NULL, runtime_ms INTEGER NOT NULL, notes TEXT NOT NULL DEFAULT '')`); err != nil {
+	if _, err := db.ExecContext(ctx, `CREATE TABLE "rain_schema_migrations" (id TEXT PRIMARY KEY, checksum TEXT NOT NULL DEFAULT '', applied_at TIMESTAMP NOT NULL, runtime_ms INTEGER NOT NULL, tool_version TEXT NOT NULL DEFAULT '', notes TEXT NOT NULL DEFAULT '')`); err != nil {
 		t.Fatalf("create migration table: %v", err)
 	}
-	if _, err := db.ExecContext(ctx, `INSERT INTO "rain_schema_migrations" (id, applied_at, runtime_ms, notes) VALUES ('20260330130000_newer', CURRENT_TIMESTAMP, 1, '')`); err != nil {
+	if _, err := db.ExecContext(ctx, `INSERT INTO "rain_schema_migrations" (id, checksum, applied_at, runtime_ms, tool_version, notes) VALUES ('20260330130000_newer', '', CURRENT_TIMESTAMP, 1, '', '')`); err != nil {
 		t.Fatalf("insert applied migration: %v", err)
 	}
 
@@ -339,6 +339,76 @@ func TestApplySQLMigrationsRejectsPendingOlderThanLastApplied(t *testing.T) {
 	}
 	if _, err := ApplySQLMigrations(ctx, db, "sqlite", "rain_schema_migrations", pending); err == nil || !strings.Contains(err.Error(), "older than the last applied migration") {
 		t.Fatalf("expected older-than-last-applied error, got %v", err)
+	}
+}
+
+func TestApplySQLMigrationsRejectsDatabaseAheadOfLocalArtifacts(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "migrator-ahead.sqlite"))
+	if err != nil {
+		t.Fatalf("sql.Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	if _, err := db.ExecContext(ctx, `CREATE TABLE "rain_schema_migrations" (id TEXT PRIMARY KEY, checksum TEXT NOT NULL DEFAULT '', applied_at TIMESTAMP NOT NULL, runtime_ms INTEGER NOT NULL, tool_version TEXT NOT NULL DEFAULT '', notes TEXT NOT NULL DEFAULT '')`); err != nil {
+		t.Fatalf("create migration table: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO "rain_schema_migrations" (id, checksum, applied_at, runtime_ms, tool_version, notes) VALUES ('20260330130000_newer', 'abc', CURRENT_TIMESTAMP, 1, '', '')`); err != nil {
+		t.Fatalf("insert applied migration: %v", err)
+	}
+
+	if _, err := ApplySQLMigrations(ctx, db, "sqlite", "rain_schema_migrations", nil); err == nil || !strings.Contains(err.Error(), "database is ahead of local migration artifacts") {
+		t.Fatalf("expected database-ahead error, got %v", err)
+	}
+}
+
+func TestApplySQLMigrationsRejectsChecksumMismatch(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "migrator-checksum.sqlite"))
+	if err != nil {
+		t.Fatalf("sql.Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	if _, err := db.ExecContext(ctx, `CREATE TABLE "rain_schema_migrations" (id TEXT PRIMARY KEY, checksum TEXT NOT NULL DEFAULT '', applied_at TIMESTAMP NOT NULL, runtime_ms INTEGER NOT NULL, tool_version TEXT NOT NULL DEFAULT '', notes TEXT NOT NULL DEFAULT '')`); err != nil {
+		t.Fatalf("create migration table: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO "rain_schema_migrations" (id, checksum, applied_at, runtime_ms, tool_version, notes) VALUES ('20260330130000_init', 'db-checksum', CURRENT_TIMESTAMP, 1, '', '')`); err != nil {
+		t.Fatalf("insert applied migration: %v", err)
+	}
+
+	migrations := []DiskMigration{{
+		ID:       "20260330130000_init",
+		Checksum: "local-checksum",
+		SQL:      `CREATE TABLE "users" ("id" INTEGER PRIMARY KEY);`,
+	}}
+	if _, err := ApplySQLMigrations(ctx, db, "sqlite", "rain_schema_migrations", migrations); err == nil || !strings.Contains(err.Error(), "checksum mismatch") {
+		t.Fatalf("expected checksum mismatch error, got %v", err)
+	}
+}
+
+func TestAcquireMigrationLockRejectsConcurrentOwner(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "migrator-lock.sqlite"))
+	if err != nil {
+		t.Fatalf("sql.Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	first, err := acquireMigrationLock(ctx, db, "sqlite", "rain_schema_migrations")
+	if err != nil {
+		t.Fatalf("acquire first lock: %v", err)
+	}
+	defer func() { _ = first.Unlock(context.Background()) }()
+
+	if _, err := acquireMigrationLock(ctx, db, "sqlite", "rain_schema_migrations"); err == nil || !strings.Contains(err.Error(), "another migration run is active") {
+		t.Fatalf("expected concurrent lock error, got %v", err)
 	}
 }
 

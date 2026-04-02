@@ -11,7 +11,16 @@ import (
 
 // ApplySQLMigrations applies ordered SQL migrations using the existing migration table tracking.
 func ApplySQLMigrations(ctx context.Context, db *sql.DB, dialectName, tableName string, migrationsOnDisk []DiskMigration) (migrate.ApplyResult, error) {
-	if err := validatePendingMigrationOrder(ctx, db, dialectName, tableName, migrationsOnDisk); err != nil {
+	lock, err := acquireMigrationLock(ctx, db, dialectName, tableName)
+	if err != nil {
+		return migrate.ApplyResult{}, err
+	}
+	defer func() { _ = lock.Unlock(context.Background()) }()
+
+	if _, err := migrate.NewRunner(tableName).ApplyPending(ctx, db, nil); err != nil {
+		return migrate.ApplyResult{}, err
+	}
+	if err := validateMigrationState(ctx, db, dialectName, tableName, migrationsOnDisk); err != nil {
 		return migrate.ApplyResult{}, err
 	}
 
@@ -24,7 +33,8 @@ func ApplySQLMigrations(ctx context.Context, db *sql.DB, dialectName, tableName 
 
 		currentStatements := append([]string(nil), statements...)
 		migrations = append(migrations, migrate.Migration{
-			ID: diskMigration.ID,
+			ID:       diskMigration.ID,
+			Checksum: diskMigration.Checksum,
 			Up: func(ctx context.Context, exec migrate.Executor) error {
 				for _, statement := range currentStatements {
 					if strings.TrimSpace(statement) == "" {
@@ -40,58 +50,6 @@ func ApplySQLMigrations(ctx context.Context, db *sql.DB, dialectName, tableName 
 	}
 
 	return migrate.NewRunner(tableName).ApplyPending(ctx, db, migrations)
-}
-
-func validatePendingMigrationOrder(ctx context.Context, db *sql.DB, dialectName, tableName string, migrationsOnDisk []DiskMigration) error {
-	appliedIDs, lastAppliedID, err := loadAppliedMigrationIDs(ctx, db, dialectName, tableName)
-	if err != nil {
-		return err
-	}
-	if lastAppliedID == "" {
-		return nil
-	}
-
-	for _, migrationOnDisk := range migrationsOnDisk {
-		if migrationOnDisk.ID >= lastAppliedID {
-			continue
-		}
-		if _, applied := appliedIDs[migrationOnDisk.ID]; applied {
-			continue
-		}
-		return fmt.Errorf("migrator: pending migration %q is older than the last applied migration %q", migrationOnDisk.ID, lastAppliedID)
-	}
-
-	return nil
-}
-
-func loadAppliedMigrationIDs(ctx context.Context, db *sql.DB, dialectName, tableName string) (map[string]struct{}, string, error) {
-	query := fmt.Sprintf(`SELECT id FROM %s ORDER BY id DESC`, quoteMigrationIdentifier(dialectName, tableName))
-	rows, err := db.QueryContext(ctx, query)
-	if err != nil {
-		if isMissingTableError(err) {
-			return nil, "", nil
-		}
-		return nil, "", fmt.Errorf("migrator: load applied migrations: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-
-	applied := make(map[string]struct{})
-	lastAppliedID := ""
-	for rows.Next() {
-		var id string
-		if scanErr := rows.Scan(&id); scanErr != nil {
-			return nil, "", fmt.Errorf("migrator: scan applied migration id: %w", scanErr)
-		}
-		if lastAppliedID == "" {
-			lastAppliedID = id
-		}
-		applied[id] = struct{}{}
-	}
-	if rowsErr := rows.Err(); rowsErr != nil {
-		return nil, "", fmt.Errorf("migrator: read applied migrations: %w", rowsErr)
-	}
-
-	return applied, lastAppliedID, nil
 }
 
 func isMissingTableError(err error) bool {

@@ -89,6 +89,8 @@ Apply pending migrations:
 go run ./cmd/rain migrate
 ```
 
+`migrate` acquires a migration lock for the duration of the run and verifies that already-applied migration checksums still match the local `migration.sql` artifacts before executing pending SQL.
+
 Check that the live schema registry matches the newest migration snapshot:
 
 ```bash

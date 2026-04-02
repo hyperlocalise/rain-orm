@@ -349,11 +349,11 @@ func TestExecWithPlaceholderFallbackResultRetriesOnPlaceholderSyntaxError(t *tes
 	exec := &scriptedExecutor{
 		calls: []execCall{
 			{
-				query: "INSERT INTO rain_schema_migrations (id, applied_at, runtime_ms, notes) VALUES (?, ?, ?, ?)",
+				query: "INSERT INTO rain_schema_migrations (id, checksum, applied_at, runtime_ms, tool_version, notes) VALUES (?, ?, ?, ?, ?, ?)",
 				err:   errors.New(`ERROR: syntax error at or near "?"`),
 			},
 			{
-				query:  "INSERT INTO rain_schema_migrations (id, applied_at, runtime_ms, notes) VALUES ($1, $2, $3, $4)",
+				query:  "INSERT INTO rain_schema_migrations (id, checksum, applied_at, runtime_ms, tool_version, notes) VALUES ($1, $2, $3, $4, $5, $6)",
 				err:    nil,
 				result: stubResult{},
 			},
@@ -363,10 +363,12 @@ func TestExecWithPlaceholderFallbackResultRetriesOnPlaceholderSyntaxError(t *tes
 	_, err := execWithPlaceholderFallbackResult(
 		context.Background(),
 		exec,
-		"INSERT INTO rain_schema_migrations (id, applied_at, runtime_ms, notes) VALUES (?, ?, ?, ?)",
+		"INSERT INTO rain_schema_migrations (id, checksum, applied_at, runtime_ms, tool_version, notes) VALUES (?, ?, ?, ?, ?, ?)",
 		"202603011200_create_users",
+		"abc123",
 		"2026-03-01T12:00:00Z",
 		int64(42),
+		"",
 		"",
 	)
 	if err != nil {
