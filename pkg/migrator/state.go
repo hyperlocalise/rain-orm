@@ -10,6 +10,7 @@ import (
 type appliedMigrationState struct {
 	ID       string
 	Checksum string
+	State    string
 }
 
 func validateMigrationState(ctx context.Context, db *sql.DB, dialectName, tableName string, migrationsOnDisk []DiskMigration) error {
@@ -28,6 +29,15 @@ func validateMigrationState(ctx context.Context, db *sql.DB, dialectName, tableN
 
 	dbAhead := make([]string, 0, len(applied))
 	for id, appliedMigration := range applied {
+		if appliedMigration.State != "applied" && appliedMigration.State != "failed" && appliedMigration.State != "in_progress" {
+			return fmt.Errorf("migrator: migration %q is in unsupported state %q", id, appliedMigration.State)
+		}
+		if appliedMigration.State == "failed" {
+			return fmt.Errorf("migrator: migration %q is failed and must be recovered before running migrate", id)
+		}
+		if appliedMigration.State == "in_progress" {
+			return fmt.Errorf("migrator: migration %q is in_progress and requires operator recovery", id)
+		}
 		local, exists := localByID[id]
 		if !exists {
 			dbAhead = append(dbAhead, id)
@@ -69,7 +79,7 @@ func validatePendingMigrationOrder(lastAppliedID string, appliedIDs map[string]a
 }
 
 func loadAppliedMigrationState(ctx context.Context, db *sql.DB, dialectName, tableName string) (map[string]appliedMigrationState, string, error) {
-	query := fmt.Sprintf(`SELECT id, checksum FROM %s ORDER BY id DESC`, quoteMigrationIdentifier(dialectName, tableName))
+	query := fmt.Sprintf(`SELECT id, checksum, state FROM %s ORDER BY id DESC`, quoteMigrationIdentifier(dialectName, tableName))
 	rows, err := db.QueryContext(ctx, query)
 	if err != nil {
 		if isMissingTableError(err) {
@@ -83,10 +93,10 @@ func loadAppliedMigrationState(ctx context.Context, db *sql.DB, dialectName, tab
 	lastAppliedID := ""
 	for rows.Next() {
 		var migration appliedMigrationState
-		if scanErr := rows.Scan(&migration.ID, &migration.Checksum); scanErr != nil {
+		if scanErr := rows.Scan(&migration.ID, &migration.Checksum, &migration.State); scanErr != nil {
 			return nil, "", fmt.Errorf("migrator: scan applied migration id: %w", scanErr)
 		}
-		if lastAppliedID == "" {
+		if migration.State == "applied" && lastAppliedID == "" {
 			lastAppliedID = migration.ID
 		}
 		applied[migration.ID] = migration
