@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 const (
@@ -337,7 +338,7 @@ func (r *Runner) applyOneMySQLSafe(ctx context.Context, db *sql.DB, migration Mi
 			"UPDATE %s SET state = ?, failed_at = ?, runtime_ms = ?, error_message = ? WHERE id = ? AND state = ?",
 			quoteIdentifierForDialect(r.dialectName, r.tableName),
 		)
-		if _, markErr := execWithPlaceholdersResult(
+		result, markErr := execWithPlaceholdersResult(
 			ctx,
 			db,
 			r.dialectName,
@@ -348,8 +349,15 @@ func (r *Runner) applyOneMySQLSafe(ctx context.Context, db *sql.DB, migration Mi
 			truncateMigrationError(err.Error()),
 			migration.ID,
 			"in_progress",
-		); markErr != nil {
+		)
+		if markErr != nil {
 			return errors.Join(fmt.Errorf("migrate: run migration %q: %w", migration.ID, err), fmt.Errorf("migrate: mark migration %q failed: %w", migration.ID, markErr))
+		}
+		if rowsAffected, rowsErr := result.RowsAffected(); rowsErr == nil && rowsAffected == 0 {
+			return errors.Join(
+				fmt.Errorf("migrate: run migration %q: %w", migration.ID, err),
+				fmt.Errorf("migrate: mark migration %q failed: state row not found or already changed", migration.ID),
+			)
 		}
 		return fmt.Errorf("migrate: run migration %q: %w", migration.ID, err)
 	}
@@ -359,7 +367,7 @@ func (r *Runner) applyOneMySQLSafe(ctx context.Context, db *sql.DB, migration Mi
 		"UPDATE %s SET state = ?, applied_at = ?, runtime_ms = ?, failed_at = NULL, error_message = '' WHERE id = ? AND state = ?",
 		quoteIdentifierForDialect(r.dialectName, r.tableName),
 	)
-	if _, err := execWithPlaceholdersResult(
+	result, err := execWithPlaceholdersResult(
 		ctx,
 		db,
 		r.dialectName,
@@ -369,8 +377,12 @@ func (r *Runner) applyOneMySQLSafe(ctx context.Context, db *sql.DB, migration Mi
 		runtimeMS,
 		migration.ID,
 		"in_progress",
-	); err != nil {
+	)
+	if err != nil {
 		return fmt.Errorf("migrate: mark migration %q applied: %w", migration.ID, err)
+	}
+	if rowsAffected, rowsErr := result.RowsAffected(); rowsErr == nil && rowsAffected == 0 {
+		return fmt.Errorf("migrate: mark migration %q applied: state row not found or already changed", migration.ID)
 	}
 	return nil
 }
@@ -462,7 +474,12 @@ func truncateMigrationError(message string) string {
 	if len(message) <= maxLen {
 		return message
 	}
-	return message[:maxLen]
+	for idx := maxLen; idx > 0; idx-- {
+		if utf8.RuneStart(message[idx]) {
+			return message[:idx]
+		}
+	}
+	return ""
 }
 
 func replaceWithDollarPlaceholders(query string) string {

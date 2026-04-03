@@ -29,6 +29,9 @@ func validateMigrationState(ctx context.Context, db *sql.DB, dialectName, tableN
 
 	dbAhead := make([]string, 0, len(applied))
 	for id, appliedMigration := range applied {
+		if appliedMigration.State != "applied" && appliedMigration.State != "failed" && appliedMigration.State != "in_progress" {
+			return fmt.Errorf("migrator: migration %q is in unsupported state %q", id, appliedMigration.State)
+		}
 		if appliedMigration.State == "failed" {
 			return fmt.Errorf("migrator: migration %q is failed and must be recovered before running migrate", id)
 		}
