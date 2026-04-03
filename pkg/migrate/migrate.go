@@ -338,8 +338,10 @@ func (r *Runner) applyOneMySQLSafe(ctx context.Context, db *sql.DB, migration Mi
 			"UPDATE %s SET state = ?, failed_at = ?, runtime_ms = ?, error_message = ? WHERE id = ? AND state = ?",
 			quoteIdentifierForDialect(r.dialectName, r.tableName),
 		)
+		trackCtx, trackCancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer trackCancel()
 		result, markErr := execWithPlaceholdersResult(
-			ctx,
+			trackCtx,
 			db,
 			r.dialectName,
 			updateFailure,
@@ -367,8 +369,10 @@ func (r *Runner) applyOneMySQLSafe(ctx context.Context, db *sql.DB, migration Mi
 		"UPDATE %s SET state = ?, applied_at = ?, runtime_ms = ?, failed_at = NULL, error_message = '' WHERE id = ? AND state = ?",
 		quoteIdentifierForDialect(r.dialectName, r.tableName),
 	)
+	trackCtx, trackCancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer trackCancel()
 	result, err := execWithPlaceholdersResult(
-		ctx,
+		trackCtx,
 		db,
 		r.dialectName,
 		updateSuccess,
