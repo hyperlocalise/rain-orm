@@ -16,7 +16,7 @@ services:
       start_period: 5s
 
   mysql:
-    image: mysql:9.6
+    image: mysql:9.7
     container_name: rain-orm-mysql
     environment:
       MYSQL_DATABASE: rain_test
