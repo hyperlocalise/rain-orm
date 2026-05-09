@@ -13,6 +13,7 @@ import (
 
 // SelectQuery builds typed SELECT statements.
 type SelectQuery struct {
+	schema.ExpressionMarker
 	runner        queryRunner
 	dialect       dialect.Dialect
 	cache         QueryCache

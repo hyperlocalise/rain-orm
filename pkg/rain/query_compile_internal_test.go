@@ -339,6 +339,107 @@ func TestModelAssignmentAndValueHelpers(t *testing.T) {
 	}
 }
 
+func TestNewOperatorsSQL(t *testing.T) {
+	t.Parallel()
+
+	users, _ := defineInternalQueryTables()
+	d := dialectForTest(t, "postgres")
+
+	for _, tc := range []struct {
+		name     string
+		expr     schema.Expression
+		wantSQL  string
+		wantArgs []any
+	}{
+		{
+			name:     "NotIn",
+			expr:     users.ID.NotIn(1, 2, 3),
+			wantSQL:  `"users"."id" NOT IN ($1, $2, $3)`,
+			wantArgs: []any{int64(1), int64(2), int64(3)},
+		},
+		{
+			name:     "Like",
+			expr:     users.Email.Like("%@example.com"),
+			wantSQL:  `"users"."email" LIKE $1`,
+			wantArgs: []any{"%@example.com"},
+		},
+		{
+			name:     "NotLike",
+			expr:     users.Email.NotLike("%@example.com"),
+			wantSQL:  `"users"."email" NOT LIKE $1`,
+			wantArgs: []any{"%@example.com"},
+		},
+		{
+			name:     "ILike",
+			expr:     users.Email.ILike("%@EXAMPLE.COM"),
+			wantSQL:  `"users"."email" ILIKE $1`,
+			wantArgs: []any{"%@EXAMPLE.COM"},
+		},
+		{
+			name:     "NotILike",
+			expr:     users.Email.NotILike("%@EXAMPLE.COM"),
+			wantSQL:  `"users"."email" NOT ILIKE $1`,
+			wantArgs: []any{"%@EXAMPLE.COM"},
+		},
+		{
+			name:     "Between",
+			expr:     users.ID.Between(10, 20),
+			wantSQL:  `"users"."id" BETWEEN $1 AND $2`,
+			wantArgs: []any{int64(10), int64(20)},
+		},
+		{
+			name:     "NotBetween",
+			expr:     users.ID.NotBetween(10, 20),
+			wantSQL:  `"users"."id" NOT BETWEEN $1 AND $2`,
+			wantArgs: []any{int64(10), int64(20)},
+		},
+		{
+			name:     "LogicalNot",
+			expr:     schema.Not(users.Active.Eq(true)),
+			wantSQL:  `NOT ("users"."active" = $1)`,
+			wantArgs: []any{true},
+		},
+		{
+			name: "Exists",
+			expr: schema.Exists(&SelectQuery{
+				dialect: d,
+				table:   tableDefSource{table: users.TableDef()},
+				where:   []schema.Predicate{users.ID.Eq(1)},
+			}),
+			wantSQL:  `EXISTS (SELECT * FROM "users" WHERE "users"."id" = $1)`,
+			wantArgs: []any{int64(1)},
+		},
+		{
+			name: "NotExists",
+			expr: schema.NotExists(&SelectQuery{
+				dialect: d,
+				table:   tableDefSource{table: users.TableDef()},
+				where:   []schema.Predicate{users.ID.Eq(1)},
+			}),
+			wantSQL:  `NOT EXISTS (SELECT * FROM "users" WHERE "users"."id" = $1)`,
+			wantArgs: []any{int64(1)},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := newCompileContext(d)
+			if err := ctx.writeExpression(tc.expr); err != nil {
+				t.Fatalf("writeExpression failed: %v", err)
+			}
+			if ctx.String() != tc.wantSQL {
+				t.Fatalf("unexpected SQL:\nwant: %s\ngot:  %s", tc.wantSQL, ctx.String())
+			}
+			compiled := ctx.compiledQuery()
+			args, err := compiled.literalArgs()
+			if err != nil {
+				t.Fatalf("literalArgs failed: %v", err)
+			}
+			if !reflect.DeepEqual(args, tc.wantArgs) {
+				t.Fatalf("unexpected args:\nwant: %#v\ngot:  %#v", tc.wantArgs, args)
+			}
+		})
+	}
+}
+
 func dialectForTest(t *testing.T, driver string) dialect.Dialect {
 	t.Helper()
 

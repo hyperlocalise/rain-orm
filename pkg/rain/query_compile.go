@@ -163,6 +163,7 @@ func (c *compileContext) writePredicate(predicate schema.Predicate) error {
 
 type expressionContext struct {
 	allowAlias bool
+	noParens   bool
 }
 
 func (c *compileContext) writeExpression(expr schema.Expression) error {
@@ -205,16 +206,65 @@ func (c *compileContext) writeExpressionInContext(expr schema.Expression, contex
 		if err := c.writeExpression(value.Left); err != nil {
 			return err
 		}
-		c.writeString(" IN (")
+		if value.Negated {
+			c.writeString(" NOT IN (")
+		} else {
+			c.writeString(" IN (")
+		}
 		for idx, item := range value.Values {
 			if idx > 0 {
 				c.writeString(", ")
 			}
-			if err := c.writeExpression(item); err != nil {
+			ctx := expressionContext{}
+			if len(value.Values) == 1 {
+				ctx.noParens = true
+			}
+			if err := c.writeExpressionInContext(item, ctx); err != nil {
 				return err
 			}
 		}
 		c.writeByte(')')
+	case schema.BetweenExpr:
+		if err := c.writeExpression(value.Left); err != nil {
+			return err
+		}
+		if value.Negated {
+			c.writeString(" NOT BETWEEN ")
+		} else {
+			c.writeString(" BETWEEN ")
+		}
+		if err := c.writeExpression(value.Start); err != nil {
+			return err
+		}
+		c.writeString(" AND ")
+		if err := c.writeExpression(value.End); err != nil {
+			return err
+		}
+	case schema.NotExpr:
+		c.writeString("NOT (")
+		if err := c.writePredicate(value.Expr); err != nil {
+			return err
+		}
+		c.writeByte(')')
+	case schema.ExistsExpr:
+		if value.Negated {
+			c.writeString("NOT ")
+		}
+		c.writeString("EXISTS (")
+		if err := c.writeExpressionInContext(value.Subquery, expressionContext{noParens: true}); err != nil {
+			return err
+		}
+		c.writeByte(')')
+	case *SelectQuery:
+		if !context.noParens {
+			c.writeByte('(')
+		}
+		if err := value.writeSQL(c); err != nil {
+			return err
+		}
+		if !context.noParens {
+			c.writeByte(')')
+		}
 	case schema.NullCheckExpr:
 		if err := c.writeExpression(value.Expr); err != nil {
 			return err

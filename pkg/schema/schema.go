@@ -76,6 +76,11 @@ type Predicate interface {
 	isPredicate()
 }
 
+// ExpressionMarker can be embedded to satisfy the Expression interface.
+type ExpressionMarker struct{}
+
+func (ExpressionMarker) isExpression() {}
+
 // ColumnReference is implemented by typed and untyped column handles.
 type ColumnReference interface {
 	Expression
@@ -511,6 +516,16 @@ func (c *AnyColumn) As(alias string) AliasExpr {
 	return As(c, alias)
 }
 
+// IsNull creates an IS NULL predicate.
+func (c *AnyColumn) IsNull() NullCheckExpr {
+	return NullCheckExpr{Expr: c, Negated: false}
+}
+
+// IsNotNull creates an IS NOT NULL predicate.
+func (c *AnyColumn) IsNotNull() NullCheckExpr {
+	return NullCheckExpr{Expr: c, Negated: true}
+}
+
 // In compares this column to a set of Go values using SQL IN.
 func (c *AnyColumn) In(values ...any) InExpr {
 	exprs := make([]Expression, 0, len(values))
@@ -769,12 +784,41 @@ func (ComparisonExpr) isPredicate()  {}
 
 // InExpr renders an IN predicate.
 type InExpr struct {
-	Left   Expression
-	Values []Expression
+	Left    Expression
+	Values  []Expression
+	Negated bool
 }
 
 func (InExpr) isExpression() {}
 func (InExpr) isPredicate()  {}
+
+// BetweenExpr renders a BETWEEN predicate.
+type BetweenExpr struct {
+	Left    Expression
+	Start   Expression
+	End     Expression
+	Negated bool
+}
+
+func (BetweenExpr) isExpression() {}
+func (BetweenExpr) isPredicate()  {}
+
+// NotExpr renders a logical NOT.
+type NotExpr struct {
+	Expr Predicate
+}
+
+func (NotExpr) isExpression() {}
+func (NotExpr) isPredicate()  {}
+
+// ExistsExpr renders an EXISTS or NOT EXISTS subquery.
+type ExistsExpr struct {
+	Subquery Expression
+	Negated  bool
+}
+
+func (ExistsExpr) isExpression() {}
+func (ExistsExpr) isPredicate()  {}
 
 // NullCheckExpr renders IS NULL or IS NOT NULL.
 type NullCheckExpr struct {
@@ -896,6 +940,53 @@ func Coalesce(exprs ...Expression) CoalesceExpr {
 	return CoalesceExpr{Exprs: exprs}
 }
 
+// NotIn compares this column to a set of Go values using SQL NOT IN.
+func (c *AnyColumn) NotIn(values ...any) InExpr {
+	expr := c.In(values...)
+	expr.Negated = true
+	return expr
+}
+
+// Like compares this column to a pattern using SQL LIKE.
+// Intended for string-typed columns.
+func (c *AnyColumn) Like(pattern string) ComparisonExpr {
+	return ComparisonExpr{Left: c, Operator: "LIKE", Right: ValueExpr{Value: pattern}}
+}
+
+// NotLike compares this column to a pattern using SQL NOT LIKE.
+// Intended for string-typed columns.
+func (c *AnyColumn) NotLike(pattern string) ComparisonExpr {
+	return ComparisonExpr{Left: c, Operator: "NOT LIKE", Right: ValueExpr{Value: pattern}}
+}
+
+// ILike compares this column to a pattern using SQL ILIKE (case-insensitive LIKE).
+// Intended for string-typed columns.
+func (c *AnyColumn) ILike(pattern string) ComparisonExpr {
+	return ComparisonExpr{Left: c, Operator: "ILIKE", Right: ValueExpr{Value: pattern}}
+}
+
+// NotILike compares this column to a pattern using SQL NOT ILIKE.
+// Intended for string-typed columns.
+func (c *AnyColumn) NotILike(pattern string) ComparisonExpr {
+	return ComparisonExpr{Left: c, Operator: "NOT ILIKE", Right: ValueExpr{Value: pattern}}
+}
+
+// Between compares this column to a range using SQL BETWEEN.
+func (c *AnyColumn) Between(start, end any) BetweenExpr {
+	return BetweenExpr{
+		Left:  c,
+		Start: ValueExpr{Value: start},
+		End:   ValueExpr{Value: end},
+	}
+}
+
+// NotBetween compares this column to a range using SQL NOT BETWEEN.
+func (c *AnyColumn) NotBetween(start, end any) BetweenExpr {
+	expr := c.Between(start, end)
+	expr.Negated = true
+	return expr
+}
+
 // As aliases an expression in a SELECT list.
 func As(expr Expression, alias string) AliasExpr {
 	if expr == nil {
@@ -905,6 +996,53 @@ func As(expr Expression, alias string) AliasExpr {
 		panic("schema: As requires a non-empty alias")
 	}
 	return AliasExpr{Expr: expr, Alias: alias}
+}
+
+// NotIn compares this column to a set of Go values using SQL NOT IN.
+func (c *Column[T]) NotIn(values ...T) InExpr {
+	expr := c.In(values...)
+	expr.Negated = true
+	return expr
+}
+
+// Like compares this column to a pattern using SQL LIKE.
+// Intended for string-typed columns.
+func (c *Column[T]) Like(pattern string) ComparisonExpr {
+	return ComparisonExpr{Left: c, Operator: "LIKE", Right: ValueExpr{Value: pattern}}
+}
+
+// NotLike compares this column to a pattern using SQL NOT LIKE.
+// Intended for string-typed columns.
+func (c *Column[T]) NotLike(pattern string) ComparisonExpr {
+	return ComparisonExpr{Left: c, Operator: "NOT LIKE", Right: ValueExpr{Value: pattern}}
+}
+
+// ILike compares this column to a pattern using SQL ILIKE (case-insensitive LIKE).
+// Intended for string-typed columns.
+func (c *Column[T]) ILike(pattern string) ComparisonExpr {
+	return ComparisonExpr{Left: c, Operator: "ILIKE", Right: ValueExpr{Value: pattern}}
+}
+
+// NotILike compares this column to a pattern using SQL NOT ILIKE.
+// Intended for string-typed columns.
+func (c *Column[T]) NotILike(pattern string) ComparisonExpr {
+	return ComparisonExpr{Left: c, Operator: "NOT ILIKE", Right: ValueExpr{Value: pattern}}
+}
+
+// Between compares this column to a range using SQL BETWEEN.
+func (c *Column[T]) Between(start, end T) BetweenExpr {
+	return BetweenExpr{
+		Left:  c,
+		Start: ValueExpr{Value: start},
+		End:   ValueExpr{Value: end},
+	}
+}
+
+// NotBetween compares this column to a range using SQL NOT BETWEEN.
+func (c *Column[T]) NotBetween(start, end T) BetweenExpr {
+	expr := c.Between(start, end)
+	expr.Negated = true
+	return expr
 }
 
 // RawExpr is an escape hatch for raw SQL with bound args.
@@ -933,6 +1071,21 @@ func And(predicates ...Predicate) LogicalExpr {
 // Or combines predicates with OR.
 func Or(predicates ...Predicate) LogicalExpr {
 	return LogicalExpr{Operator: "OR", Exprs: predicates}
+}
+
+// Not negates a predicate using SQL NOT.
+func Not(predicate Predicate) NotExpr {
+	return NotExpr{Expr: predicate}
+}
+
+// Exists checks if a subquery returns any rows.
+func Exists(subquery Expression) ExistsExpr {
+	return ExistsExpr{Subquery: subquery}
+}
+
+// NotExists checks if a subquery returns no rows.
+func NotExists(subquery Expression) ExistsExpr {
+	return ExistsExpr{Subquery: subquery, Negated: true}
 }
 
 // IndexBuilder configures a table index.
@@ -1205,11 +1358,30 @@ func cloneExpressionForTable(expr Expression, table *TableDef) Expression {
 			Right:    cloneExpressionForTable(value.Right, table),
 		}
 	case InExpr:
-		cloned := InExpr{Left: cloneExpressionForTable(value.Left, table)}
+		cloned := InExpr{
+			Left:    cloneExpressionForTable(value.Left, table),
+			Negated: value.Negated,
+		}
 		for _, item := range value.Values {
 			cloned.Values = append(cloned.Values, cloneExpressionForTable(item, table))
 		}
 		return cloned
+	case BetweenExpr:
+		return BetweenExpr{
+			Left:    cloneExpressionForTable(value.Left, table),
+			Start:   cloneExpressionForTable(value.Start, table),
+			End:     cloneExpressionForTable(value.End, table),
+			Negated: value.Negated,
+		}
+	case NotExpr:
+		return NotExpr{
+			Expr: cloneExpressionForTable(value.Expr, table).(Predicate),
+		}
+	case ExistsExpr:
+		return ExistsExpr{
+			Subquery: cloneExpressionForTable(value.Subquery, table),
+			Negated:  value.Negated,
+		}
 	case NullCheckExpr:
 		return NullCheckExpr{Expr: cloneExpressionForTable(value.Expr, table), Negated: value.Negated}
 	case LogicalExpr:
