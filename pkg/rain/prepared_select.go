@@ -117,15 +117,18 @@ func (p *PreparedSelectQuery) Scan(ctx context.Context, args PreparedArgs, dest 
 	defer closeRows(rows, &err)
 
 	if len(p.query.relationNames) == 0 {
-		result, readErr := readCachedSelectRows(rows)
-		if readErr != nil {
-			return readErr
+		if cacheKey != "" && cacheOptions != nil && !cacheOptions.bypass {
+			result, readErr := readCachedSelectRows(rows)
+			if readErr != nil {
+				return readErr
+			}
+			err = scanCachedRowsAgainstTable(result, dest, table)
+			if err != nil {
+				return err
+			}
+			return p.query.writeCachedSelectResult(ctx, cacheKey, cacheOptions, result)
 		}
-		err = scanCachedRowsAgainstTable(result, dest, table)
-		if err != nil {
-			return err
-		}
-		return p.query.writeCachedSelectResult(ctx, cacheKey, cacheOptions, result)
+		err = scanRowsAgainstTableDirect(rows, dest, table)
 	} else {
 		err = p.query.scanRowsWithRelations(ctx, rows, dest)
 	}
