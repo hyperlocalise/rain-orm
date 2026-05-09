@@ -302,15 +302,18 @@ func (q *SelectQuery) Scan(ctx context.Context, dest any) error {
 	defer closeRows(rows, &err)
 
 	if len(q.relationNames) == 0 {
-		result, readErr := readCachedSelectRows(rows)
-		if readErr != nil {
-			return readErr
+		if cacheKey != "" && cacheOptions != nil && !cacheOptions.bypass {
+			result, readErr := readCachedSelectRows(rows)
+			if readErr != nil {
+				return readErr
+			}
+			err = scanCachedRowsAgainstTable(result, dest, table)
+			if err != nil {
+				return err
+			}
+			return q.writeCachedSelectResult(ctx, cacheKey, cacheOptions, result)
 		}
-		err = scanCachedRowsAgainstTable(result, dest, table)
-		if err != nil {
-			return err
-		}
-		return q.writeCachedSelectResult(ctx, cacheKey, cacheOptions, result)
+		err = scanRowsAgainstTableDirect(rows, dest, table)
 	} else {
 		err = q.scanRowsWithRelations(ctx, rows, dest)
 	}

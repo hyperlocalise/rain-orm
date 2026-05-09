@@ -160,11 +160,120 @@ func scanRows(rows *sql.Rows, dest any) error {
 }
 
 func scanRowsAgainstTable(rows *sql.Rows, dest any, table *schema.TableDef) error {
-	result, err := readCachedSelectRows(rows)
+	return scanRowsAgainstTableDirect(rows, dest, table)
+}
+
+func scanRowsAgainstTableDirect(rows *sql.Rows, dest any, table *schema.TableDef) error {
+	value := reflect.ValueOf(dest)
+	if value.Kind() != reflect.Pointer || value.IsNil() {
+		return fmt.Errorf("rain: destination must be a non-nil pointer")
+	}
+
+	cols, err := rows.Columns()
 	if err != nil {
 		return err
 	}
-	return scanCachedRowsAgainstTable(result, dest, table)
+
+	target := value.Elem()
+	switch target.Kind() {
+	case reflect.Struct:
+		plan, err := newRowScanPlanForColumns(cols, target.Type(), table)
+		if err != nil {
+			return err
+		}
+		if !rows.Next() {
+			if err := rows.Err(); err != nil {
+				return err
+			}
+			return sql.ErrNoRows
+		}
+
+		scanTargets := make([]any, len(cols))
+		scanned := make([]any, len(cols))
+		for idx := range cols {
+			scanTargets[idx] = &scanned[idx]
+		}
+		if err := rows.Scan(scanTargets...); err != nil {
+			return err
+		}
+
+		return scanDirectRowWithPlan(scanned, target, plan, table)
+	case reflect.Slice:
+		elemType := target.Type().Elem()
+		structType, pointerElems, err := sliceElementStructType(elemType)
+		if err != nil {
+			return err
+		}
+		plan, err := newRowScanPlanForColumns(cols, structType, table)
+		if err != nil {
+			return err
+		}
+
+		scanTargets := make([]any, len(cols))
+		scanned := make([]any, len(cols))
+		for idx := range cols {
+			scanTargets[idx] = &scanned[idx]
+		}
+
+		items := target
+		for rows.Next() {
+			for idx := range scanned {
+				scanned[idx] = nil
+			}
+			if err := rows.Scan(scanTargets...); err != nil {
+				return err
+			}
+
+			elemPtr := reflect.New(structType)
+			if err := scanDirectRowWithPlan(scanned, elemPtr.Elem(), plan, table); err != nil {
+				return err
+			}
+			if pointerElems {
+				items = reflect.Append(items, elemPtr)
+			} else {
+				items = reflect.Append(items, elemPtr.Elem())
+			}
+		}
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		target.Set(items)
+		return nil
+	default:
+		return fmt.Errorf("rain: destination must point to a struct or slice")
+	}
+}
+
+func scanDirectRowWithPlan(scanned []any, target reflect.Value, plan *rowScanPlan, table *schema.TableDef) error {
+	for idx, column := range plan.columns {
+		if column.discard {
+			continue
+		}
+		field, err := fieldByIndexAlloc(target, column.fieldIndex)
+		if err != nil {
+			return err
+		}
+		var columnDef *schema.ColumnDef
+		if table != nil {
+			columnDef, _ = table.ColumnByName(column.columnName)
+		}
+		if err := assignRawValueToFieldWithColumn(field, scanned[idx], columnDef); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func assignRawValueToFieldWithColumn(field reflect.Value, raw any, column *schema.ColumnDef) error {
+	// If it's a JSON column and we got a string/bytes, it might need special handling in assignRawValueToField
+	// but currently assignRawValueToField doesn't take column.
+	// We can update assignRawValueToField or handle it here.
+	if column != nil && (column.Type.DataType == schema.TypeJSON || column.Type.DataType == schema.TypeJSONB) {
+		if s, ok := raw.(string); ok {
+			raw = []byte(s)
+		}
+	}
+	return assignRawValueToField(field, raw)
 }
 
 func scanCachedRowsAgainstTable(result *cachedSelectRows, dest any, table *schema.TableDef) error {
@@ -438,6 +547,10 @@ func assignRawValueToField(field reflect.Value, raw any) error {
 		if isBytesType(field.Type()) {
 			if value, ok := raw.([]byte); ok {
 				field.SetBytes(value)
+				return nil
+			}
+			if value, ok := raw.(string); ok {
+				field.SetBytes([]byte(value))
 				return nil
 			}
 		}
