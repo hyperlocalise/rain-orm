@@ -13,6 +13,7 @@ import (
 
 // SelectQuery builds typed SELECT statements.
 type SelectQuery struct {
+	schema.ExpressionMarker
 	runner        queryRunner
 	dialect       dialect.Dialect
 	cache         QueryCache
@@ -126,8 +127,6 @@ func (q *SelectQuery) WithRelations(names ...string) *SelectQuery {
 	q.relationNames = append(q.relationNames, names...)
 	return q
 }
-
-func (q *SelectQuery) IsExpression() {}
 
 // Cache enables opt-in query caching for this SELECT with TTL and optional metadata.
 // Queries that use WithRelations do not read from or write to the query cache.

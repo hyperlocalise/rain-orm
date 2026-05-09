@@ -49,7 +49,7 @@ func TestSchemaInternalHelpersAndExpressions(t *testing.T) {
 	if anyEmail.Desc().Direction != SortDesc {
 		t.Fatalf("expected AnyColumn Desc direction")
 	}
-	anyEmail.IsExpression()
+	anyEmail.isExpression()
 
 	ref := Ref(col)
 	if ref.ColumnDef() != col {
@@ -65,7 +65,7 @@ func TestSchemaInternalHelpersAndExpressions(t *testing.T) {
 	if users.Email.Desc().Direction != SortDesc {
 		t.Fatalf("expected typed column Desc direction")
 	}
-	users.Email.IsExpression()
+	users.Email.isExpression()
 
 	eq := users.Email.Eq("alice@example.com")
 	ne := users.Email.Ne("bob@example.com")
@@ -102,17 +102,17 @@ func TestSchemaInternalHelpersAndExpressions(t *testing.T) {
 		t.Fatalf("unexpected logical expression operators")
 	}
 
-	ValueExpr{Value: 1}.IsExpression()
-	eq.IsExpression()
+	ValueExpr{Value: 1}.isExpression()
+	eq.isExpression()
 	eq.isPredicate()
-	in.IsExpression()
+	in.isExpression()
 	in.isPredicate()
-	isNull.IsExpression()
+	isNull.isExpression()
 	isNull.isPredicate()
-	andExpr.IsExpression()
+	andExpr.isExpression()
 	andExpr.isPredicate()
-	raw.IsExpression()
-	coalesce.IsExpression()
+	raw.isExpression()
+	coalesce.isExpression()
 
 	if users.TableDef().Indexes[0].Columns[0].Direction != SortAsc {
 		t.Fatalf("expected plain index column direction ASC")

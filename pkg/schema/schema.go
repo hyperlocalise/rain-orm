@@ -67,7 +67,7 @@ type TableReference interface {
 
 // Expression is implemented by all query expressions.
 type Expression interface {
-	IsExpression()
+	isExpression()
 }
 
 // Predicate is implemented by boolean SQL expressions.
@@ -75,6 +75,11 @@ type Predicate interface {
 	Expression
 	isPredicate()
 }
+
+// ExpressionMarker can be embedded to satisfy the Expression interface.
+type ExpressionMarker struct{}
+
+func (ExpressionMarker) isExpression() {}
 
 // ColumnReference is implemented by typed and untyped column handles.
 type ColumnReference interface {
@@ -530,7 +535,7 @@ func (c *AnyColumn) In(values ...any) InExpr {
 	return InExpr{Left: c, Values: exprs}
 }
 
-func (c *AnyColumn) IsExpression()         {}
+func (c *AnyColumn) isExpression()         {}
 func (c *AnyColumn) indexColumnSpec()      {}
 func (c *AnyColumn) constraintColumnSpec() {}
 
@@ -741,7 +746,7 @@ func (c *Column[T]) As(alias string) AliasExpr {
 	return As(c, alias)
 }
 
-func (c *Column[T]) IsExpression()         {}
+func (c *Column[T]) isExpression()         {}
 func (c *Column[T]) indexColumnSpec()      {}
 func (c *Column[T]) constraintColumnSpec() {}
 
@@ -750,14 +755,14 @@ type ValueExpr struct {
 	Value any
 }
 
-func (ValueExpr) IsExpression() {}
+func (ValueExpr) isExpression() {}
 
 // PlaceholderExpr references a named runtime value for prepared query execution.
 type PlaceholderExpr struct {
 	Name string
 }
 
-func (PlaceholderExpr) IsExpression() {}
+func (PlaceholderExpr) isExpression() {}
 
 // Placeholder references a named runtime value in a prepared query.
 func Placeholder(name string) PlaceholderExpr {
@@ -774,7 +779,7 @@ type ComparisonExpr struct {
 	Right    Expression
 }
 
-func (ComparisonExpr) IsExpression() {}
+func (ComparisonExpr) isExpression() {}
 func (ComparisonExpr) isPredicate()  {}
 
 // InExpr renders an IN predicate.
@@ -784,7 +789,7 @@ type InExpr struct {
 	Negated bool
 }
 
-func (InExpr) IsExpression() {}
+func (InExpr) isExpression() {}
 func (InExpr) isPredicate()  {}
 
 // BetweenExpr renders a BETWEEN predicate.
@@ -795,7 +800,7 @@ type BetweenExpr struct {
 	Negated bool
 }
 
-func (BetweenExpr) IsExpression() {}
+func (BetweenExpr) isExpression() {}
 func (BetweenExpr) isPredicate()  {}
 
 // NotExpr renders a logical NOT.
@@ -803,7 +808,7 @@ type NotExpr struct {
 	Expr Predicate
 }
 
-func (NotExpr) IsExpression() {}
+func (NotExpr) isExpression() {}
 func (NotExpr) isPredicate()  {}
 
 // ExistsExpr renders an EXISTS or NOT EXISTS subquery.
@@ -812,7 +817,7 @@ type ExistsExpr struct {
 	Negated  bool
 }
 
-func (ExistsExpr) IsExpression() {}
+func (ExistsExpr) isExpression() {}
 func (ExistsExpr) isPredicate()  {}
 
 // NullCheckExpr renders IS NULL or IS NOT NULL.
@@ -821,7 +826,7 @@ type NullCheckExpr struct {
 	Negated bool
 }
 
-func (NullCheckExpr) IsExpression() {}
+func (NullCheckExpr) isExpression() {}
 func (NullCheckExpr) isPredicate()  {}
 
 // LogicalExpr groups predicates with AND or OR.
@@ -830,7 +835,7 @@ type LogicalExpr struct {
 	Exprs    []Predicate
 }
 
-func (LogicalExpr) IsExpression() {}
+func (LogicalExpr) isExpression() {}
 func (LogicalExpr) isPredicate()  {}
 
 // OrderExpr renders ORDER BY expressions and indexed sort directions.
@@ -851,7 +856,7 @@ type AggregateExpr struct {
 	Distinct bool
 }
 
-func (AggregateExpr) IsExpression() {}
+func (AggregateExpr) isExpression() {}
 
 // As aliases this computed expression in a SELECT list.
 func (a AggregateExpr) As(alias string) AliasExpr {
@@ -863,7 +868,7 @@ type CoalesceExpr struct {
 	Exprs []Expression
 }
 
-func (CoalesceExpr) IsExpression() {}
+func (CoalesceExpr) isExpression() {}
 
 // As aliases this computed expression in a SELECT list.
 func (c CoalesceExpr) As(alias string) AliasExpr {
@@ -876,7 +881,7 @@ type AliasExpr struct {
 	Alias string
 }
 
-func (AliasExpr) IsExpression() {}
+func (AliasExpr) isExpression() {}
 
 // Count renders COUNT(*) when no expression is provided, or COUNT(expr) when one expression is provided.
 func Count(exprs ...Expression) AggregateExpr {
@@ -1038,7 +1043,7 @@ type RawExpr struct {
 	Args []any
 }
 
-func (RawExpr) IsExpression() {}
+func (RawExpr) isExpression() {}
 
 // As aliases this raw expression in a SELECT list.
 func (r RawExpr) As(alias string) AliasExpr {
