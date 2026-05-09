@@ -234,8 +234,11 @@ func scanRowsAgainstTableDirect(rows *sql.Rows, dest any, table *schema.TableDef
 				items = reflect.Append(items, elemPtr.Elem())
 			}
 		}
+		if err := rows.Err(); err != nil {
+			return err
+		}
 		target.Set(items)
-		return rows.Err()
+		return nil
 	default:
 		return fmt.Errorf("rain: destination must point to a struct or slice")
 	}
