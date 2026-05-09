@@ -511,6 +511,16 @@ func (c *AnyColumn) As(alias string) AliasExpr {
 	return As(c, alias)
 }
 
+// IsNull creates an IS NULL predicate.
+func (c *AnyColumn) IsNull() NullCheckExpr {
+	return NullCheckExpr{Expr: c, Negated: false}
+}
+
+// IsNotNull creates an IS NOT NULL predicate.
+func (c *AnyColumn) IsNotNull() NullCheckExpr {
+	return NullCheckExpr{Expr: c, Negated: true}
+}
+
 // In compares this column to a set of Go values using SQL IN.
 func (c *AnyColumn) In(values ...any) InExpr {
 	exprs := make([]Expression, 0, len(values))
