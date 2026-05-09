@@ -163,6 +163,7 @@ func (c *compileContext) writePredicate(predicate schema.Predicate) error {
 
 type expressionContext struct {
 	allowAlias bool
+	noParens   bool
 }
 
 func (c *compileContext) writeExpression(expr schema.Expression) error {
@@ -214,7 +215,11 @@ func (c *compileContext) writeExpressionInContext(expr schema.Expression, contex
 			if idx > 0 {
 				c.writeString(", ")
 			}
-			if err := c.writeExpression(item); err != nil {
+			ctx := expressionContext{}
+			if len(value.Values) == 1 {
+				ctx.noParens = true
+			}
+			if err := c.writeExpressionInContext(item, ctx); err != nil {
 				return err
 			}
 		}
@@ -245,16 +250,21 @@ func (c *compileContext) writeExpressionInContext(expr schema.Expression, contex
 		if value.Negated {
 			c.writeString("NOT ")
 		}
-		c.writeString("EXISTS ")
-		if err := c.writeExpression(value.Subquery); err != nil {
-			return err
-		}
-	case *SelectQuery:
-		c.writeByte('(')
-		if err := value.writeSQL(c); err != nil {
+		c.writeString("EXISTS (")
+		if err := c.writeExpressionInContext(value.Subquery, expressionContext{noParens: true}); err != nil {
 			return err
 		}
 		c.writeByte(')')
+	case *SelectQuery:
+		if !context.noParens {
+			c.writeByte('(')
+		}
+		if err := value.writeSQL(c); err != nil {
+			return err
+		}
+		if !context.noParens {
+			c.writeByte(')')
+		}
 	case schema.NullCheckExpr:
 		if err := c.writeExpression(value.Expr); err != nil {
 			return err
