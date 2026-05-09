@@ -67,7 +67,7 @@ type TableReference interface {
 
 // Expression is implemented by all query expressions.
 type Expression interface {
-	isExpression()
+	IsExpression()
 }
 
 // Predicate is implemented by boolean SQL expressions.
@@ -520,7 +520,7 @@ func (c *AnyColumn) In(values ...any) InExpr {
 	return InExpr{Left: c, Values: exprs}
 }
 
-func (c *AnyColumn) isExpression()         {}
+func (c *AnyColumn) IsExpression()         {}
 func (c *AnyColumn) indexColumnSpec()      {}
 func (c *AnyColumn) constraintColumnSpec() {}
 
@@ -731,7 +731,7 @@ func (c *Column[T]) As(alias string) AliasExpr {
 	return As(c, alias)
 }
 
-func (c *Column[T]) isExpression()         {}
+func (c *Column[T]) IsExpression()         {}
 func (c *Column[T]) indexColumnSpec()      {}
 func (c *Column[T]) constraintColumnSpec() {}
 
@@ -740,14 +740,14 @@ type ValueExpr struct {
 	Value any
 }
 
-func (ValueExpr) isExpression() {}
+func (ValueExpr) IsExpression() {}
 
 // PlaceholderExpr references a named runtime value for prepared query execution.
 type PlaceholderExpr struct {
 	Name string
 }
 
-func (PlaceholderExpr) isExpression() {}
+func (PlaceholderExpr) IsExpression() {}
 
 // Placeholder references a named runtime value in a prepared query.
 func Placeholder(name string) PlaceholderExpr {
@@ -764,17 +764,46 @@ type ComparisonExpr struct {
 	Right    Expression
 }
 
-func (ComparisonExpr) isExpression() {}
+func (ComparisonExpr) IsExpression() {}
 func (ComparisonExpr) isPredicate()  {}
 
 // InExpr renders an IN predicate.
 type InExpr struct {
-	Left   Expression
-	Values []Expression
+	Left    Expression
+	Values  []Expression
+	Negated bool
 }
 
-func (InExpr) isExpression() {}
+func (InExpr) IsExpression() {}
 func (InExpr) isPredicate()  {}
+
+// BetweenExpr renders a BETWEEN predicate.
+type BetweenExpr struct {
+	Left    Expression
+	Start   Expression
+	End     Expression
+	Negated bool
+}
+
+func (BetweenExpr) IsExpression() {}
+func (BetweenExpr) isPredicate()  {}
+
+// NotExpr renders a logical NOT.
+type NotExpr struct {
+	Expr Predicate
+}
+
+func (NotExpr) IsExpression() {}
+func (NotExpr) isPredicate()  {}
+
+// ExistsExpr renders an EXISTS or NOT EXISTS subquery.
+type ExistsExpr struct {
+	Subquery Expression
+	Negated  bool
+}
+
+func (ExistsExpr) IsExpression() {}
+func (ExistsExpr) isPredicate()  {}
 
 // NullCheckExpr renders IS NULL or IS NOT NULL.
 type NullCheckExpr struct {
@@ -782,7 +811,7 @@ type NullCheckExpr struct {
 	Negated bool
 }
 
-func (NullCheckExpr) isExpression() {}
+func (NullCheckExpr) IsExpression() {}
 func (NullCheckExpr) isPredicate()  {}
 
 // LogicalExpr groups predicates with AND or OR.
@@ -791,7 +820,7 @@ type LogicalExpr struct {
 	Exprs    []Predicate
 }
 
-func (LogicalExpr) isExpression() {}
+func (LogicalExpr) IsExpression() {}
 func (LogicalExpr) isPredicate()  {}
 
 // OrderExpr renders ORDER BY expressions and indexed sort directions.
@@ -812,7 +841,7 @@ type AggregateExpr struct {
 	Distinct bool
 }
 
-func (AggregateExpr) isExpression() {}
+func (AggregateExpr) IsExpression() {}
 
 // As aliases this computed expression in a SELECT list.
 func (a AggregateExpr) As(alias string) AliasExpr {
@@ -824,7 +853,7 @@ type CoalesceExpr struct {
 	Exprs []Expression
 }
 
-func (CoalesceExpr) isExpression() {}
+func (CoalesceExpr) IsExpression() {}
 
 // As aliases this computed expression in a SELECT list.
 func (c CoalesceExpr) As(alias string) AliasExpr {
@@ -837,7 +866,7 @@ type AliasExpr struct {
 	Alias string
 }
 
-func (AliasExpr) isExpression() {}
+func (AliasExpr) IsExpression() {}
 
 // Count renders COUNT(*) when no expression is provided, or COUNT(expr) when one expression is provided.
 func Count(exprs ...Expression) AggregateExpr {
@@ -896,6 +925,49 @@ func Coalesce(exprs ...Expression) CoalesceExpr {
 	return CoalesceExpr{Exprs: exprs}
 }
 
+// NotIn compares this column to a set of Go values using SQL NOT IN.
+func (c *AnyColumn) NotIn(values ...any) InExpr {
+	expr := c.In(values...)
+	expr.Negated = true
+	return expr
+}
+
+// Like compares this column to a pattern using SQL LIKE.
+func (c *AnyColumn) Like(pattern string) ComparisonExpr {
+	return ComparisonExpr{Left: c, Operator: "LIKE", Right: ValueExpr{Value: pattern}}
+}
+
+// NotLike compares this column to a pattern using SQL NOT LIKE.
+func (c *AnyColumn) NotLike(pattern string) ComparisonExpr {
+	return ComparisonExpr{Left: c, Operator: "NOT LIKE", Right: ValueExpr{Value: pattern}}
+}
+
+// ILike compares this column to a pattern using SQL ILIKE (case-insensitive LIKE).
+func (c *AnyColumn) ILike(pattern string) ComparisonExpr {
+	return ComparisonExpr{Left: c, Operator: "ILIKE", Right: ValueExpr{Value: pattern}}
+}
+
+// NotILike compares this column to a pattern using SQL NOT ILIKE.
+func (c *AnyColumn) NotILike(pattern string) ComparisonExpr {
+	return ComparisonExpr{Left: c, Operator: "NOT ILIKE", Right: ValueExpr{Value: pattern}}
+}
+
+// Between compares this column to a range using SQL BETWEEN.
+func (c *AnyColumn) Between(start, end any) BetweenExpr {
+	return BetweenExpr{
+		Left:  c,
+		Start: ValueExpr{Value: start},
+		End:   ValueExpr{Value: end},
+	}
+}
+
+// NotBetween compares this column to a range using SQL NOT BETWEEN.
+func (c *AnyColumn) NotBetween(start, end any) BetweenExpr {
+	expr := c.Between(start, end)
+	expr.Negated = true
+	return expr
+}
+
 // As aliases an expression in a SELECT list.
 func As(expr Expression, alias string) AliasExpr {
 	if expr == nil {
@@ -907,13 +979,56 @@ func As(expr Expression, alias string) AliasExpr {
 	return AliasExpr{Expr: expr, Alias: alias}
 }
 
+// NotIn compares this column to a set of Go values using SQL NOT IN.
+func (c *Column[T]) NotIn(values ...T) InExpr {
+	expr := c.In(values...)
+	expr.Negated = true
+	return expr
+}
+
+// Like compares this column to a pattern using SQL LIKE.
+func (c *Column[T]) Like(pattern string) ComparisonExpr {
+	return ComparisonExpr{Left: c, Operator: "LIKE", Right: ValueExpr{Value: pattern}}
+}
+
+// NotLike compares this column to a pattern using SQL NOT LIKE.
+func (c *Column[T]) NotLike(pattern string) ComparisonExpr {
+	return ComparisonExpr{Left: c, Operator: "NOT LIKE", Right: ValueExpr{Value: pattern}}
+}
+
+// ILike compares this column to a pattern using SQL ILIKE (case-insensitive LIKE).
+func (c *Column[T]) ILike(pattern string) ComparisonExpr {
+	return ComparisonExpr{Left: c, Operator: "ILIKE", Right: ValueExpr{Value: pattern}}
+}
+
+// NotILike compares this column to a pattern using SQL NOT ILIKE.
+func (c *Column[T]) NotILike(pattern string) ComparisonExpr {
+	return ComparisonExpr{Left: c, Operator: "NOT ILIKE", Right: ValueExpr{Value: pattern}}
+}
+
+// Between compares this column to a range using SQL BETWEEN.
+func (c *Column[T]) Between(start, end T) BetweenExpr {
+	return BetweenExpr{
+		Left:  c,
+		Start: ValueExpr{Value: start},
+		End:   ValueExpr{Value: end},
+	}
+}
+
+// NotBetween compares this column to a range using SQL NOT BETWEEN.
+func (c *Column[T]) NotBetween(start, end T) BetweenExpr {
+	expr := c.Between(start, end)
+	expr.Negated = true
+	return expr
+}
+
 // RawExpr is an escape hatch for raw SQL with bound args.
 type RawExpr struct {
 	SQL  string
 	Args []any
 }
 
-func (RawExpr) isExpression() {}
+func (RawExpr) IsExpression() {}
 
 // As aliases this raw expression in a SELECT list.
 func (r RawExpr) As(alias string) AliasExpr {
@@ -933,6 +1048,21 @@ func And(predicates ...Predicate) LogicalExpr {
 // Or combines predicates with OR.
 func Or(predicates ...Predicate) LogicalExpr {
 	return LogicalExpr{Operator: "OR", Exprs: predicates}
+}
+
+// Not negates a predicate using SQL NOT.
+func Not(predicate Predicate) NotExpr {
+	return NotExpr{Expr: predicate}
+}
+
+// Exists checks if a subquery returns any rows.
+func Exists(subquery Expression) ExistsExpr {
+	return ExistsExpr{Subquery: subquery}
+}
+
+// NotExists checks if a subquery returns no rows.
+func NotExists(subquery Expression) ExistsExpr {
+	return ExistsExpr{Subquery: subquery, Negated: true}
 }
 
 // IndexBuilder configures a table index.
@@ -1205,11 +1335,30 @@ func cloneExpressionForTable(expr Expression, table *TableDef) Expression {
 			Right:    cloneExpressionForTable(value.Right, table),
 		}
 	case InExpr:
-		cloned := InExpr{Left: cloneExpressionForTable(value.Left, table)}
+		cloned := InExpr{
+			Left:    cloneExpressionForTable(value.Left, table),
+			Negated: value.Negated,
+		}
 		for _, item := range value.Values {
 			cloned.Values = append(cloned.Values, cloneExpressionForTable(item, table))
 		}
 		return cloned
+	case BetweenExpr:
+		return BetweenExpr{
+			Left:    cloneExpressionForTable(value.Left, table),
+			Start:   cloneExpressionForTable(value.Start, table),
+			End:     cloneExpressionForTable(value.End, table),
+			Negated: value.Negated,
+		}
+	case NotExpr:
+		return NotExpr{
+			Expr: cloneExpressionForTable(value.Expr, table).(Predicate),
+		}
+	case ExistsExpr:
+		return ExistsExpr{
+			Subquery: cloneExpressionForTable(value.Subquery, table),
+			Negated:  value.Negated,
+		}
 	case NullCheckExpr:
 		return NullCheckExpr{Expr: cloneExpressionForTable(value.Expr, table), Negated: value.Negated}
 	case LogicalExpr:

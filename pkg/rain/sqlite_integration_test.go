@@ -2,6 +2,7 @@ package rain_test
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -702,6 +703,85 @@ func TestSQLiteIntegrationRichAdvancedSelectsAndPreparedQueries(t *testing.T) {
 	if err := preparedTx.Close(); err != nil {
 		t.Fatalf("close tx prepared query failed: %v", err)
 	}
+}
+
+func TestSQLiteIntegrationOperators(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db := openSQLiteTestDB(t)
+	users, _ := defineSQLiteTables()
+	createSQLiteSchema(t, ctx, db)
+
+	// Seed data
+	if _, err := db.Insert().Table(users).Values(
+		map[schema.ColumnReference]any{users.ID: 1, users.Email: "alice@example.com", users.Name: "Alice", users.Active: true},
+		map[schema.ColumnReference]any{users.ID: 2, users.Email: "bob@example.com", users.Name: "Bob", users.Active: true},
+		map[schema.ColumnReference]any{users.ID: 3, users.Email: "carol@example.com", users.Name: "Carol", users.Active: false},
+	).Exec(ctx); err != nil {
+		t.Fatalf("seed data failed: %v", err)
+	}
+
+	t.Run("NotIn", func(t *testing.T) {
+		var rows []sqliteUserRow
+		if err := db.Select().Table(users).Where(users.ID.NotIn(1, 2)).Scan(ctx, &rows); err != nil {
+			t.Fatalf("NotIn failed: %v", err)
+		}
+		if len(rows) != 1 || rows[0].Email != "carol@example.com" {
+			t.Fatalf("unexpected rows for NotIn: %#v", rows)
+		}
+	})
+
+	t.Run("Like", func(t *testing.T) {
+		var rows []sqliteUserRow
+		if err := db.Select().Table(users).Where(users.Email.Like("bob%")).Scan(ctx, &rows); err != nil {
+			t.Fatalf("Like failed: %v", err)
+		}
+		if len(rows) != 1 || rows[0].Email != "bob@example.com" {
+			t.Fatalf("unexpected rows for Like: %#v", rows)
+		}
+	})
+
+	t.Run("Between", func(t *testing.T) {
+		var rows []sqliteUserRow
+		if err := db.Select().Table(users).Where(users.ID.Between(1, 2)).Scan(ctx, &rows); err != nil {
+			t.Fatalf("Between failed: %v", err)
+		}
+		if len(rows) != 2 {
+			t.Fatalf("expected 2 rows for Between, got %d", len(rows))
+		}
+	})
+
+	t.Run("LogicalNot", func(t *testing.T) {
+		var rows []sqliteUserRow
+		if err := db.Select().Table(users).Where(schema.Not(users.Active.Eq(true))).Scan(ctx, &rows); err != nil {
+			t.Fatalf("LogicalNot failed: %v", err)
+		}
+		if len(rows) != 1 || rows[0].Email != "carol@example.com" {
+			t.Fatalf("unexpected rows for LogicalNot: %#v", rows)
+		}
+	})
+
+	t.Run("Exists", func(t *testing.T) {
+		var rows []sqliteUserRow
+		subquery := db.Select().Table(users).Where(users.ID.Eq(1))
+		if err := db.Select().Table(users).Where(schema.Exists(subquery)).Scan(ctx, &rows); err != nil {
+			t.Fatalf("Exists failed: %v", err)
+		}
+		// Exists is true for all rows if subquery returns anything
+		if len(rows) != 3 {
+			t.Fatalf("expected 3 rows for Exists(true), got %d", len(rows))
+		}
+
+		rows = nil
+		subqueryEmpty := db.Select().Table(users).Where(users.ID.Eq(999))
+		if err := db.Select().Table(users).Where(schema.Exists(subqueryEmpty)).Scan(ctx, &rows); err != nil && !errors.Is(err, sql.ErrNoRows) {
+			t.Fatalf("Exists empty failed: %v", err)
+		}
+		if len(rows) != 0 {
+			t.Fatalf("expected 0 rows for Exists(false), got %d", len(rows))
+		}
+	})
 }
 
 func TestSQLiteIntegrationRichRelationsAndTransactions(t *testing.T) {

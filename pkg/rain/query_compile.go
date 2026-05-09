@@ -205,7 +205,11 @@ func (c *compileContext) writeExpressionInContext(expr schema.Expression, contex
 		if err := c.writeExpression(value.Left); err != nil {
 			return err
 		}
-		c.writeString(" IN (")
+		if value.Negated {
+			c.writeString(" NOT IN (")
+		} else {
+			c.writeString(" IN (")
+		}
 		for idx, item := range value.Values {
 			if idx > 0 {
 				c.writeString(", ")
@@ -213,6 +217,42 @@ func (c *compileContext) writeExpressionInContext(expr schema.Expression, contex
 			if err := c.writeExpression(item); err != nil {
 				return err
 			}
+		}
+		c.writeByte(')')
+	case schema.BetweenExpr:
+		if err := c.writeExpression(value.Left); err != nil {
+			return err
+		}
+		if value.Negated {
+			c.writeString(" NOT BETWEEN ")
+		} else {
+			c.writeString(" BETWEEN ")
+		}
+		if err := c.writeExpression(value.Start); err != nil {
+			return err
+		}
+		c.writeString(" AND ")
+		if err := c.writeExpression(value.End); err != nil {
+			return err
+		}
+	case schema.NotExpr:
+		c.writeString("NOT (")
+		if err := c.writePredicate(value.Expr); err != nil {
+			return err
+		}
+		c.writeByte(')')
+	case schema.ExistsExpr:
+		if value.Negated {
+			c.writeString("NOT ")
+		}
+		c.writeString("EXISTS ")
+		if err := c.writeExpression(value.Subquery); err != nil {
+			return err
+		}
+	case *SelectQuery:
+		c.writeByte('(')
+		if err := value.writeSQL(c); err != nil {
+			return err
 		}
 		c.writeByte(')')
 	case schema.NullCheckExpr:
