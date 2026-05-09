@@ -215,6 +215,7 @@ func scanRowsAgainstTableDirect(rows *sql.Rows, dest any, table *schema.TableDef
 			scanTargets[idx] = &scanned[idx]
 		}
 
+		items := target
 		for rows.Next() {
 			for idx := range scanned {
 				scanned[idx] = nil
@@ -228,11 +229,12 @@ func scanRowsAgainstTableDirect(rows *sql.Rows, dest any, table *schema.TableDef
 				return err
 			}
 			if pointerElems {
-				target.Set(reflect.Append(target, elemPtr))
+				items = reflect.Append(items, elemPtr)
 			} else {
-				target.Set(reflect.Append(target, elemPtr.Elem()))
+				items = reflect.Append(items, elemPtr.Elem())
 			}
 		}
+		target.Set(items)
 		return rows.Err()
 	default:
 		return fmt.Errorf("rain: destination must point to a struct or slice")
