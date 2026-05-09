@@ -948,21 +948,25 @@ func (c *AnyColumn) NotIn(values ...any) InExpr {
 }
 
 // Like compares this column to a pattern using SQL LIKE.
+// Intended for string-typed columns.
 func (c *AnyColumn) Like(pattern string) ComparisonExpr {
 	return ComparisonExpr{Left: c, Operator: "LIKE", Right: ValueExpr{Value: pattern}}
 }
 
 // NotLike compares this column to a pattern using SQL NOT LIKE.
+// Intended for string-typed columns.
 func (c *AnyColumn) NotLike(pattern string) ComparisonExpr {
 	return ComparisonExpr{Left: c, Operator: "NOT LIKE", Right: ValueExpr{Value: pattern}}
 }
 
 // ILike compares this column to a pattern using SQL ILIKE (case-insensitive LIKE).
+// Intended for string-typed columns.
 func (c *AnyColumn) ILike(pattern string) ComparisonExpr {
 	return ComparisonExpr{Left: c, Operator: "ILIKE", Right: ValueExpr{Value: pattern}}
 }
 
 // NotILike compares this column to a pattern using SQL NOT ILIKE.
+// Intended for string-typed columns.
 func (c *AnyColumn) NotILike(pattern string) ComparisonExpr {
 	return ComparisonExpr{Left: c, Operator: "NOT ILIKE", Right: ValueExpr{Value: pattern}}
 }
@@ -1002,21 +1006,25 @@ func (c *Column[T]) NotIn(values ...T) InExpr {
 }
 
 // Like compares this column to a pattern using SQL LIKE.
+// Intended for string-typed columns.
 func (c *Column[T]) Like(pattern string) ComparisonExpr {
 	return ComparisonExpr{Left: c, Operator: "LIKE", Right: ValueExpr{Value: pattern}}
 }
 
 // NotLike compares this column to a pattern using SQL NOT LIKE.
+// Intended for string-typed columns.
 func (c *Column[T]) NotLike(pattern string) ComparisonExpr {
 	return ComparisonExpr{Left: c, Operator: "NOT LIKE", Right: ValueExpr{Value: pattern}}
 }
 
 // ILike compares this column to a pattern using SQL ILIKE (case-insensitive LIKE).
+// Intended for string-typed columns.
 func (c *Column[T]) ILike(pattern string) ComparisonExpr {
 	return ComparisonExpr{Left: c, Operator: "ILIKE", Right: ValueExpr{Value: pattern}}
 }
 
 // NotILike compares this column to a pattern using SQL NOT ILIKE.
+// Intended for string-typed columns.
 func (c *Column[T]) NotILike(pattern string) ComparisonExpr {
 	return ComparisonExpr{Left: c, Operator: "NOT ILIKE", Right: ValueExpr{Value: pattern}}
 }
