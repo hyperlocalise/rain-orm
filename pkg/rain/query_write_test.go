@@ -110,6 +110,38 @@ func TestInsertUpdateSetExpressionToSQL(t *testing.T) {
 	}
 }
 
+type modelWithExpr struct {
+	ID   int64
+	Name any
+}
+
+func TestInsertModelExpressionToSQL(t *testing.T) {
+	t.Parallel()
+
+	db, err := rain.OpenDialect("postgres")
+	if err != nil {
+		t.Fatalf("OpenDialect returned error: %v", err)
+	}
+	users, _ := defineTables()
+
+	sql, args, err := db.Insert().
+		Table(users).
+		Model(&modelWithExpr{Name: schema.Raw("UPPER(?)", "alice")}).
+		ToSQL()
+
+	if err != nil {
+		t.Fatalf("ToSQL failed: %v", err)
+	}
+
+	wantSQL := `INSERT INTO "users" ("name") VALUES (UPPER($1))`
+	if sql != wantSQL {
+		t.Errorf("unexpected SQL:\nwant: %s\ngot:  %s", wantSQL, sql)
+	}
+	if len(args) != 1 || args[0] != "alice" {
+		t.Errorf("expected args [alice], got %v", args)
+	}
+}
+
 func TestDialectFeatures(t *testing.T) {
 	t.Parallel()
 
