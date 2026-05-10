@@ -231,7 +231,7 @@ func (q *SelectQuery) ToSQL() (string, []any, error) {
 }
 
 func (q *SelectQuery) writeSQL(ctx *compileContext) error {
-	if len(q.ctes) > 0 {
+	if len(q.ctes) > 0 && !ctx.skipCTEs {
 		if !dialect.HasFeature(ctx.dialect.Features(), dialect.FeatureCTE) {
 			return fmt.Errorf("rain: select queries do not support CTEs for %s dialect", ctx.dialect.Name())
 		}
@@ -353,11 +353,11 @@ func (q *SelectQuery) writeCompoundOperandSQL(ctx *compileContext) error {
 		ctx.writeByte('(')
 	}
 	// CTEs must only appear at the very beginning of the entire compound query.
-	// When rendering an operand, we temporarily strip CTEs to prevent invalid SQL.
-	ctes := q.ctes
-	q.ctes = nil
+	// When rendering an operand, we signal to skip CTEs to prevent invalid SQL.
+	prevSkip := ctx.skipCTEs
+	ctx.skipCTEs = true
 	err := q.writeSQL(ctx)
-	q.ctes = ctes
+	ctx.skipCTEs = prevSkip
 	if err != nil {
 		return err
 	}
