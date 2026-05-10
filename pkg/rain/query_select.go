@@ -177,6 +177,14 @@ func (q *SelectQuery) ExceptAll(other *SelectQuery) *SelectQuery {
 }
 
 func (q *SelectQuery) wrapSetOp(operator setOperator, other *SelectQuery) *SelectQuery {
+	// If the current query is already a compound query and has no root-level modifiers,
+	// flatten the new operation into the existing one to match Drizzle's behavior.
+	if q.firstOperand != nil && len(q.order) == 0 && q.limit == 0 && q.offset == 0 {
+		newQ := *q
+		newQ.setOps = append(append([]setOperation(nil), q.setOps...), setOperation{operator: operator, query: other})
+		return &newQ
+	}
+
 	return &SelectQuery{
 		runner:       q.runner,
 		dialect:      q.dialect,
@@ -207,28 +215,6 @@ func (q *SelectQuery) ToSQL() (string, []any, error) {
 }
 
 func (q *SelectQuery) writeSQL(ctx *compileContext) error {
-	if q.firstOperand != nil {
-		if err := q.firstOperand.writeCompoundOperandSQL(ctx); err != nil {
-			return err
-		}
-		for _, setOp := range q.setOps {
-			ctx.writeByte(' ')
-			ctx.writeString(string(setOp.operator))
-			ctx.writeByte(' ')
-			if setOp.query == nil {
-				return fmt.Errorf("rain: %s requires a query", setOp.operator)
-			}
-			if err := setOp.query.writeCompoundOperandSQL(ctx); err != nil {
-				return err
-			}
-		}
-		return q.writeOrderLimit(ctx)
-	}
-
-	if q.table == nil {
-		return errors.New("rain: select query requires a table")
-	}
-
 	if len(q.ctes) > 0 {
 		if !dialect.HasFeature(ctx.dialect.Features(), dialect.FeatureCTE) {
 			return fmt.Errorf("rain: select queries do not support CTEs for %s dialect", ctx.dialect.Name())
@@ -255,6 +241,28 @@ func (q *SelectQuery) writeSQL(ctx *compileContext) error {
 			ctx.writeByte(')')
 		}
 		ctx.writeByte(' ')
+	}
+
+	if q.firstOperand != nil {
+		if err := q.firstOperand.writeCompoundOperandSQL(ctx); err != nil {
+			return err
+		}
+		for _, setOp := range q.setOps {
+			ctx.writeByte(' ')
+			ctx.writeString(string(setOp.operator))
+			ctx.writeByte(' ')
+			if setOp.query == nil {
+				return fmt.Errorf("rain: %s requires a query", setOp.operator)
+			}
+			if err := setOp.query.writeCompoundOperandSQL(ctx); err != nil {
+				return err
+			}
+		}
+		return q.writeOrderLimit(ctx)
+	}
+
+	if q.table == nil {
+		return errors.New("rain: select query requires a table")
 	}
 
 	ctx.writeString("SELECT ")
@@ -322,6 +330,8 @@ func (q *SelectQuery) writeSQL(ctx *compileContext) error {
 }
 
 func (q *SelectQuery) writeCompoundOperandSQL(ctx *compileContext) error {
+	// Use parentheses if the operand has its own ORDER BY, LIMIT, or is itself a compound query.
+	// Flattening is handled during builder chaining in wrapSetOp.
 	useParens := len(q.order) > 0 || q.limit > 0 || q.offset > 0 || q.firstOperand != nil
 	if useParens {
 		ctx.writeByte('(')

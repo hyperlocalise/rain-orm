@@ -78,7 +78,7 @@ func TestSelectSetOperationsToSQL(t *testing.T) {
 				q3 := db.Select().Table(users).Column(users.ID).Where(users.ID.Eq(int64(3)))
 				return q1.UnionAll(q2).UnionAll(q3)
 			},
-			wantSQL:  "(SELECT `users`.`id` FROM `users` WHERE `users`.`id` = ? UNION ALL SELECT `users`.`id` FROM `users` WHERE `users`.`id` = ?) UNION ALL SELECT `users`.`id` FROM `users` WHERE `users`.`id` = ?",
+			wantSQL:  "SELECT `users`.`id` FROM `users` WHERE `users`.`id` = ? UNION ALL SELECT `users`.`id` FROM `users` WHERE `users`.`id` = ? UNION ALL SELECT `users`.`id` FROM `users` WHERE `users`.`id` = ?",
 			wantArgs: []any{int64(1), int64(2), int64(3)},
 		},
 		{
@@ -90,7 +90,7 @@ func TestSelectSetOperationsToSQL(t *testing.T) {
 				q3 := db.Select().Table(users).Column(users.ID).Where(users.ID.Lt(int64(10)))
 				return q1.Intersect(q2).Except(q3)
 			},
-			wantSQL:  `(SELECT "users"."id" FROM "users" INTERSECT SELECT "users"."id" FROM "users" WHERE "users"."id" > $1) EXCEPT SELECT "users"."id" FROM "users" WHERE "users"."id" < $2`,
+			wantSQL:  `SELECT "users"."id" FROM "users" INTERSECT SELECT "users"."id" FROM "users" WHERE "users"."id" > $1 EXCEPT SELECT "users"."id" FROM "users" WHERE "users"."id" < $2`,
 			wantArgs: []any{int64(5), int64(10)},
 		},
 		{
@@ -114,6 +114,17 @@ func TestSelectSetOperationsToSQL(t *testing.T) {
 			wantSQL: `(SELECT "users"."id" FROM "users" ORDER BY "users"."id" ASC LIMIT 10) UNION (SELECT "posts"."user_id" FROM "posts" ORDER BY "posts"."user_id" DESC LIMIT 10)`,
 		},
 		{
+			name:    "set_operation_with_nested_modifiers_postgres",
+			dialect: "postgres",
+			build: func(db *rain.DB) *rain.SelectQuery {
+				q1 := db.Select().Table(users).Column(users.ID).OrderBy(users.ID.Asc()).Limit(10)
+				q2 := db.Select().Table(users).Column(users.ID).Where(users.ID.Gt(int64(100)))
+				return q1.Union(q2).OrderBy(users.ID.Desc()).Limit(5)
+			},
+			wantSQL:  `(SELECT "users"."id" FROM "users" ORDER BY "users"."id" ASC LIMIT 10) UNION SELECT "users"."id" FROM "users" WHERE "users"."id" > $1 ORDER BY "users"."id" DESC LIMIT 5`,
+			wantArgs: []any{int64(100)},
+		},
+		{
 			name:    "nested set operations (union of unions) postgres",
 			dialect: "postgres",
 			build: func(db *rain.DB) *rain.SelectQuery {
@@ -124,7 +135,7 @@ func TestSelectSetOperationsToSQL(t *testing.T) {
 				q3 := db.Select().Table(users).Column(users.ID).Where(users.ID.Eq(int64(3)))
 				return sub.Union(q3)
 			},
-			wantSQL:  `(SELECT "users"."id" FROM "users" WHERE "users"."id" = $1 UNION SELECT "users"."id" FROM "users" WHERE "users"."id" = $2) UNION SELECT "users"."id" FROM "users" WHERE "users"."id" = $3`,
+			wantSQL:  `SELECT "users"."id" FROM "users" WHERE "users"."id" = $1 UNION SELECT "users"."id" FROM "users" WHERE "users"."id" = $2 UNION SELECT "users"."id" FROM "users" WHERE "users"."id" = $3`,
 			wantArgs: []any{int64(1), int64(2), int64(3)},
 		},
 		{
