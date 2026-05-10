@@ -125,6 +125,18 @@ func TestSelectSetOperationsToSQL(t *testing.T) {
 			wantArgs: []any{int64(100)},
 		},
 		{
+			name:    "chained set operations with root modifiers postgres",
+			dialect: "postgres",
+			build: func(db *rain.DB) *rain.SelectQuery {
+				q1 := db.Select().Table(users).Column(users.ID).Where(users.ID.Eq(int64(1)))
+				q2 := db.Select().Table(users).Column(users.ID).Where(users.ID.Eq(int64(2)))
+				q3 := db.Select().Table(users).Column(users.ID).Where(users.ID.Eq(int64(3)))
+				return q1.Union(q2).Union(q3).OrderBy(users.ID.Desc())
+			},
+			wantSQL:  `SELECT "users"."id" FROM "users" WHERE "users"."id" = $1 UNION SELECT "users"."id" FROM "users" WHERE "users"."id" = $2 UNION SELECT "users"."id" FROM "users" WHERE "users"."id" = $3 ORDER BY "users"."id" DESC`,
+			wantArgs: []any{int64(1), int64(2), int64(3)},
+		},
+		{
 			name:    "nested set operations (union of unions) postgres",
 			dialect: "postgres",
 			build: func(db *rain.DB) *rain.SelectQuery {
