@@ -352,7 +352,13 @@ func (q *SelectQuery) writeCompoundOperandSQL(ctx *compileContext) error {
 	if useParens {
 		ctx.writeByte('(')
 	}
-	if err := q.writeSQL(ctx); err != nil {
+	// CTEs must only appear at the very beginning of the entire compound query.
+	// When rendering an operand, we temporarily strip CTEs to prevent invalid SQL.
+	ctes := q.ctes
+	q.ctes = nil
+	err := q.writeSQL(ctx)
+	q.ctes = ctes
+	if err != nil {
 		return err
 	}
 	if useParens {
