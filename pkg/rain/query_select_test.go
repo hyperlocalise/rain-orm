@@ -151,6 +151,63 @@ func TestSelectSetOperationsToSQL(t *testing.T) {
 			wantArgs: []any{int64(1), int64(2), int64(3)},
 		},
 		{
+			name:    "intersect all and except all postgres",
+			dialect: "postgres",
+			build: func(db *rain.DB) *rain.SelectQuery {
+				q1 := db.Select().Table(users).Column(users.ID)
+				q2 := db.Select().Table(users).Column(users.ID).Where(users.ID.Gt(int64(5)))
+				q3 := db.Select().Table(users).Column(users.ID).Where(users.ID.Lt(int64(10)))
+				return q1.IntersectAll(q2).ExceptAll(q3)
+			},
+			wantSQL:  `SELECT "users"."id" FROM "users" INTERSECT ALL SELECT "users"."id" FROM "users" WHERE "users"."id" > $1 EXCEPT ALL SELECT "users"."id" FROM "users" WHERE "users"."id" < $2`,
+			wantArgs: []any{int64(5), int64(10)},
+		},
+		{
+			name:    "compound query as subquery postgres",
+			dialect: "postgres",
+			build: func(db *rain.DB) *rain.SelectQuery {
+				q1 := db.Select().Table(users).Column(users.ID).Where(users.ID.Eq(int64(1)))
+				q2 := db.Select().Table(users).Column(users.ID).Where(users.ID.Eq(int64(2)))
+				unionQ := q1.Union(q2)
+				return db.Select().TableSubquery(unionQ, "u").Column(schema.Raw("u.id"))
+			},
+			wantSQL:  `SELECT u.id FROM (SELECT "users"."id" FROM "users" WHERE "users"."id" = $1 UNION SELECT "users"."id" FROM "users" WHERE "users"."id" = $2) AS "u"`,
+			wantArgs: []any{int64(1), int64(2)},
+		},
+		{
+			name:    "cte on operand error postgres",
+			dialect: "postgres",
+			build: func(db *rain.DB) *rain.SelectQuery {
+				cte := db.Select().Table(users).Column(users.ID)
+				q1 := db.Select().With("active", cte).Table(users).Column(users.ID)
+				q2 := db.Select().Table(users).Column(users.ID)
+				return q1.Union(q2)
+			},
+			wantErr: "compound query operand cannot contain CTEs",
+		},
+		{
+			name:    "cte on second operand error postgres",
+			dialect: "postgres",
+			build: func(db *rain.DB) *rain.SelectQuery {
+				cte := db.Select().Table(users).Column(users.ID)
+				q1 := db.Select().Table(users).Column(users.ID)
+				q2 := db.Select().With("active", cte).Table(users).Column(users.ID)
+				return q1.Union(q2)
+			},
+			wantErr: "compound query operand cannot contain CTEs",
+		},
+		{
+			name:    "simple union sqlite",
+			dialect: "sqlite",
+			build: func(db *rain.DB) *rain.SelectQuery {
+				q1 := db.Select().Table(users).Column(users.ID).Where(users.ID.Eq(int64(1)))
+				q2 := db.Select().Table(users).Column(users.ID).Where(users.ID.Eq(int64(2)))
+				return q1.Union(q2)
+			},
+			wantSQL:  `SELECT "users"."id" FROM "users" WHERE "users"."id" = ? UNION SELECT "users"."id" FROM "users" WHERE "users"."id" = ?`,
+			wantArgs: []any{int64(1), int64(2)},
+		},
+		{
 			name:    "aggregate helper fails with set operations",
 			dialect: "postgres",
 			build: func(db *rain.DB) *rain.SelectQuery {

@@ -190,15 +190,21 @@ func (q *SelectQuery) clone() *SelectQuery {
 	return &newQ
 }
 
+func (q *SelectQuery) isBareCompound() bool {
+	return q.firstOperand != nil &&
+		len(q.order) == 0 && q.limit == 0 && q.offset == 0 &&
+		!q.distinct && len(q.cols) == 0 && q.table == nil &&
+		len(q.where) == 0 && len(q.joins) == 0 &&
+		len(q.groupBy) == 0 && len(q.having) == 0 &&
+		len(q.relationNames) == 0 && len(q.ctes) == 0
+}
+
 func (q *SelectQuery) wrapSetOp(operator setOperator, other *SelectQuery) *SelectQuery {
 	// If the current query is already a compound query and has no root-level modifiers,
 	// flatten the new operation into the existing one to match Drizzle's behavior.
-	if q.firstOperand != nil && len(q.order) == 0 && q.limit == 0 && q.offset == 0 &&
-		!q.distinct && len(q.cols) == 0 && q.table == nil && len(q.where) == 0 &&
-		len(q.joins) == 0 && len(q.groupBy) == 0 && len(q.having) == 0 && len(q.relationNames) == 0 &&
-		len(q.ctes) == 0 {
+	if q.isBareCompound() {
 		newQ := q.clone()
-		newQ.setOps = append(append([]setOperation(nil), q.setOps...), setOperation{operator: operator, query: other})
+		newQ.setOps = append(newQ.setOps, setOperation{operator: operator, query: other})
 		return newQ
 	}
 
@@ -206,6 +212,7 @@ func (q *SelectQuery) wrapSetOp(operator setOperator, other *SelectQuery) *Selec
 		runner:       q.runner,
 		dialect:      q.dialect,
 		cache:        q.cache,
+		cacheOptions: q.cacheOptions,
 		firstOperand: q,
 		setOps:       []setOperation{{operator: operator, query: other}},
 	}
@@ -347,6 +354,9 @@ func (q *SelectQuery) writeSQL(ctx *compileContext) error {
 }
 
 func (q *SelectQuery) writeCompoundOperandSQL(ctx *compileContext) error {
+	if len(q.ctes) > 0 {
+		return fmt.Errorf("rain: compound query operand cannot contain CTEs")
+	}
 	// Use parentheses if the operand has its own ORDER BY, LIMIT, or is itself a compound query.
 	// Flattening is handled during builder chaining in wrapSetOp.
 	useParens := len(q.order) > 0 || q.limit > 0 || q.offset > 0 || q.firstOperand != nil
@@ -357,8 +367,8 @@ func (q *SelectQuery) writeCompoundOperandSQL(ctx *compileContext) error {
 	// When rendering an operand, we signal to skip CTEs to prevent invalid SQL.
 	prevSkip := ctx.skipCTEs
 	ctx.skipCTEs = true
+	defer func() { ctx.skipCTEs = prevSkip }()
 	err := q.writeSQL(ctx)
-	ctx.skipCTEs = prevSkip
 	if err != nil {
 		return err
 	}
