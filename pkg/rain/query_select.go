@@ -195,7 +195,8 @@ func (q *SelectQuery) wrapSetOp(operator setOperator, other *SelectQuery) *Selec
 	// flatten the new operation into the existing one to match Drizzle's behavior.
 	if q.firstOperand != nil && len(q.order) == 0 && q.limit == 0 && q.offset == 0 &&
 		!q.distinct && len(q.cols) == 0 && q.table == nil && len(q.where) == 0 &&
-		len(q.joins) == 0 && len(q.groupBy) == 0 && len(q.having) == 0 && len(q.relationNames) == 0 {
+		len(q.joins) == 0 && len(q.groupBy) == 0 && len(q.having) == 0 && len(q.relationNames) == 0 &&
+		len(q.ctes) == 0 {
 		newQ := q.clone()
 		newQ.setOps = append(append([]setOperation(nil), q.setOps...), setOperation{operator: operator, query: other})
 		return newQ
