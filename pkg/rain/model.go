@@ -31,6 +31,7 @@ type scanColumnPlan struct {
 	discard    bool
 	columnName string
 	fieldIndex []int
+	columnDef  *schema.ColumnDef
 }
 
 type rowScanPlan struct {
@@ -253,11 +254,7 @@ func scanDirectRowWithPlan(scanned []any, target reflect.Value, plan *rowScanPla
 		if err != nil {
 			return err
 		}
-		var columnDef *schema.ColumnDef
-		if table != nil {
-			columnDef, _ = table.ColumnByName(column.columnName)
-		}
-		if err := assignRawValueToFieldWithColumn(field, scanned[idx], columnDef); err != nil {
+		if err := assignRawValueToFieldWithColumn(field, scanned[idx], column.columnDef); err != nil {
 			return err
 		}
 	}
@@ -348,7 +345,17 @@ func newRowScanPlanForColumns(cols []string, modelType reflect.Type, table *sche
 			plan.columns[idx] = scanColumnPlan{discard: true, columnName: name}
 			continue
 		}
-		plan.columns[idx] = scanColumnPlan{columnName: name, fieldIndex: fieldInfo.index}
+
+		var columnDef *schema.ColumnDef
+		if table != nil {
+			columnDef, _ = table.ColumnByName(name)
+		}
+
+		plan.columns[idx] = scanColumnPlan{
+			columnName: name,
+			fieldIndex: fieldInfo.index,
+			columnDef:  columnDef,
+		}
 	}
 	return plan, nil
 }
@@ -399,11 +406,7 @@ func scanCachedRowWithPlan(row []cachedValue, target reflect.Value, plan *rowSca
 		if err != nil {
 			return err
 		}
-		var columnDef *schema.ColumnDef
-		if table != nil {
-			columnDef, _ = table.ColumnByName(column.columnName)
-		}
-		if err := assignCachedValueToField(field, row[idx], columnDef); err != nil {
+		if err := assignCachedValueToField(field, row[idx], column.columnDef); err != nil {
 			return err
 		}
 	}
@@ -411,6 +414,10 @@ func scanCachedRowWithPlan(row []cachedValue, target reflect.Value, plan *rowSca
 }
 
 func fieldByIndexAlloc(value reflect.Value, index []int) (reflect.Value, error) {
+	if len(index) == 1 {
+		return value.Field(index[0]), nil
+	}
+
 	current := value
 	for position, part := range index {
 		field := current.Field(part)
