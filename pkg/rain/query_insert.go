@@ -66,7 +66,14 @@ func (q *InsertQuery) Models(models any) *InsertQuery {
 
 // Set adds an explicit column assignment.
 func (q *InsertQuery) Set(column schema.ColumnReference, value any) *InsertQuery {
-	q.values = append(q.values, assignment{column: column, value: schema.ValueExpr{Value: value}})
+	var expr schema.Expression
+	if e, ok := value.(schema.Expression); ok {
+		expr = e
+	} else {
+		expr = schema.ValueExpr{Value: value}
+	}
+
+	q.values = append(q.values, assignment{column: column, value: expr})
 	return q
 }
 
@@ -314,7 +321,13 @@ func (q *InsertQuery) assignmentsFromRows() ([][]assignment, error) {
 
 		overrides := make([]assignment, 0, len(row))
 		for column, value := range row {
-			overrides = append(overrides, assignment{column: column, value: schema.ValueExpr{Value: value}})
+			var expr schema.Expression
+			if e, ok := value.(schema.Expression); ok {
+				expr = e
+			} else {
+				expr = schema.ValueExpr{Value: value}
+			}
+			overrides = append(overrides, assignment{column: column, value: expr})
 		}
 
 		assignments, err := mergeAssignments(q.table, nil, overrides)

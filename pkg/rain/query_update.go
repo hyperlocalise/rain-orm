@@ -28,7 +28,14 @@ func (q *UpdateQuery) Table(table schema.TableReference) *UpdateQuery {
 
 // Set adds an explicit typed assignment.
 func (q *UpdateQuery) Set(column schema.ColumnReference, value any) *UpdateQuery {
-	q.values = append(q.values, assignment{column: column, value: schema.ValueExpr{Value: value}})
+	var expr schema.Expression
+	if e, ok := value.(schema.Expression); ok {
+		expr = e
+	} else {
+		expr = schema.ValueExpr{Value: value}
+	}
+
+	q.values = append(q.values, assignment{column: column, value: expr})
 	return q
 }
 
