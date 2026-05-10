@@ -49,12 +49,13 @@ func TestSelectSetOperationsToSQL(t *testing.T) {
 	users, posts := defineTables()
 
 	type tc struct {
-		name     string
-		dialect  string
-		build    func(*rain.DB) *rain.SelectQuery
-		wantSQL  string
-		wantArgs []any
-		wantErr  string
+		name           string
+		dialect        string
+		build          func(*rain.DB) *rain.SelectQuery
+		wantSQL        string
+		wantArgs       []any
+		wantErr        string
+		checkAggregate bool
 	}
 
 	cases := []tc{
@@ -215,7 +216,8 @@ func TestSelectSetOperationsToSQL(t *testing.T) {
 				q2 := db.Select().Table(users)
 				return q1.Union(q2)
 			},
-			wantErr: "aggregate helpers do not support compound queries",
+			wantErr:        "aggregate helpers do not support compound queries",
+			checkAggregate: true,
 		},
 	}
 
@@ -231,7 +233,7 @@ func TestSelectSetOperationsToSQL(t *testing.T) {
 
 			q := tt.build(db)
 
-			if strings.Contains(tt.name, "aggregate helper fails") {
+			if tt.checkAggregate {
 				_, err := q.Count(context.Background())
 				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
 					t.Fatalf("expected error containing %q, got %v", tt.wantErr, err)
