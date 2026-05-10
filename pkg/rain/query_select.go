@@ -84,12 +84,6 @@ func (q *SelectQuery) LeftJoinSubquery(query *SelectQuery, alias string, on sche
 
 // Distinct marks the SELECT query as DISTINCT.
 func (q *SelectQuery) Distinct() *SelectQuery {
-	if q.firstOperand != nil {
-		newQ := new(SelectQuery)
-		*newQ = *q
-		newQ.distinct = true
-		return newQ
-	}
 	q.distinct = true
 	return q
 }
@@ -114,36 +108,18 @@ func (q *SelectQuery) With(name string, query *SelectQuery) *SelectQuery {
 
 // OrderBy appends ORDER BY expressions.
 func (q *SelectQuery) OrderBy(order ...schema.OrderExpr) *SelectQuery {
-	if q.firstOperand != nil {
-		newQ := new(SelectQuery)
-		*newQ = *q
-		newQ.order = append(append([]schema.OrderExpr(nil), q.order...), order...)
-		return newQ
-	}
 	q.order = append(q.order, order...)
 	return q
 }
 
 // Limit sets the LIMIT clause.
 func (q *SelectQuery) Limit(limit int) *SelectQuery {
-	if q.firstOperand != nil {
-		newQ := new(SelectQuery)
-		*newQ = *q
-		newQ.limit = limit
-		return newQ
-	}
 	q.limit = limit
 	return q
 }
 
 // Offset sets the OFFSET clause.
 func (q *SelectQuery) Offset(offset int) *SelectQuery {
-	if q.firstOperand != nil {
-		newQ := new(SelectQuery)
-		*newQ = *q
-		newQ.offset = offset
-		return newQ
-	}
 	q.offset = offset
 	return q
 }
@@ -200,12 +176,27 @@ func (q *SelectQuery) ExceptAll(other *SelectQuery) *SelectQuery {
 	return q.wrapSetOp(setOpExceptAll, other)
 }
 
+func (q *SelectQuery) clone() *SelectQuery {
+	newQ := *q
+	newQ.cols = append([]schema.Expression(nil), q.cols...)
+	newQ.where = append([]schema.Predicate(nil), q.where...)
+	newQ.joins = append([]joinClause(nil), q.joins...)
+	newQ.order = append([]schema.OrderExpr(nil), q.order...)
+	newQ.groupBy = append([]schema.Expression(nil), q.groupBy...)
+	newQ.having = append([]schema.Predicate(nil), q.having...)
+	newQ.ctes = append([]cteDefinition(nil), q.ctes...)
+	newQ.setOps = append([]setOperation(nil), q.setOps...)
+	newQ.relationNames = append([]string(nil), q.relationNames...)
+	return &newQ
+}
+
 func (q *SelectQuery) wrapSetOp(operator setOperator, other *SelectQuery) *SelectQuery {
 	// If the current query is already a compound query and has no root-level modifiers,
 	// flatten the new operation into the existing one to match Drizzle's behavior.
-	if q.firstOperand != nil && len(q.order) == 0 && q.limit == 0 && q.offset == 0 {
-		newQ := new(SelectQuery)
-		*newQ = *q
+	if q.firstOperand != nil && len(q.order) == 0 && q.limit == 0 && q.offset == 0 &&
+		!q.distinct && len(q.cols) == 0 && q.table == nil && len(q.where) == 0 &&
+		len(q.joins) == 0 && len(q.groupBy) == 0 && len(q.having) == 0 && len(q.relationNames) == 0 {
+		newQ := q.clone()
 		newQ.setOps = append(append([]setOperation(nil), q.setOps...), setOperation{operator: operator, query: other})
 		return newQ
 	}
@@ -627,6 +618,33 @@ func (q *SelectQuery) toAggregateSQL(selection string) (string, []any, error) {
 func (q *SelectQuery) compile() (compiledQuery, error) {
 	if q.table == nil && q.firstOperand == nil {
 		return compiledQuery{}, errors.New("rain: select query requires a table")
+	}
+
+	if q.firstOperand != nil {
+		if q.distinct {
+			return compiledQuery{}, errors.New("rain: compound queries do not support DISTINCT")
+		}
+		if len(q.cols) > 0 {
+			return compiledQuery{}, errors.New("rain: compound queries do not support Column()")
+		}
+		if q.table != nil {
+			return compiledQuery{}, errors.New("rain: compound queries do not support Table() (already has operands)")
+		}
+		if len(q.where) > 0 {
+			return compiledQuery{}, errors.New("rain: compound queries do not support WHERE")
+		}
+		if len(q.joins) > 0 {
+			return compiledQuery{}, errors.New("rain: compound queries do not support JOIN")
+		}
+		if len(q.groupBy) > 0 {
+			return compiledQuery{}, errors.New("rain: compound queries do not support GROUP BY")
+		}
+		if len(q.having) > 0 {
+			return compiledQuery{}, errors.New("rain: compound queries do not support HAVING")
+		}
+		if len(q.relationNames) > 0 {
+			return compiledQuery{}, errors.New("rain: compound queries do not support WithRelations()")
+		}
 	}
 
 	ctx := newCompileContext(q.dialect)
