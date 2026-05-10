@@ -76,10 +76,11 @@ func (q compiledQuery) bind(args PreparedArgs) ([]any, error) {
 }
 
 type compileContext struct {
-	builder strings.Builder
-	dialect dialect.Dialect
-	argPlan []compiledArg
-	err     error
+	builder  strings.Builder
+	dialect  dialect.Dialect
+	argPlan  []compiledArg
+	err      error
+	skipCTEs bool
 }
 
 func newCompileContext(d dialect.Dialect) *compileContext {

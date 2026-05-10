@@ -1,6 +1,7 @@
 package rain_test
 
 import (
+	"context"
 	"reflect"
 	"strings"
 	"testing"
@@ -39,6 +40,229 @@ func TestSelectToSQL(t *testing.T) {
 	}
 	if len(args) != 1 || args[0] != true {
 		t.Fatalf("unexpected args: %#v", args)
+	}
+}
+
+func TestSelectSetOperationsToSQL(t *testing.T) {
+	t.Parallel()
+
+	users, posts := defineTables()
+
+	type tc struct {
+		name           string
+		dialect        string
+		build          func(*rain.DB) *rain.SelectQuery
+		wantSQL        string
+		wantArgs       []any
+		wantErr        string
+		checkAggregate bool
+	}
+
+	cases := []tc{
+		{
+			name:    "simple union postgres",
+			dialect: "postgres",
+			build: func(db *rain.DB) *rain.SelectQuery {
+				q1 := db.Select().Table(users).Column(users.ID).Where(users.ID.Eq(int64(1)))
+				q2 := db.Select().Table(users).Column(users.ID).Where(users.ID.Eq(int64(2)))
+				return q1.Union(q2)
+			},
+			wantSQL:  `SELECT "users"."id" FROM "users" WHERE "users"."id" = $1 UNION SELECT "users"."id" FROM "users" WHERE "users"."id" = $2`,
+			wantArgs: []any{int64(1), int64(2)},
+		},
+		{
+			name:    "union all with multiple operands mysql",
+			dialect: "mysql",
+			build: func(db *rain.DB) *rain.SelectQuery {
+				q1 := db.Select().Table(users).Column(users.ID).Where(users.ID.Eq(int64(1)))
+				q2 := db.Select().Table(users).Column(users.ID).Where(users.ID.Eq(int64(2)))
+				q3 := db.Select().Table(users).Column(users.ID).Where(users.ID.Eq(int64(3)))
+				return q1.UnionAll(q2).UnionAll(q3)
+			},
+			wantSQL:  "SELECT `users`.`id` FROM `users` WHERE `users`.`id` = ? UNION ALL SELECT `users`.`id` FROM `users` WHERE `users`.`id` = ? UNION ALL SELECT `users`.`id` FROM `users` WHERE `users`.`id` = ?",
+			wantArgs: []any{int64(1), int64(2), int64(3)},
+		},
+		{
+			name:    "intersect and except postgres",
+			dialect: "postgres",
+			build: func(db *rain.DB) *rain.SelectQuery {
+				q1 := db.Select().Table(users).Column(users.ID)
+				q2 := db.Select().Table(users).Column(users.ID).Where(users.ID.Gt(int64(5)))
+				q3 := db.Select().Table(users).Column(users.ID).Where(users.ID.Lt(int64(10)))
+				return q1.Intersect(q2).Except(q3)
+			},
+			wantSQL:  `SELECT "users"."id" FROM "users" INTERSECT SELECT "users"."id" FROM "users" WHERE "users"."id" > $1 EXCEPT SELECT "users"."id" FROM "users" WHERE "users"."id" < $2`,
+			wantArgs: []any{int64(5), int64(10)},
+		},
+		{
+			name:    "set operation with root order and limit postgres",
+			dialect: "postgres",
+			build: func(db *rain.DB) *rain.SelectQuery {
+				q1 := db.Select().Table(users).Column(users.ID)
+				q2 := db.Select().Table(posts).Column(posts.UserID)
+				return q1.Union(q2).OrderBy(users.ID.Desc()).Limit(5)
+			},
+			wantSQL: `SELECT "users"."id" FROM "users" UNION SELECT "posts"."user_id" FROM "posts" ORDER BY "users"."id" DESC LIMIT 5`,
+		},
+		{
+			name:    "set operation with operand order and limit postgres",
+			dialect: "postgres",
+			build: func(db *rain.DB) *rain.SelectQuery {
+				q1 := db.Select().Table(users).Column(users.ID).OrderBy(users.ID.Asc()).Limit(10)
+				q2 := db.Select().Table(posts).Column(posts.UserID).OrderBy(posts.UserID.Desc()).Limit(10)
+				return q1.Union(q2)
+			},
+			wantSQL: `(SELECT "users"."id" FROM "users" ORDER BY "users"."id" ASC LIMIT 10) UNION (SELECT "posts"."user_id" FROM "posts" ORDER BY "posts"."user_id" DESC LIMIT 10)`,
+		},
+		{
+			name:    "set_operation_with_nested_modifiers_postgres",
+			dialect: "postgres",
+			build: func(db *rain.DB) *rain.SelectQuery {
+				q1 := db.Select().Table(users).Column(users.ID).OrderBy(users.ID.Asc()).Limit(10)
+				q2 := db.Select().Table(users).Column(users.ID).Where(users.ID.Gt(int64(100)))
+				return q1.Union(q2).OrderBy(users.ID.Desc()).Limit(5)
+			},
+			wantSQL:  `(SELECT "users"."id" FROM "users" ORDER BY "users"."id" ASC LIMIT 10) UNION SELECT "users"."id" FROM "users" WHERE "users"."id" > $1 ORDER BY "users"."id" DESC LIMIT 5`,
+			wantArgs: []any{int64(100)},
+		},
+		{
+			name:    "chained set operations with root modifiers postgres",
+			dialect: "postgres",
+			build: func(db *rain.DB) *rain.SelectQuery {
+				q1 := db.Select().Table(users).Column(users.ID).Where(users.ID.Eq(int64(1)))
+				q2 := db.Select().Table(users).Column(users.ID).Where(users.ID.Eq(int64(2)))
+				q3 := db.Select().Table(users).Column(users.ID).Where(users.ID.Eq(int64(3)))
+				return q1.Union(q2).Union(q3).OrderBy(users.ID.Desc())
+			},
+			wantSQL:  `SELECT "users"."id" FROM "users" WHERE "users"."id" = $1 UNION SELECT "users"."id" FROM "users" WHERE "users"."id" = $2 UNION SELECT "users"."id" FROM "users" WHERE "users"."id" = $3 ORDER BY "users"."id" DESC`,
+			wantArgs: []any{int64(1), int64(2), int64(3)},
+		},
+		{
+			name:    "nested set operations (union of unions) postgres",
+			dialect: "postgres",
+			build: func(db *rain.DB) *rain.SelectQuery {
+				q1 := db.Select().Table(users).Column(users.ID).Where(users.ID.Eq(int64(1)))
+				q2 := db.Select().Table(users).Column(users.ID).Where(users.ID.Eq(int64(2)))
+				sub := q1.Union(q2)
+
+				q3 := db.Select().Table(users).Column(users.ID).Where(users.ID.Eq(int64(3)))
+				return sub.Union(q3)
+			},
+			wantSQL:  `SELECT "users"."id" FROM "users" WHERE "users"."id" = $1 UNION SELECT "users"."id" FROM "users" WHERE "users"."id" = $2 UNION SELECT "users"."id" FROM "users" WHERE "users"."id" = $3`,
+			wantArgs: []any{int64(1), int64(2), int64(3)},
+		},
+		{
+			name:    "intersect all and except all postgres",
+			dialect: "postgres",
+			build: func(db *rain.DB) *rain.SelectQuery {
+				q1 := db.Select().Table(users).Column(users.ID)
+				q2 := db.Select().Table(users).Column(users.ID).Where(users.ID.Gt(int64(5)))
+				q3 := db.Select().Table(users).Column(users.ID).Where(users.ID.Lt(int64(10)))
+				return q1.IntersectAll(q2).ExceptAll(q3)
+			},
+			wantSQL:  `SELECT "users"."id" FROM "users" INTERSECT ALL SELECT "users"."id" FROM "users" WHERE "users"."id" > $1 EXCEPT ALL SELECT "users"."id" FROM "users" WHERE "users"."id" < $2`,
+			wantArgs: []any{int64(5), int64(10)},
+		},
+		{
+			name:    "compound query as subquery postgres",
+			dialect: "postgres",
+			build: func(db *rain.DB) *rain.SelectQuery {
+				q1 := db.Select().Table(users).Column(users.ID).Where(users.ID.Eq(int64(1)))
+				q2 := db.Select().Table(users).Column(users.ID).Where(users.ID.Eq(int64(2)))
+				unionQ := q1.Union(q2)
+				return db.Select().TableSubquery(unionQ, "u").Column(schema.Raw("u.id"))
+			},
+			wantSQL:  `SELECT u.id FROM (SELECT "users"."id" FROM "users" WHERE "users"."id" = $1 UNION SELECT "users"."id" FROM "users" WHERE "users"."id" = $2) AS "u"`,
+			wantArgs: []any{int64(1), int64(2)},
+		},
+		{
+			name:    "cte on operand error postgres",
+			dialect: "postgres",
+			build: func(db *rain.DB) *rain.SelectQuery {
+				cte := db.Select().Table(users).Column(users.ID)
+				q1 := db.Select().With("active", cte).Table(users).Column(users.ID)
+				q2 := db.Select().Table(users).Column(users.ID)
+				return q1.Union(q2)
+			},
+			wantErr: "compound query operand cannot contain CTEs",
+		},
+		{
+			name:    "cte on second operand error postgres",
+			dialect: "postgres",
+			build: func(db *rain.DB) *rain.SelectQuery {
+				cte := db.Select().Table(users).Column(users.ID)
+				q1 := db.Select().Table(users).Column(users.ID)
+				q2 := db.Select().With("active", cte).Table(users).Column(users.ID)
+				return q1.Union(q2)
+			},
+			wantErr: "compound query operand cannot contain CTEs",
+		},
+		{
+			name:    "simple union sqlite",
+			dialect: "sqlite",
+			build: func(db *rain.DB) *rain.SelectQuery {
+				q1 := db.Select().Table(users).Column(users.ID).Where(users.ID.Eq(int64(1)))
+				q2 := db.Select().Table(users).Column(users.ID).Where(users.ID.Eq(int64(2)))
+				return q1.Union(q2)
+			},
+			wantSQL:  `SELECT "users"."id" FROM "users" WHERE "users"."id" = ? UNION SELECT "users"."id" FROM "users" WHERE "users"."id" = ?`,
+			wantArgs: []any{int64(1), int64(2)},
+		},
+		{
+			name:    "aggregate helper fails with set operations",
+			dialect: "postgres",
+			build: func(db *rain.DB) *rain.SelectQuery {
+				q1 := db.Select().Table(users)
+				q2 := db.Select().Table(users)
+				return q1.Union(q2)
+			},
+			wantErr:        "aggregate helpers do not support compound queries",
+			checkAggregate: true,
+		},
+	}
+
+	for _, tt := range cases {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			db, err := rain.OpenDialect(tt.dialect)
+			if err != nil {
+				t.Fatalf("OpenDialect returned error: %v", err)
+			}
+
+			q := tt.build(db)
+
+			if tt.checkAggregate {
+				_, err := q.Count(context.Background())
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("expected error containing %q, got %v", tt.wantErr, err)
+				}
+				return
+			}
+
+			sqlText, args, err := q.ToSQL()
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("expected error containing %q, got %v", tt.wantErr, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ToSQL returned error: %v", err)
+			}
+			if sqlText != tt.wantSQL {
+				t.Fatalf("unexpected SQL:\nwant: %s\ngot:  %s", tt.wantSQL, sqlText)
+			}
+			if len(args) != len(tt.wantArgs) {
+				t.Fatalf("unexpected arg count: want %d got %d (%#v)", len(tt.wantArgs), len(args), args)
+			}
+			for idx := range tt.wantArgs {
+				if args[idx] != tt.wantArgs[idx] {
+					t.Fatalf("unexpected arg[%d]: want %#v got %#v", idx, tt.wantArgs[idx], args[idx])
+				}
+			}
+		})
 	}
 }
 

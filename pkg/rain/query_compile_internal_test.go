@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/hyperlocalise/rain-orm/pkg/dialect"
 	"github.com/hyperlocalise/rain-orm/pkg/schema"
@@ -438,6 +439,72 @@ func TestNewOperatorsSQL(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestCompoundQueryInternals(t *testing.T) {
+	t.Parallel()
+
+	users, _ := defineInternalQueryTables()
+	d := dialectForTest(t, "postgres")
+
+	t.Run("cacheOptions preserved in non-flattening wrapSetOp", func(t *testing.T) {
+		q1 := &SelectQuery{
+			dialect:      d,
+			table:        tableDefSource{table: users.TableDef()},
+			cacheOptions: &queryCacheOptions{ttl: 5 * time.Minute},
+		}
+		q2 := &SelectQuery{dialect: d, table: tableDefSource{table: users.TableDef()}}
+		union := q1.Union(q2)
+		if union.cacheOptions == nil || union.cacheOptions.ttl != 5*time.Minute {
+			t.Fatalf("expected cacheOptions to propagate, got %#v", union.cacheOptions)
+		}
+	})
+
+	t.Run("cacheOptions preserved in flattening wrapSetOp", func(t *testing.T) {
+		q1 := &SelectQuery{dialect: d, table: tableDefSource{table: users.TableDef()}}
+		q2 := &SelectQuery{dialect: d, table: tableDefSource{table: users.TableDef()}}
+		q3 := &SelectQuery{dialect: d, table: tableDefSource{table: users.TableDef()}}
+		base := q1.Union(q2)
+		base.cacheOptions = &queryCacheOptions{ttl: 5 * time.Minute}
+		union := base.Union(q3)
+		if union.cacheOptions == nil || union.cacheOptions.ttl != 5*time.Minute {
+			t.Fatalf("expected cacheOptions to propagate through flatten, got %#v", union.cacheOptions)
+		}
+	})
+
+	t.Run("compileExists on compound query", func(t *testing.T) {
+		q1 := &SelectQuery{
+			dialect: d,
+			table:   tableDefSource{table: users.TableDef()},
+			where:   []schema.Predicate{users.ID.Eq(1)},
+		}
+		q2 := &SelectQuery{
+			dialect: d,
+			table:   tableDefSource{table: users.TableDef()},
+			where:   []schema.Predicate{users.ID.Eq(2)},
+		}
+		union := q1.Union(q2)
+		compiled, err := union.compileExists()
+		if err != nil {
+			t.Fatalf("compileExists failed: %v", err)
+		}
+		want := `SELECT EXISTS(SELECT * FROM "users" WHERE "users"."id" = $1 UNION SELECT * FROM "users" WHERE "users"."id" = $2)`
+		if compiled.sql != want {
+			t.Fatalf("unexpected exists SQL:\nwant: %s\ngot:  %s", want, compiled.sql)
+		}
+	})
+
+	t.Run("isBareCompound", func(t *testing.T) {
+		op := &SelectQuery{dialect: d, table: tableDefSource{table: users.TableDef()}}
+		bare := &SelectQuery{dialect: d, firstOperand: op}
+		if !bare.isBareCompound() {
+			t.Fatalf("expected bare compound")
+		}
+		withOrder := &SelectQuery{dialect: d, firstOperand: op, order: []schema.OrderExpr{{}}}
+		if withOrder.isBareCompound() {
+			t.Fatalf("expected non-bare with order")
+		}
+	})
 }
 
 func dialectForTest(t *testing.T, driver string) dialect.Dialect {
