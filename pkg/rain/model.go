@@ -31,6 +31,7 @@ type scanColumnPlan struct {
 	discard    bool
 	columnName string
 	fieldIndex []int
+	columnDef  *schema.ColumnDef
 }
 
 type rowScanPlan struct {
@@ -197,7 +198,7 @@ func scanRowsAgainstTableDirect(rows *sql.Rows, dest any, table *schema.TableDef
 			return err
 		}
 
-		return scanDirectRowWithPlan(scanned, target, plan, table)
+		return scanDirectRowWithPlan(scanned, target, plan)
 	case reflect.Slice:
 		elemType := target.Type().Elem()
 		structType, pointerElems, err := sliceElementStructType(elemType)
@@ -225,7 +226,7 @@ func scanRowsAgainstTableDirect(rows *sql.Rows, dest any, table *schema.TableDef
 			}
 
 			elemPtr := reflect.New(structType)
-			if err := scanDirectRowWithPlan(scanned, elemPtr.Elem(), plan, table); err != nil {
+			if err := scanDirectRowWithPlan(scanned, elemPtr.Elem(), plan); err != nil {
 				return err
 			}
 			if pointerElems {
@@ -244,7 +245,7 @@ func scanRowsAgainstTableDirect(rows *sql.Rows, dest any, table *schema.TableDef
 	}
 }
 
-func scanDirectRowWithPlan(scanned []any, target reflect.Value, plan *rowScanPlan, table *schema.TableDef) error {
+func scanDirectRowWithPlan(scanned []any, target reflect.Value, plan *rowScanPlan) error {
 	for idx, column := range plan.columns {
 		if column.discard {
 			continue
@@ -253,11 +254,7 @@ func scanDirectRowWithPlan(scanned []any, target reflect.Value, plan *rowScanPla
 		if err != nil {
 			return err
 		}
-		var columnDef *schema.ColumnDef
-		if table != nil {
-			columnDef, _ = table.ColumnByName(column.columnName)
-		}
-		if err := assignRawValueToFieldWithColumn(field, scanned[idx], columnDef); err != nil {
+		if err := assignRawValueToFieldWithColumn(field, scanned[idx], column.columnDef); err != nil {
 			return err
 		}
 	}
@@ -265,9 +262,7 @@ func scanDirectRowWithPlan(scanned []any, target reflect.Value, plan *rowScanPla
 }
 
 func assignRawValueToFieldWithColumn(field reflect.Value, raw any, column *schema.ColumnDef) error {
-	// If it's a JSON column and we got a string/bytes, it might need special handling in assignRawValueToField
-	// but currently assignRawValueToField doesn't take column.
-	// We can update assignRawValueToField or handle it here.
+	// Handle JSON columns which might be returned as strings by some drivers.
 	if column != nil && (column.Type.DataType == schema.TypeJSON || column.Type.DataType == schema.TypeJSONB) {
 		if s, ok := raw.(string); ok {
 			raw = []byte(s)
@@ -292,7 +287,7 @@ func scanCachedRowsAgainstTable(result *cachedSelectRows, dest any, table *schem
 		if len(result.Rows) == 0 {
 			return sql.ErrNoRows
 		}
-		if err := scanCachedRowWithPlan(result.Rows[0], target, plan, table); err != nil {
+		if err := scanCachedRowWithPlan(result.Rows[0], target, plan); err != nil {
 			return err
 		}
 		return nil
@@ -308,7 +303,7 @@ func scanCachedRowsAgainstTable(result *cachedSelectRows, dest any, table *schem
 		}
 		for _, row := range result.Rows {
 			elemPtr := reflect.New(structType)
-			if err := scanCachedRowWithPlan(row, elemPtr.Elem(), plan, table); err != nil {
+			if err := scanCachedRowWithPlan(row, elemPtr.Elem(), plan); err != nil {
 				return err
 			}
 			if pointerElems {
@@ -348,7 +343,17 @@ func newRowScanPlanForColumns(cols []string, modelType reflect.Type, table *sche
 			plan.columns[idx] = scanColumnPlan{discard: true, columnName: name}
 			continue
 		}
-		plan.columns[idx] = scanColumnPlan{columnName: name, fieldIndex: fieldInfo.index}
+
+		var columnDef *schema.ColumnDef
+		if table != nil {
+			columnDef, _ = table.ColumnByName(name)
+		}
+
+		plan.columns[idx] = scanColumnPlan{
+			columnName: name,
+			fieldIndex: fieldInfo.index,
+			columnDef:  columnDef,
+		}
 	}
 	return plan, nil
 }
@@ -390,7 +395,7 @@ func readCachedSelectRows(rows *sql.Rows) (*cachedSelectRows, error) {
 	return result, nil
 }
 
-func scanCachedRowWithPlan(row []cachedValue, target reflect.Value, plan *rowScanPlan, table *schema.TableDef) error {
+func scanCachedRowWithPlan(row []cachedValue, target reflect.Value, plan *rowScanPlan) error {
 	for idx, column := range plan.columns {
 		if column.discard {
 			continue
@@ -399,11 +404,7 @@ func scanCachedRowWithPlan(row []cachedValue, target reflect.Value, plan *rowSca
 		if err != nil {
 			return err
 		}
-		var columnDef *schema.ColumnDef
-		if table != nil {
-			columnDef, _ = table.ColumnByName(column.columnName)
-		}
-		if err := assignCachedValueToField(field, row[idx], columnDef); err != nil {
+		if err := assignCachedValueToField(field, row[idx], column.columnDef); err != nil {
 			return err
 		}
 	}
@@ -411,6 +412,10 @@ func scanCachedRowWithPlan(row []cachedValue, target reflect.Value, plan *rowSca
 }
 
 func fieldByIndexAlloc(value reflect.Value, index []int) (reflect.Value, error) {
+	if len(index) == 1 {
+		return value.Field(index[0]), nil
+	}
+
 	current := value
 	for position, part := range index {
 		field := current.Field(part)
