@@ -25,6 +25,8 @@ type SelectQuery struct {
 	groupBy       []schema.Expression
 	having        []schema.Predicate
 	ctes          []cteDefinition
+	firstOperand  *SelectQuery
+	setOps        []setOperation
 	distinct      bool
 	limit         int
 	offset        int
@@ -128,6 +130,62 @@ func (q *SelectQuery) WithRelations(names ...string) *SelectQuery {
 	return q
 }
 
+type setOperator string
+
+const (
+	setOpUnion        setOperator = "UNION"
+	setOpUnionAll     setOperator = "UNION ALL"
+	setOpIntersect    setOperator = "INTERSECT"
+	setOpIntersectAll setOperator = "INTERSECT ALL"
+	setOpExcept       setOperator = "EXCEPT"
+	setOpExceptAll    setOperator = "EXCEPT ALL"
+)
+
+type setOperation struct {
+	operator setOperator
+	query    *SelectQuery
+}
+
+// Union combines results with another SELECT query using UNION.
+func (q *SelectQuery) Union(other *SelectQuery) *SelectQuery {
+	return q.wrapSetOp(setOpUnion, other)
+}
+
+// UnionAll combines results with another SELECT query using UNION ALL.
+func (q *SelectQuery) UnionAll(other *SelectQuery) *SelectQuery {
+	return q.wrapSetOp(setOpUnionAll, other)
+}
+
+// Intersect combines results with another SELECT query using INTERSECT.
+func (q *SelectQuery) Intersect(other *SelectQuery) *SelectQuery {
+	return q.wrapSetOp(setOpIntersect, other)
+}
+
+// IntersectAll combines results with another SELECT query using INTERSECT ALL.
+func (q *SelectQuery) IntersectAll(other *SelectQuery) *SelectQuery {
+	return q.wrapSetOp(setOpIntersectAll, other)
+}
+
+// Except combines results with another SELECT query using EXCEPT.
+func (q *SelectQuery) Except(other *SelectQuery) *SelectQuery {
+	return q.wrapSetOp(setOpExcept, other)
+}
+
+// ExceptAll combines results with another SELECT query using EXCEPT ALL.
+func (q *SelectQuery) ExceptAll(other *SelectQuery) *SelectQuery {
+	return q.wrapSetOp(setOpExceptAll, other)
+}
+
+func (q *SelectQuery) wrapSetOp(operator setOperator, other *SelectQuery) *SelectQuery {
+	return &SelectQuery{
+		runner:       q.runner,
+		dialect:      q.dialect,
+		cache:        q.cache,
+		firstOperand: q,
+		setOps:       []setOperation{{operator: operator, query: other}},
+	}
+}
+
 // Cache enables opt-in query caching for this SELECT with TTL and optional metadata.
 // Queries that use WithRelations do not read from or write to the query cache.
 func (q *SelectQuery) Cache(options QueryCacheOptions) *SelectQuery {
@@ -149,6 +207,24 @@ func (q *SelectQuery) ToSQL() (string, []any, error) {
 }
 
 func (q *SelectQuery) writeSQL(ctx *compileContext) error {
+	if q.firstOperand != nil {
+		if err := q.firstOperand.writeCompoundOperandSQL(ctx); err != nil {
+			return err
+		}
+		for _, setOp := range q.setOps {
+			ctx.writeByte(' ')
+			ctx.writeString(string(setOp.operator))
+			ctx.writeByte(' ')
+			if setOp.query == nil {
+				return fmt.Errorf("rain: %s requires a query", setOp.operator)
+			}
+			if err := setOp.query.writeCompoundOperandSQL(ctx); err != nil {
+				return err
+			}
+		}
+		return q.writeOrderLimit(ctx)
+	}
+
 	if q.table == nil {
 		return errors.New("rain: select query requires a table")
 	}
@@ -242,6 +318,24 @@ func (q *SelectQuery) writeSQL(ctx *compileContext) error {
 		}
 	}
 
+	return q.writeOrderLimit(ctx)
+}
+
+func (q *SelectQuery) writeCompoundOperandSQL(ctx *compileContext) error {
+	useParens := len(q.order) > 0 || q.limit > 0 || q.offset > 0 || q.firstOperand != nil
+	if useParens {
+		ctx.writeByte('(')
+	}
+	if err := q.writeSQL(ctx); err != nil {
+		return err
+	}
+	if useParens {
+		ctx.writeByte(')')
+	}
+	return nil
+}
+
+func (q *SelectQuery) writeOrderLimit(ctx *compileContext) error {
 	if len(q.order) > 0 {
 		ctx.writeString(" ORDER BY ")
 		for idx, item := range q.order {
@@ -260,7 +354,6 @@ func (q *SelectQuery) writeSQL(ctx *compileContext) error {
 		ctx.writeByte(' ')
 		ctx.writeString(clause)
 	}
-
 	return nil
 }
 
@@ -442,6 +535,9 @@ func (q *SelectQuery) resolveCacheKey(query string, args []any) (string, *queryC
 }
 
 func (q *SelectQuery) scanValidationTable() *schema.TableDef {
+	if q.firstOperand != nil {
+		return nil
+	}
 	if len(q.joins) > 0 {
 		return nil
 	}
@@ -494,7 +590,7 @@ func (q *SelectQuery) toAggregateSQL(selection string) (string, []any, error) {
 }
 
 func (q *SelectQuery) compile() (compiledQuery, error) {
-	if q.table == nil {
+	if q.table == nil && q.firstOperand == nil {
 		return compiledQuery{}, errors.New("rain: select query requires a table")
 	}
 
@@ -506,6 +602,9 @@ func (q *SelectQuery) compile() (compiledQuery, error) {
 }
 
 func (q *SelectQuery) compileAggregate(selection string) (compiledQuery, error) {
+	if q.firstOperand != nil {
+		return compiledQuery{}, errors.New("rain: aggregate helpers do not support compound queries (UNION, etc.); use TableSubquery as a workaround")
+	}
 	if q.table == nil {
 		return compiledQuery{}, errors.New("rain: select query requires a table")
 	}
