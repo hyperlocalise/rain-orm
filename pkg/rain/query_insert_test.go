@@ -235,7 +235,6 @@ func TestInsertOnConflictSQLite(t *testing.T) {
 	}
 }
 
-
 func TestInsertOnConflictMySQL(t *testing.T) {
 	t.Parallel()
 
