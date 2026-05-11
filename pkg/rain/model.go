@@ -493,47 +493,12 @@ func fieldByIndexAlloc(value reflect.Value, index []int) (reflect.Value, error) 
 	return current, nil
 }
 
-func scannerTarget(field reflect.Value) (any, func() error, bool) {
-	scannerType := reflect.TypeFor[scannerInterface]()
-
-	if field.Kind() != reflect.Pointer {
-		if field.CanAddr() && field.Addr().Type().Implements(scannerType) {
-			return field.Addr().Interface(), nil, true
-		}
-		return nil, nil, false
-	}
-
-	fieldType := field.Type()
-	if fieldType.Implements(scannerType) {
-		receiver := reflect.New(fieldType.Elem())
-		return receiver.Interface(), func() error {
-			field.Set(receiver)
-			return nil
-		}, true
-	}
-
-	if fieldType.Elem().Implements(scannerType) {
-		receiver := reflect.New(fieldType.Elem())
-		return receiver.Interface(), func() error {
-			field.Set(receiver)
-			return nil
-		}, true
-	}
-
-	return nil, nil, false
-}
-
 func assignCachedValueToFieldWithPlan(field reflect.Value, value cachedValue, column *schema.ColumnDef, plan *scanFieldPlan) error {
 	raw, err := decodeCachedValue(value, column)
 	if err != nil {
 		return err
 	}
 	return assignRawValueToFieldWithPlan(field, raw, plan)
-}
-
-func assignCachedValueToField(field reflect.Value, value cachedValue, column *schema.ColumnDef) error {
-	plan := buildScanFieldPlan(field.Type(), column)
-	return assignCachedValueToFieldWithPlan(field, value, column, &plan)
 }
 
 func assignRawValueToFieldWithPlan(field reflect.Value, raw any, plan *scanFieldPlan) error {
@@ -648,10 +613,6 @@ func assignRawValueToFieldWithPlan(field reflect.Value, raw any, plan *scanField
 	return fmt.Errorf("rain: cannot assign cached %T to field %s", raw, curr.Type())
 }
 
-func assignRawValueToField(field reflect.Value, raw any) error {
-	plan := buildScanFieldPlan(field.Type(), nil)
-	return assignRawValueToFieldWithPlan(field, raw, &plan)
-}
 
 func supportsCachedPointerAssignment(typ reflect.Type) bool {
 	if typ.Kind() != reflect.Pointer {
