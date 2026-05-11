@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -23,6 +24,12 @@ func (s *modelScanStatus) Scan(src any) error {
 	default:
 		return fmt.Errorf("unsupported status source %T", src)
 	}
+}
+
+type modelScanFailer string
+
+func (s *modelScanFailer) Scan(src any) error {
+	return fmt.Errorf("scan failed for %T", src)
 }
 
 type ModelScanEmbedded struct {
@@ -123,6 +130,49 @@ func TestScanRowsSupportsExpandedNullableTypesAndEmbeddedStructs(t *testing.T) {
 	}
 	if scanned.Disabled != nil {
 		t.Fatalf("expected null bool pointer, got %#v", scanned.Disabled)
+	}
+}
+
+func TestAssignRawValueToScannerPointerFieldOnlySetsAfterSuccessfulScan(t *testing.T) {
+	t.Parallel()
+
+	type row struct {
+		Status *modelScanFailer
+	}
+
+	original := modelScanFailer("original")
+	scanned := row{Status: &original}
+	field := reflect.ValueOf(&scanned).Elem().FieldByName("Status")
+	plan := buildScanFieldPlan(field.Type(), nil)
+
+	err := assignRawValueToFieldWithPlan(field, "bad", &plan)
+	if err == nil {
+		t.Fatalf("expected scanner error")
+	}
+	if scanned.Status != &original {
+		t.Fatalf("expected failed scan to leave original pointer, got %#v", scanned.Status)
+	}
+	if *scanned.Status != modelScanFailer("original") {
+		t.Fatalf("expected original scanner value to remain unchanged, got %q", *scanned.Status)
+	}
+}
+
+func TestAssignRawValueToScannerFieldRequiresAddressableField(t *testing.T) {
+	t.Parallel()
+
+	type row struct {
+		Status modelScanStatus
+	}
+
+	field := reflect.ValueOf(row{}).FieldByName("Status")
+	plan := buildScanFieldPlan(field.Type(), nil)
+
+	err := assignRawValueToFieldWithPlan(field, "active", &plan)
+	if err == nil {
+		t.Fatalf("expected non-addressable scanner field error")
+	}
+	if !strings.Contains(err.Error(), "is not addressable") {
+		t.Fatalf("expected addressable field error, got %v", err)
 	}
 }
 

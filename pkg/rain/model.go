@@ -505,15 +505,20 @@ func assignRawValueToFieldWithPlan(field reflect.Value, raw any, plan *scanField
 	if plan.isScanner {
 		var scanner scannerInterface
 		if plan.scannerAddr {
+			if !field.CanAddr() {
+				return fmt.Errorf("rain: scanner field %s is not addressable", field.Type())
+			}
 			scanner = field.Addr().Interface().(scannerInterface)
 		} else {
 			receiver := reflect.New(plan.scannerType)
 			scanner = receiver.Interface().(scannerInterface)
-			defer func() {
-				if plan.scannerSet {
-					field.Set(receiver)
-				}
-			}()
+			if err := scanner.Scan(raw); err != nil {
+				return err
+			}
+			if plan.scannerSet {
+				field.Set(receiver)
+			}
+			return nil
 		}
 		return scanner.Scan(raw)
 	}
