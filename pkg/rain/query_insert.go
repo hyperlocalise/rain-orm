@@ -95,7 +95,7 @@ func (b *InsertConflictBuilder) DoNothing() *InsertQuery {
 	return b.query
 }
 
-// DoUpdateSet configures ON CONFLICT ... DO UPDATE SET using EXCLUDED values.
+// DoUpdateSet configures ON CONFLICT ... DO UPDATE SET using EXCLUDED values (PostgreSQL/SQLite) or VALUES() references (MySQL).
 func (b *InsertConflictBuilder) DoUpdateSet(columns ...schema.ColumnReference) *InsertQuery {
 	b.query.conflict.action = insertConflictActionDoUpdateSet
 	b.query.conflict.updates = columns
@@ -472,5 +472,8 @@ func mysqlConflictNoopColumn(table *schema.TableDef) (*schema.ColumnDef, error) 
 		return nil, fmt.Errorf("rain: table %q has no columns for MySQL conflict DO NOTHING", table.Name)
 	}
 
+	// MySQL requires an assignment after ON DUPLICATE KEY UPDATE. A table without
+	// primary key metadata can still conflict on a unique index, so use the first
+	// declared column only as a visible no-op target.
 	return table.Columns[0], nil
 }
