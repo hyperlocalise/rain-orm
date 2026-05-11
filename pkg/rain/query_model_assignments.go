@@ -28,9 +28,16 @@ func assignmentsFromModel(table *schema.TableDef, model any, skipAuto bool) ([]a
 			continue
 		}
 
+		var expr schema.Expression
+		if e, ok := resolvedValue.(schema.Expression); ok {
+			expr = e
+		} else {
+			expr = schema.ValueExpr{Value: resolvedValue}
+		}
+
 		assignments = append(assignments, assignment{
 			column: schema.Ref(field.column),
-			value:  schema.ValueExpr{Value: resolvedValue},
+			value:  expr,
 		})
 	}
 

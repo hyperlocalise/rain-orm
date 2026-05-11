@@ -197,6 +197,9 @@ func supportsScanForColumn(column *schema.ColumnDef, fieldType reflect.Type) boo
 	if fieldType == nil {
 		return false
 	}
+	if fieldType.Kind() == reflect.Interface && fieldType.NumMethod() == 0 {
+		return true
+	}
 	if supportsScanner(fieldType) {
 		return true
 	}
@@ -229,7 +232,10 @@ func supportsWriteForColumn(column *schema.ColumnDef, fieldType reflect.Type) bo
 	if fieldType == nil {
 		return false
 	}
-	if supportsValuer(fieldType) {
+	if fieldType.Kind() == reflect.Interface && fieldType.NumMethod() == 0 {
+		return true
+	}
+	if supportsValuer(fieldType) || fieldType.Implements(reflect.TypeFor[schema.Expression]()) {
 		return true
 	}
 

@@ -6,6 +6,7 @@ import (
 
 	"github.com/hyperlocalise/rain-orm/pkg/dialect"
 	"github.com/hyperlocalise/rain-orm/pkg/rain"
+	"github.com/hyperlocalise/rain-orm/pkg/schema"
 )
 
 func TestInsertUpdateDeleteToSQL(t *testing.T) {
@@ -62,6 +63,81 @@ func TestInsertUpdateDeleteToSQL(t *testing.T) {
 	}
 	if len(deleteArgs) != 1 || deleteArgs[0] != int64(99) {
 		t.Fatalf("unexpected delete args: %#v", deleteArgs)
+	}
+}
+
+func TestInsertUpdateSetExpressionToSQL(t *testing.T) {
+	t.Parallel()
+
+	db, err := rain.OpenDialect("postgres")
+	if err != nil {
+		t.Fatalf("OpenDialect returned error: %v", err)
+	}
+	users, _ := defineTables()
+
+	// Test Update Set expression
+	updateSQL, updateArgs, err := db.Update().
+		Table(users).
+		Set(users.Name, schema.Raw("UPPER(name)")).
+		Where(users.ID.Eq(int64(1))).
+		ToSQL()
+	if err != nil {
+		t.Fatalf("update ToSQL failed: %v", err)
+	}
+	wantUpdate := `UPDATE "users" SET "name" = UPPER(name) WHERE "users"."id" = $1`
+	if updateSQL != wantUpdate {
+		t.Errorf("unexpected update SQL:\nwant: %s\ngot:  %s", wantUpdate, updateSQL)
+	}
+	if len(updateArgs) != 1 || updateArgs[0] != int64(1) {
+		t.Errorf("unexpected update args: %#v", updateArgs)
+	}
+
+	// Test Insert Set expression
+	insertSQL, insertArgs, err := db.Insert().
+		Table(users).
+		Set(users.Email, "alice@example.com").
+		Set(users.Name, schema.Raw("UPPER(?)", "alice")).
+		ToSQL()
+	if err != nil {
+		t.Fatalf("insert ToSQL failed: %v", err)
+	}
+	wantInsert := `INSERT INTO "users" ("email", "name") VALUES ($1, UPPER($2))`
+	if insertSQL != wantInsert {
+		t.Errorf("unexpected insert SQL:\nwant: %s\ngot:  %s", wantInsert, insertSQL)
+	}
+	if len(insertArgs) != 2 || insertArgs[0] != "alice@example.com" || insertArgs[1] != "alice" {
+		t.Errorf("unexpected insert args: %#v", insertArgs)
+	}
+}
+
+type modelWithExpr struct {
+	ID   int64
+	Name any
+}
+
+func TestInsertModelExpressionToSQL(t *testing.T) {
+	t.Parallel()
+
+	db, err := rain.OpenDialect("postgres")
+	if err != nil {
+		t.Fatalf("OpenDialect returned error: %v", err)
+	}
+	users, _ := defineTables()
+
+	sql, args, err := db.Insert().
+		Table(users).
+		Model(&modelWithExpr{Name: schema.Raw("UPPER(?)", "alice")}).
+		ToSQL()
+	if err != nil {
+		t.Fatalf("ToSQL failed: %v", err)
+	}
+
+	wantSQL := `INSERT INTO "users" ("name") VALUES (UPPER($1))`
+	if sql != wantSQL {
+		t.Errorf("unexpected SQL:\nwant: %s\ngot:  %s", wantSQL, sql)
+	}
+	if len(args) != 1 || args[0] != "alice" {
+		t.Errorf("expected args [alice], got %v", args)
 	}
 }
 
