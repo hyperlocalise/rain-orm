@@ -116,7 +116,11 @@ func (q *InsertQuery) ToSQL() (string, []any, error) {
 	}
 
 	ctx := newCompileContext(q.dialect)
-	ctx.writeString("INSERT INTO ")
+	if q.dialect.Name() == "mysql" && q.conflict != nil && q.conflict.action == insertConflictActionDoNothing {
+		ctx.writeString("INSERT IGNORE INTO ")
+	} else {
+		ctx.writeString("INSERT INTO ")
+	}
 	ctx.writeTableName(q.table)
 	ctx.writeString(" (")
 	for idx, item := range rows[0] {
@@ -373,8 +377,33 @@ func (q *InsertQuery) writeConflictClause(ctx *compileContext) error {
 		return errors.New("rain: conflict action is required; call DoNothing() or DoUpdateSet(...)")
 	}
 
-	if q.dialect.Name() != "postgres" && q.dialect.Name() != "sqlite" {
+	if q.dialect.Name() != "postgres" && q.dialect.Name() != "sqlite" && q.dialect.Name() != "mysql" {
 		return fmt.Errorf("rain: insert conflict clauses are not implemented for %s dialect", q.dialect.Name())
+	}
+
+	if q.dialect.Name() == "mysql" {
+		if q.conflict.action == insertConflictActionDoNothing {
+			return nil // handled in ToSQL via INSERT IGNORE
+		}
+		if q.conflict.action == insertConflictActionDoUpdateSet {
+			if len(q.conflict.updates) == 0 {
+				return errors.New("rain: conflict DO UPDATE requires at least one update column")
+			}
+			ctx.writeString(" ON DUPLICATE KEY UPDATE ")
+			for idx, col := range q.conflict.updates {
+				if err := validateAssignmentTarget(q.table, assignment{column: col}); err != nil {
+					return err
+				}
+				if idx > 0 {
+					ctx.writeString(", ")
+				}
+				ctx.writeQuotedIdentifier(col.ColumnDef().Name)
+				ctx.writeString(" = VALUES(")
+				ctx.writeQuotedIdentifier(col.ColumnDef().Name)
+				ctx.writeByte(')')
+			}
+		}
+		return nil
 	}
 
 	if len(q.conflict.columns) == 0 {
