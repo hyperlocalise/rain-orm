@@ -128,7 +128,6 @@ func TestInsertModelExpressionToSQL(t *testing.T) {
 		Table(users).
 		Model(&modelWithExpr{Name: schema.Raw("UPPER(?)", "alice")}).
 		ToSQL()
-
 	if err != nil {
 		t.Fatalf("ToSQL failed: %v", err)
 	}
