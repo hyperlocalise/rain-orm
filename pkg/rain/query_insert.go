@@ -95,7 +95,7 @@ func (b *InsertConflictBuilder) DoNothing() *InsertQuery {
 	return b.query
 }
 
-// DoUpdateSet configures ON CONFLICT ... DO UPDATE SET using EXCLUDED values.
+// DoUpdateSet configures ON CONFLICT ... DO UPDATE SET using EXCLUDED values (PostgreSQL/SQLite) or VALUES() references (MySQL).
 func (b *InsertConflictBuilder) DoUpdateSet(columns ...schema.ColumnReference) *InsertQuery {
 	b.query.conflict.action = insertConflictActionDoUpdateSet
 	b.query.conflict.updates = columns
@@ -373,8 +373,44 @@ func (q *InsertQuery) writeConflictClause(ctx *compileContext) error {
 		return errors.New("rain: conflict action is required; call DoNothing() or DoUpdateSet(...)")
 	}
 
-	if q.dialect.Name() != "postgres" && q.dialect.Name() != "sqlite" {
+	if q.dialect.Name() != "postgres" && q.dialect.Name() != "sqlite" && q.dialect.Name() != "mysql" {
 		return fmt.Errorf("rain: insert conflict clauses are not implemented for %s dialect", q.dialect.Name())
+	}
+
+	if q.dialect.Name() == "mysql" {
+		if len(q.conflict.columns) > 0 {
+			return errors.New("rain: MySQL ON DUPLICATE KEY UPDATE cannot target specific conflict columns; call OnConflict() without columns")
+		}
+		if q.conflict.action == insertConflictActionDoNothing {
+			noopColumn, err := mysqlConflictNoopColumn(q.table)
+			if err != nil {
+				return err
+			}
+			ctx.writeString(" ON DUPLICATE KEY UPDATE ")
+			ctx.writeQuotedIdentifier(noopColumn.Name)
+			ctx.writeString(" = ")
+			ctx.writeQuotedIdentifier(noopColumn.Name)
+			return nil
+		}
+		if q.conflict.action == insertConflictActionDoUpdateSet {
+			if len(q.conflict.updates) == 0 {
+				return errors.New("rain: conflict DO UPDATE requires at least one update column")
+			}
+			ctx.writeString(" ON DUPLICATE KEY UPDATE ")
+			for idx, col := range q.conflict.updates {
+				if err := validateAssignmentTarget(q.table, assignment{column: col}); err != nil {
+					return err
+				}
+				if idx > 0 {
+					ctx.writeString(", ")
+				}
+				ctx.writeQuotedIdentifier(col.ColumnDef().Name)
+				ctx.writeString(" = VALUES(")
+				ctx.writeQuotedIdentifier(col.ColumnDef().Name)
+				ctx.writeByte(')')
+			}
+		}
+		return nil
 	}
 
 	if len(q.conflict.columns) == 0 {
@@ -415,4 +451,29 @@ func (q *InsertQuery) writeConflictClause(ctx *compileContext) error {
 	}
 
 	return nil
+}
+
+func mysqlConflictNoopColumn(table *schema.TableDef) (*schema.ColumnDef, error) {
+	if table == nil {
+		return nil, errors.New("rain: insert query requires a table")
+	}
+
+	if primaryKey, err := tablePrimaryKeyConstraint(table); err != nil {
+		return nil, err
+	} else if primaryKey != nil && len(primaryKey.Columns) > 0 {
+		return primaryKey.Columns[0], nil
+	}
+
+	if primaryKeys := primaryKeyColumns(table); len(primaryKeys) > 0 {
+		return primaryKeys[0], nil
+	}
+
+	if len(table.Columns) == 0 {
+		return nil, fmt.Errorf("rain: table %q has no columns for MySQL conflict DO NOTHING", table.Name)
+	}
+
+	// MySQL requires an assignment after ON DUPLICATE KEY UPDATE. A table without
+	// primary key metadata can still conflict on a unique index, so use the first
+	// declared column only as a visible no-op target.
+	return table.Columns[0], nil
 }

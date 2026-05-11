@@ -235,7 +235,7 @@ func TestInsertOnConflictSQLite(t *testing.T) {
 	}
 }
 
-func TestInsertOnConflictUnsupportedDialectReturnsError(t *testing.T) {
+func TestInsertOnConflictMySQL(t *testing.T) {
 	t.Parallel()
 
 	db, err := rain.OpenDialect("mysql")
@@ -244,14 +244,72 @@ func TestInsertOnConflictUnsupportedDialectReturnsError(t *testing.T) {
 	}
 	users, _ := defineTables()
 
-	_, _, err = db.Insert().
-		Table(users).
-		Set(users.Email, "alice@example.com").
-		Set(users.Name, "Alice").
-		OnConflict(users.Email).
-		DoUpdateSet(users.Name).
-		ToSQL()
-	if err == nil || !strings.Contains(err.Error(), "not implemented") {
-		t.Fatalf("expected unsupported dialect error, got %v", err)
-	}
+	t.Run("do nothing (no-op update)", func(t *testing.T) {
+		sqlText, args, err := db.Insert().
+			Table(users).
+			Set(users.Email, "alice@example.com").
+			Set(users.Name, "Alice").
+			OnConflict().
+			DoNothing().
+			ToSQL()
+		if err != nil {
+			t.Fatalf("insert on conflict mysql do nothing ToSQL returned error: %v", err)
+		}
+
+		wantSQL := "INSERT INTO `users` (`email`, `name`) VALUES (?, ?) ON DUPLICATE KEY UPDATE `id` = `id`"
+		if sqlText != wantSQL {
+			t.Fatalf("unexpected mysql do nothing SQL:\nwant: %s\ngot:  %s", wantSQL, sqlText)
+		}
+		if len(args) != 2 {
+			t.Fatalf("unexpected mysql do nothing args: %#v", args)
+		}
+	})
+
+	t.Run("target columns are rejected for do nothing", func(t *testing.T) {
+		_, _, err := db.Insert().
+			Table(users).
+			Set(users.Email, "alice@example.com").
+			Set(users.Name, "Alice").
+			OnConflict(users.Email).
+			DoNothing().
+			ToSQL()
+		if err == nil || !strings.Contains(err.Error(), "cannot target specific conflict columns") {
+			t.Fatalf("expected mysql conflict target error, got %v", err)
+		}
+	})
+
+	t.Run("target columns are rejected for do update set", func(t *testing.T) {
+		_, _, err := db.Insert().
+			Table(users).
+			Set(users.Email, "alice@example.com").
+			Set(users.Name, "Alice").
+			OnConflict(users.Email).
+			DoUpdateSet(users.Name).
+			ToSQL()
+		if err == nil || !strings.Contains(err.Error(), "cannot target specific conflict columns") {
+			t.Fatalf("expected mysql conflict target error, got %v", err)
+		}
+	})
+
+	t.Run("do update set (on duplicate key update)", func(t *testing.T) {
+		sqlText, args, err := db.Insert().
+			Table(users).
+			Set(users.Email, "alice@example.com").
+			Set(users.Name, "Alice").
+			Set(users.Active, true).
+			OnConflict().
+			DoUpdateSet(users.Name, users.Active).
+			ToSQL()
+		if err != nil {
+			t.Fatalf("insert on conflict mysql do update ToSQL returned error: %v", err)
+		}
+
+		wantSQL := "INSERT INTO `users` (`email`, `name`, `active`) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE `name` = VALUES(`name`), `active` = VALUES(`active`)"
+		if sqlText != wantSQL {
+			t.Fatalf("unexpected mysql do update SQL:\nwant: %s\ngot:  %s", wantSQL, sqlText)
+		}
+		if len(args) != 3 {
+			t.Fatalf("unexpected mysql do update args: %#v", args)
+		}
+	})
 }
