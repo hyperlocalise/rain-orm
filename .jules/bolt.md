@@ -5,7 +5,3 @@
 ## 2026-03-29 - [Caching Column Metadata for Hot Scan Loops]
 **Learning:** Performing `table.ColumnByName` lookups for every column of every row during scanning created a bottleneck that scaled with $O(Rows \times Columns)$. By moving this metadata resolution to a per-query "plan" phase, we reduced scanning overhead significantly. Additionally, adding a fast-path for single-level reflection (`fieldByIndexAlloc`) reduced loop and slicing overhead for the most common model field mappings.
 **Action:** Always pre-calculate and cache metadata (like column definitions and field indices) before entering high-iteration loops like database result scanning. Reflection operations should be specialized for simple paths when possible.
-
-## 2026-03-31 - [Pre-calculating Reflection Metadata for Value Assignment]
-**Learning:** Repeatedly checking if a field type implements `sql.Scanner` or recursively unwrapping pointers during row scanning creates measurable overhead in the hot loop. By moving these reflection-based decisions into the "plan" phase (once per query), we reduced execution time for bulk scans by ~7.5%.
-**Action:** Identify reflection checks that are constant for a given type/field and pre-calculate them outside of high-iteration loops. Use a "plan" structure to carry this metadata into the loop.

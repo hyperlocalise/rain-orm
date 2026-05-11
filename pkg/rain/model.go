@@ -613,7 +613,6 @@ func assignRawValueToFieldWithPlan(field reflect.Value, raw any, plan *scanField
 	return fmt.Errorf("rain: cannot assign cached %T to field %s", raw, curr.Type())
 }
 
-
 func supportsCachedPointerAssignment(typ reflect.Type) bool {
 	if typ.Kind() != reflect.Pointer {
 		return true
