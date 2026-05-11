@@ -116,11 +116,7 @@ func (q *InsertQuery) ToSQL() (string, []any, error) {
 	}
 
 	ctx := newCompileContext(q.dialect)
-	if q.dialect.Name() == "mysql" && q.conflict != nil && q.conflict.action == insertConflictActionDoNothing {
-		ctx.writeString("INSERT IGNORE INTO ")
-	} else {
-		ctx.writeString("INSERT INTO ")
-	}
+	ctx.writeString("INSERT INTO ")
 	ctx.writeTableName(q.table)
 	ctx.writeString(" (")
 	for idx, item := range rows[0] {
@@ -382,8 +378,19 @@ func (q *InsertQuery) writeConflictClause(ctx *compileContext) error {
 	}
 
 	if q.dialect.Name() == "mysql" {
+		if len(q.conflict.columns) > 0 {
+			return errors.New("rain: MySQL ON DUPLICATE KEY UPDATE cannot target specific conflict columns; call OnConflict() without columns")
+		}
 		if q.conflict.action == insertConflictActionDoNothing {
-			return nil // handled in ToSQL via INSERT IGNORE
+			noopColumn, err := mysqlConflictNoopColumn(q.table)
+			if err != nil {
+				return err
+			}
+			ctx.writeString(" ON DUPLICATE KEY UPDATE ")
+			ctx.writeQuotedIdentifier(noopColumn.Name)
+			ctx.writeString(" = ")
+			ctx.writeQuotedIdentifier(noopColumn.Name)
+			return nil
 		}
 		if q.conflict.action == insertConflictActionDoUpdateSet {
 			if len(q.conflict.updates) == 0 {
@@ -444,4 +451,26 @@ func (q *InsertQuery) writeConflictClause(ctx *compileContext) error {
 	}
 
 	return nil
+}
+
+func mysqlConflictNoopColumn(table *schema.TableDef) (*schema.ColumnDef, error) {
+	if table == nil {
+		return nil, errors.New("rain: insert query requires a table")
+	}
+
+	if primaryKey, err := tablePrimaryKeyConstraint(table); err != nil {
+		return nil, err
+	} else if primaryKey != nil && len(primaryKey.Columns) > 0 {
+		return primaryKey.Columns[0], nil
+	}
+
+	if primaryKeys := primaryKeyColumns(table); len(primaryKeys) > 0 {
+		return primaryKeys[0], nil
+	}
+
+	if len(table.Columns) == 0 {
+		return nil, fmt.Errorf("rain: table %q has no columns for MySQL conflict DO NOTHING", table.Name)
+	}
+
+	return table.Columns[0], nil
 }

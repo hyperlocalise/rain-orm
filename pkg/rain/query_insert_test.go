@@ -244,7 +244,7 @@ func TestInsertOnConflictMySQL(t *testing.T) {
 	}
 	users, _ := defineTables()
 
-	t.Run("do nothing (insert ignore)", func(t *testing.T) {
+	t.Run("do nothing (no-op update)", func(t *testing.T) {
 		sqlText, args, err := db.Insert().
 			Table(users).
 			Set(users.Email, "alice@example.com").
@@ -256,12 +256,38 @@ func TestInsertOnConflictMySQL(t *testing.T) {
 			t.Fatalf("insert on conflict mysql do nothing ToSQL returned error: %v", err)
 		}
 
-		wantSQL := "INSERT IGNORE INTO `users` (`email`, `name`) VALUES (?, ?)"
+		wantSQL := "INSERT INTO `users` (`email`, `name`) VALUES (?, ?) ON DUPLICATE KEY UPDATE `id` = `id`"
 		if sqlText != wantSQL {
-			t.Fatalf("unexpected mysql insert ignore SQL:\nwant: %s\ngot:  %s", wantSQL, sqlText)
+			t.Fatalf("unexpected mysql do nothing SQL:\nwant: %s\ngot:  %s", wantSQL, sqlText)
 		}
 		if len(args) != 2 {
-			t.Fatalf("unexpected mysql insert ignore args: %#v", args)
+			t.Fatalf("unexpected mysql do nothing args: %#v", args)
+		}
+	})
+
+	t.Run("target columns are rejected for do nothing", func(t *testing.T) {
+		_, _, err := db.Insert().
+			Table(users).
+			Set(users.Email, "alice@example.com").
+			Set(users.Name, "Alice").
+			OnConflict(users.Email).
+			DoNothing().
+			ToSQL()
+		if err == nil || !strings.Contains(err.Error(), "cannot target specific conflict columns") {
+			t.Fatalf("expected mysql conflict target error, got %v", err)
+		}
+	})
+
+	t.Run("target columns are rejected for do update set", func(t *testing.T) {
+		_, _, err := db.Insert().
+			Table(users).
+			Set(users.Email, "alice@example.com").
+			Set(users.Name, "Alice").
+			OnConflict(users.Email).
+			DoUpdateSet(users.Name).
+			ToSQL()
+		if err == nil || !strings.Contains(err.Error(), "cannot target specific conflict columns") {
+			t.Fatalf("expected mysql conflict target error, got %v", err)
 		}
 	})
 
