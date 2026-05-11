@@ -1,0 +1,14 @@
+Rain SQLite benchmark run
+Timestamp: 2026-05-11 02:18:53 UTC
+Commit: 73071d1
+Branch: jules-17968217258504166025-2656ed67
+Go: go version go1.26.0 linux/amd64
+Platform: linux/amd64
+Report directory: artifacts/bench/sqlite/20260511-021843
+Command: go test -run ^$ -bench . -benchmem -count 3 ./pkg/rain
+Bench count: 3
+
+Metrics
+- ns/op: average time per benchmark iteration
+- B/op: average bytes allocated per iteration
+- allocs/op: average heap allocations per iteration

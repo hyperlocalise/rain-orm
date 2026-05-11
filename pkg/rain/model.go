@@ -27,15 +27,75 @@ type modelMeta struct {
 	err        error
 }
 
+type scanFieldPlan struct {
+	isScanner   bool
+	scannerType reflect.Type // element type for reflect.New
+	scannerSet  bool         // if true, call field.Set(receiver)
+	scannerAddr bool         // if true, use field.Addr()
+
+	isPointer bool
+	isJSON    bool
+	isTime    bool
+	kind      reflect.Kind
+	isBytes   bool
+}
+
 type scanColumnPlan struct {
 	discard    bool
 	columnName string
 	fieldIndex []int
 	columnDef  *schema.ColumnDef
+	fieldPlan  scanFieldPlan
 }
 
 type rowScanPlan struct {
 	columns []scanColumnPlan
+}
+
+var (
+	scannerType = reflect.TypeFor[scannerInterface]()
+	timeType    = reflect.TypeFor[time.Time]()
+)
+
+func buildScanFieldPlan(fieldType reflect.Type, column *schema.ColumnDef) scanFieldPlan {
+	plan := scanFieldPlan{}
+
+	if column != nil && (column.Type.DataType == schema.TypeJSON || column.Type.DataType == schema.TypeJSONB) {
+		plan.isJSON = true
+	}
+
+	if fieldType.Kind() != reflect.Pointer {
+		if reflect.PointerTo(fieldType).Implements(scannerType) {
+			plan.isScanner = true
+			plan.scannerAddr = true
+			return plan
+		}
+	} else {
+		if fieldType.Implements(scannerType) {
+			plan.isScanner = true
+			plan.scannerType = fieldType.Elem()
+			plan.scannerSet = true
+			return plan
+		}
+		if fieldType.Elem().Implements(scannerType) {
+			plan.isScanner = true
+			plan.scannerType = fieldType.Elem()
+			plan.scannerSet = true
+			return plan
+		}
+	}
+
+	curr := fieldType
+	for curr.Kind() == reflect.Pointer {
+		plan.isPointer = true
+		curr = curr.Elem()
+	}
+
+	plan.kind = curr.Kind()
+	plan.isTime = curr == timeType
+	plan.isBytes = isBytesType(curr)
+
+	return plan
 }
 
 var modelMetaCache sync.Map
@@ -254,21 +314,19 @@ func scanDirectRowWithPlan(scanned []any, target reflect.Value, plan *rowScanPla
 		if err != nil {
 			return err
 		}
-		if err := assignRawValueToFieldWithColumn(field, scanned[idx], column.columnDef); err != nil {
+
+		raw := scanned[idx]
+		if column.fieldPlan.isJSON {
+			if s, ok := raw.(string); ok {
+				raw = []byte(s)
+			}
+		}
+
+		if err := assignRawValueToFieldWithPlan(field, raw, &column.fieldPlan); err != nil {
 			return err
 		}
 	}
 	return nil
-}
-
-func assignRawValueToFieldWithColumn(field reflect.Value, raw any, column *schema.ColumnDef) error {
-	// Handle JSON columns which might be returned as strings by some drivers.
-	if column != nil && (column.Type.DataType == schema.TypeJSON || column.Type.DataType == schema.TypeJSONB) {
-		if s, ok := raw.(string); ok {
-			raw = []byte(s)
-		}
-	}
-	return assignRawValueToField(field, raw)
 }
 
 func scanCachedRowsAgainstTable(result *cachedSelectRows, dest any, table *schema.TableDef) error {
@@ -353,6 +411,7 @@ func newRowScanPlanForColumns(cols []string, modelType reflect.Type, table *sche
 			columnName: name,
 			fieldIndex: fieldInfo.index,
 			columnDef:  columnDef,
+			fieldPlan:  buildScanFieldPlan(modelType.FieldByIndex(fieldInfo.index).Type, columnDef),
 		}
 	}
 	return plan, nil
@@ -404,7 +463,7 @@ func scanCachedRowWithPlan(row []cachedValue, target reflect.Value, plan *rowSca
 		if err != nil {
 			return err
 		}
-		if err := assignCachedValueToField(field, row[idx], column.columnDef); err != nil {
+		if err := assignCachedValueToFieldWithPlan(field, row[idx], column.columnDef, &column.fieldPlan); err != nil {
 			return err
 		}
 	}
@@ -464,116 +523,134 @@ func scannerTarget(field reflect.Value) (any, func() error, bool) {
 	return nil, nil, false
 }
 
-func assignCachedValueToField(field reflect.Value, value cachedValue, column *schema.ColumnDef) error {
+func assignCachedValueToFieldWithPlan(field reflect.Value, value cachedValue, column *schema.ColumnDef, plan *scanFieldPlan) error {
 	raw, err := decodeCachedValue(value, column)
 	if err != nil {
 		return err
 	}
-	return assignRawValueToField(field, raw)
+	return assignRawValueToFieldWithPlan(field, raw, plan)
 }
 
-func assignRawValueToField(field reflect.Value, raw any) error {
-	if scanTarget, finalize, ok := scannerTarget(field); ok {
-		scanner := scanTarget.(scannerInterface)
-		if err := scanner.Scan(raw); err != nil {
-			return err
+func assignCachedValueToField(field reflect.Value, value cachedValue, column *schema.ColumnDef) error {
+	plan := buildScanFieldPlan(field.Type(), column)
+	return assignCachedValueToFieldWithPlan(field, value, column, &plan)
+}
+
+func assignRawValueToFieldWithPlan(field reflect.Value, raw any, plan *scanFieldPlan) error {
+	if plan.isScanner {
+		var scanner scannerInterface
+		if plan.scannerAddr {
+			scanner = field.Addr().Interface().(scannerInterface)
+		} else {
+			receiver := reflect.New(plan.scannerType)
+			scanner = receiver.Interface().(scannerInterface)
+			defer func() {
+				if plan.scannerSet {
+					field.Set(receiver)
+				}
+			}()
 		}
-		if finalize != nil {
-			return finalize()
-		}
-		return nil
+		return scanner.Scan(raw)
 	}
 
 	if raw == nil {
-		if field.Kind() == reflect.Pointer {
+		if plan.isPointer {
 			field.SetZero()
 			return nil
 		}
 		return fmt.Errorf("rain: cannot assign NULL to non-pointer field %s", field.Type())
 	}
 
-	if field.Kind() == reflect.Pointer {
+	curr := field
+	if plan.isPointer {
 		if !supportsCachedPointerAssignment(field.Type()) {
 			return fmt.Errorf("rain: unsupported nullable field type %s", field.Type())
 		}
-		if field.IsNil() {
-			field.Set(reflect.New(field.Type().Elem()))
+		for curr.Kind() == reflect.Pointer {
+			if curr.IsNil() {
+				curr.Set(reflect.New(curr.Type().Elem()))
+			}
+			curr = curr.Elem()
 		}
-		return assignRawValueToField(field.Elem(), raw)
 	}
 
-	switch field.Kind() {
+	switch plan.kind {
 	case reflect.String:
 		switch value := raw.(type) {
 		case string:
-			field.SetString(value)
+			curr.SetString(value)
 			return nil
 		case []byte:
-			field.SetString(string(value))
+			curr.SetString(string(value))
 			return nil
 		case time.Time:
-			field.SetString(value.Format(time.RFC3339Nano))
+			curr.SetString(value.Format(time.RFC3339Nano))
 			return nil
 		}
 	case reflect.Bool:
 		switch value := raw.(type) {
 		case bool:
-			field.SetBool(value)
+			curr.SetBool(value)
 			return nil
 		case int64:
-			field.SetBool(value != 0)
+			curr.SetBool(value != 0)
 			return nil
 		}
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
 		if value, ok := raw.(int64); ok {
-			if field.OverflowInt(value) {
-				return fmt.Errorf("rain: value %d overflows field %s", value, field.Type())
+			if curr.OverflowInt(value) {
+				return fmt.Errorf("rain: value %d overflows field %s", value, curr.Type())
 			}
-			field.SetInt(value)
+			curr.SetInt(value)
 			return nil
 		}
 	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
 		if value, ok := raw.(int64); ok {
-			if value < 0 || field.OverflowUint(uint64(value)) {
-				return fmt.Errorf("rain: value %d overflows field %s", value, field.Type())
+			if value < 0 || curr.OverflowUint(uint64(value)) {
+				return fmt.Errorf("rain: value %d overflows field %s", value, curr.Type())
 			}
-			field.SetUint(uint64(value))
+			curr.SetUint(uint64(value))
 			return nil
 		}
 	case reflect.Float32, reflect.Float64:
 		if value, ok := raw.(float64); ok {
-			if field.OverflowFloat(value) {
-				return fmt.Errorf("rain: value %f overflows field %s", value, field.Type())
+			if curr.OverflowFloat(value) {
+				return fmt.Errorf("rain: value %f overflows field %s", value, curr.Type())
 			}
-			field.SetFloat(value)
+			curr.SetFloat(value)
 			return nil
 		}
 	case reflect.Slice:
-		if isBytesType(field.Type()) {
+		if plan.isBytes {
 			if value, ok := raw.([]byte); ok {
-				field.SetBytes(value)
+				curr.SetBytes(value)
 				return nil
 			}
 			if value, ok := raw.(string); ok {
-				field.SetBytes([]byte(value))
+				curr.SetBytes([]byte(value))
 				return nil
 			}
 		}
 	case reflect.Struct:
-		if field.Type() == reflect.TypeFor[time.Time]() {
+		if plan.isTime {
 			if value, ok := raw.(time.Time); ok {
-				field.Set(reflect.ValueOf(value))
+				curr.Set(reflect.ValueOf(value))
 				return nil
 			}
 		}
 	}
 
-	if converted := reflect.ValueOf(raw); converted.IsValid() && converted.Type().AssignableTo(field.Type()) {
-		field.Set(converted)
+	if converted := reflect.ValueOf(raw); converted.IsValid() && converted.Type().AssignableTo(curr.Type()) {
+		curr.Set(converted)
 		return nil
 	}
 
-	return fmt.Errorf("rain: cannot assign cached %T to field %s", raw, field.Type())
+	return fmt.Errorf("rain: cannot assign cached %T to field %s", raw, curr.Type())
+}
+
+func assignRawValueToField(field reflect.Value, raw any) error {
+	plan := buildScanFieldPlan(field.Type(), nil)
+	return assignRawValueToFieldWithPlan(field, raw, &plan)
 }
 
 func supportsCachedPointerAssignment(typ reflect.Type) bool {
