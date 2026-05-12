@@ -28,9 +28,12 @@ type modelMeta struct {
 }
 
 type scanColumnPlan struct {
-	discard    bool
 	columnName string
+	scanIndex  int
 	fieldIndex []int
+	index0     int
+	isComplex  bool
+	isJSON     bool
 	columnDef  *schema.ColumnDef
 }
 
@@ -225,15 +228,24 @@ func scanRowsAgainstTableDirect(rows *sql.Rows, dest any, table *schema.TableDef
 				return err
 			}
 
-			elemPtr := reflect.New(structType)
-			if err := scanDirectRowWithPlan(scanned, elemPtr.Elem(), plan); err != nil {
+			var item reflect.Value
+			if pointerElems {
+				item = reflect.New(structType)
+			} else {
+				item = reflect.New(structType).Elem()
+			}
+
+			var scanTarget reflect.Value
+			if pointerElems {
+				scanTarget = item.Elem()
+			} else {
+				scanTarget = item
+			}
+
+			if err := scanDirectRowWithPlan(scanned, scanTarget, plan); err != nil {
 				return err
 			}
-			if pointerElems {
-				items = reflect.Append(items, elemPtr)
-			} else {
-				items = reflect.Append(items, elemPtr.Elem())
-			}
+			items = reflect.Append(items, item)
 		}
 		if err := rows.Err(); err != nil {
 			return err
@@ -246,29 +258,30 @@ func scanRowsAgainstTableDirect(rows *sql.Rows, dest any, table *schema.TableDef
 }
 
 func scanDirectRowWithPlan(scanned []any, target reflect.Value, plan *rowScanPlan) error {
-	for idx, column := range plan.columns {
-		if column.discard {
-			continue
+	for _, column := range plan.columns {
+		var field reflect.Value
+		if column.isComplex {
+			var err error
+			field, err = fieldByIndexAlloc(target, column.fieldIndex)
+			if err != nil {
+				return err
+			}
+		} else {
+			field = target.Field(column.index0)
 		}
-		field, err := fieldByIndexAlloc(target, column.fieldIndex)
-		if err != nil {
-			return err
+
+		raw := scanned[column.scanIndex]
+		if column.isJSON {
+			if s, ok := raw.(string); ok {
+				raw = []byte(s)
+			}
 		}
-		if err := assignRawValueToFieldWithColumn(field, scanned[idx], column.columnDef); err != nil {
+
+		if err := assignRawValueToField(field, raw); err != nil {
 			return err
 		}
 	}
 	return nil
-}
-
-func assignRawValueToFieldWithColumn(field reflect.Value, raw any, column *schema.ColumnDef) error {
-	// Handle JSON columns which might be returned as strings by some drivers.
-	if column != nil && (column.Type.DataType == schema.TypeJSON || column.Type.DataType == schema.TypeJSONB) {
-		if s, ok := raw.(string); ok {
-			raw = []byte(s)
-		}
-	}
-	return assignRawValueToField(field, raw)
 }
 
 func scanCachedRowsAgainstTable(result *cachedSelectRows, dest any, table *schema.TableDef) error {
@@ -301,17 +314,29 @@ func scanCachedRowsAgainstTable(result *cachedSelectRows, dest any, table *schem
 		if err != nil {
 			return err
 		}
+
+		items := target
 		for _, row := range result.Rows {
-			elemPtr := reflect.New(structType)
-			if err := scanCachedRowWithPlan(row, elemPtr.Elem(), plan); err != nil {
+			var item reflect.Value
+			if pointerElems {
+				item = reflect.New(structType)
+			} else {
+				item = reflect.New(structType).Elem()
+			}
+
+			var scanTarget reflect.Value
+			if pointerElems {
+				scanTarget = item.Elem()
+			} else {
+				scanTarget = item
+			}
+
+			if err := scanCachedRowWithPlan(row, scanTarget, plan); err != nil {
 				return err
 			}
-			if pointerElems {
-				target.Set(reflect.Append(target, elemPtr))
-				continue
-			}
-			target.Set(reflect.Append(target, elemPtr.Elem()))
+			items = reflect.Append(items, item)
 		}
+		target.Set(items)
 		return nil
 	default:
 		return fmt.Errorf("rain: destination must point to a struct or slice")
@@ -336,24 +361,38 @@ func newRowScanPlanForColumns(cols []string, modelType reflect.Type, table *sche
 	if err != nil {
 		return nil, err
 	}
-	plan := &rowScanPlan{columns: make([]scanColumnPlan, len(cols))}
+
+	plan := &rowScanPlan{columns: make([]scanColumnPlan, 0, len(cols))}
 	for idx, name := range cols {
 		fieldInfo, ok := meta.byColumn[name]
 		if !ok {
-			plan.columns[idx] = scanColumnPlan{discard: true, columnName: name}
 			continue
 		}
 
 		var columnDef *schema.ColumnDef
+		isJSON := false
 		if table != nil {
 			columnDef, _ = table.ColumnByName(name)
+			if columnDef != nil {
+				isJSON = columnDef.Type.DataType == schema.TypeJSON || columnDef.Type.DataType == schema.TypeJSONB
+			}
 		}
 
-		plan.columns[idx] = scanColumnPlan{
-			columnName: name,
-			fieldIndex: fieldInfo.index,
-			columnDef:  columnDef,
+		isComplex := len(fieldInfo.index) > 1
+		index0 := -1
+		if !isComplex {
+			index0 = fieldInfo.index[0]
 		}
+
+		plan.columns = append(plan.columns, scanColumnPlan{
+			columnName: name,
+			scanIndex:  idx,
+			fieldIndex: fieldInfo.index,
+			index0:     index0,
+			isComplex:  isComplex,
+			isJSON:     isJSON,
+			columnDef:  columnDef,
+		})
 	}
 	return plan, nil
 }
@@ -396,15 +435,18 @@ func readCachedSelectRows(rows *sql.Rows) (*cachedSelectRows, error) {
 }
 
 func scanCachedRowWithPlan(row []cachedValue, target reflect.Value, plan *rowScanPlan) error {
-	for idx, column := range plan.columns {
-		if column.discard {
-			continue
+	for _, column := range plan.columns {
+		var field reflect.Value
+		if column.isComplex {
+			var err error
+			field, err = fieldByIndexAlloc(target, column.fieldIndex)
+			if err != nil {
+				return err
+			}
+		} else {
+			field = target.Field(column.index0)
 		}
-		field, err := fieldByIndexAlloc(target, column.fieldIndex)
-		if err != nil {
-			return err
-		}
-		if err := assignCachedValueToField(field, row[idx], column.columnDef); err != nil {
+		if err := assignCachedValueToField(field, row[column.scanIndex], column.columnDef); err != nil {
 			return err
 		}
 	}
