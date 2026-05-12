@@ -160,12 +160,13 @@ func TestDialectFeatures(t *testing.T) {
 				dialect.FeatureUpsert |
 				dialect.FeatureCTE |
 				dialect.FeatureDefaultPlaceholder |
-				dialect.FeatureSavepoint,
+				dialect.FeatureSavepoint |
+				dialect.FeatureSelectLocking,
 		},
 		{
 			name:     "mysql",
 			dialect:  "mysql",
-			features: dialect.FeatureOffset | dialect.FeatureUpsert | dialect.FeatureSavepoint,
+			features: dialect.FeatureOffset | dialect.FeatureUpsert | dialect.FeatureSavepoint | dialect.FeatureSelectLocking,
 			missing: []dialect.Feature{
 				dialect.FeatureInsertReturning,
 				dialect.FeatureUpdateReturning,

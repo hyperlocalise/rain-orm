@@ -32,6 +32,7 @@ type SelectQuery struct {
 	offset        int
 	relationNames []string
 	cacheOptions  *queryCacheOptions
+	locking       *selectLocking
 }
 
 // Table sets the table source for the query.
@@ -130,6 +131,53 @@ func (q *SelectQuery) WithRelations(names ...string) *SelectQuery {
 	return q
 }
 
+// For applies a locking clause to the SELECT query.
+func (q *SelectQuery) For(mode LockMode, config ...LockConfig) *SelectQuery {
+	locking := &selectLocking{mode: mode}
+	if len(config) > 0 {
+		locking.of = config[0].Of
+		locking.noWait = config[0].NoWait
+		locking.skipLocked = config[0].SkipLocked
+	}
+	q.locking = locking
+	return q
+}
+
+// ForUpdate applies a FOR UPDATE locking clause.
+func (q *SelectQuery) ForUpdate(config ...LockConfig) *SelectQuery {
+	return q.For(LockUpdate, config...)
+}
+
+// ForShare applies a FOR SHARE locking clause.
+func (q *SelectQuery) ForShare(config ...LockConfig) *SelectQuery {
+	return q.For(LockShare, config...)
+}
+
+// LockMode identifies a SELECT locking strength (e.g. FOR UPDATE).
+type LockMode string
+
+// Supported SELECT locking modes.
+const (
+	LockUpdate      LockMode = "UPDATE"
+	LockNoKeyUpdate LockMode = "NO KEY UPDATE"
+	LockShare       LockMode = "SHARE"
+	LockKeyShare    LockMode = "KEY SHARE"
+)
+
+// LockConfig provides optional modifiers for SELECT locking.
+type LockConfig struct {
+	Of         []schema.TableReference
+	NoWait     bool
+	SkipLocked bool
+}
+
+type selectLocking struct {
+	mode       LockMode
+	of         []schema.TableReference
+	noWait     bool
+	skipLocked bool
+}
+
 type setOperator string
 
 const (
@@ -187,6 +235,11 @@ func (q *SelectQuery) clone() *SelectQuery {
 	newQ.ctes = append([]cteDefinition(nil), q.ctes...)
 	newQ.setOps = append([]setOperation(nil), q.setOps...)
 	newQ.relationNames = append([]string(nil), q.relationNames...)
+	if q.locking != nil {
+		copyLocking := *q.locking
+		copyLocking.of = append([]schema.TableReference(nil), q.locking.of...)
+		newQ.locking = &copyLocking
+	}
 	return &newQ
 }
 
@@ -282,7 +335,10 @@ func (q *SelectQuery) writeSQL(ctx *compileContext) error {
 				return err
 			}
 		}
-		return q.writeOrderLimit(ctx)
+		if err := q.writeOrderLimit(ctx); err != nil {
+			return err
+		}
+		return q.writeLocking(ctx)
 	}
 
 	if q.table == nil {
@@ -350,7 +406,47 @@ func (q *SelectQuery) writeSQL(ctx *compileContext) error {
 		}
 	}
 
-	return q.writeOrderLimit(ctx)
+	if err := q.writeOrderLimit(ctx); err != nil {
+		return err
+	}
+
+	return q.writeLocking(ctx)
+}
+
+func (q *SelectQuery) writeLocking(ctx *compileContext) error {
+	if q.locking == nil {
+		return nil
+	}
+
+	if !dialect.HasFeature(ctx.dialect.Features(), dialect.FeatureSelectLocking) {
+		return fmt.Errorf("rain: select locking is not supported by %s dialect", ctx.dialect.Name())
+	}
+
+	ctx.writeString(" FOR ")
+	ctx.writeString(string(q.locking.mode))
+
+	if len(q.locking.of) > 0 {
+		ctx.writeString(" OF ")
+		for idx, table := range q.locking.of {
+			if idx > 0 {
+				ctx.writeString(", ")
+			}
+			def := table.TableDef()
+			name := def.Name
+			if def.Alias != "" {
+				name = def.Alias
+			}
+			ctx.writeQuotedIdentifier(name)
+		}
+	}
+
+	if q.locking.noWait {
+		ctx.writeString(" NOWAIT")
+	} else if q.locking.skipLocked {
+		ctx.writeString(" SKIP LOCKED")
+	}
+
+	return nil
 }
 
 func (q *SelectQuery) writeCompoundOperandSQL(ctx *compileContext) error {
@@ -662,6 +758,9 @@ func (q *SelectQuery) compile() (compiledQuery, error) {
 		if len(q.relationNames) > 0 {
 			return compiledQuery{}, errors.New("rain: compound queries do not support WithRelations()")
 		}
+		if q.locking != nil {
+			return compiledQuery{}, errors.New("rain: compound queries do not support FOR locking clauses")
+		}
 	}
 
 	ctx := newCompileContext(q.dialect)
@@ -683,6 +782,9 @@ func (q *SelectQuery) compileAggregate(selection string) (compiledQuery, error) 
 	}
 	if q.distinct || len(q.groupBy) > 0 || len(q.having) > 0 {
 		return compiledQuery{}, errors.New("rain: aggregate helpers do not support DISTINCT, GROUP BY, or HAVING clauses")
+	}
+	if q.locking != nil {
+		return compiledQuery{}, errors.New("rain: aggregate helpers do not support FOR locking clauses")
 	}
 
 	ctx := newCompileContext(q.dialect)
