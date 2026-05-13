@@ -25,6 +25,17 @@ func (s *modelScanStatus) Scan(src any) error {
 	}
 }
 
+type modelScanCurrency int64
+
+func (c *modelScanCurrency) Scan(src any) error {
+	value, ok := src.(int64)
+	if !ok {
+		return fmt.Errorf("unsupported currency source %T", src)
+	}
+	*c = modelScanCurrency(value * 100)
+	return nil
+}
+
 type ModelScanEmbedded struct {
 	ID int64 `db:"id"`
 }
@@ -123,6 +134,38 @@ func TestScanRowsSupportsExpandedNullableTypesAndEmbeddedStructs(t *testing.T) {
 	}
 	if scanned.Disabled != nil {
 		t.Fatalf("expected null bool pointer, got %#v", scanned.Disabled)
+	}
+}
+
+func TestScanRowsUsesScannerForNamedPrimitiveType(t *testing.T) {
+	t.Parallel()
+
+	db := openModelInternalDB(t)
+	if _, err := db.Exec(`CREATE TABLE primitive_scanner (amount INTEGER NOT NULL)`); err != nil {
+		t.Fatalf("create table: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO primitive_scanner(amount) VALUES (7)`); err != nil {
+		t.Fatalf("insert row: %v", err)
+	}
+
+	rows, err := db.Query(`SELECT amount FROM primitive_scanner`)
+	if err != nil {
+		t.Fatalf("query rows: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = rows.Close()
+	})
+
+	type row struct {
+		Amount modelScanCurrency `db:"amount"`
+	}
+
+	var scanned row
+	if err := scanRows(rows, &scanned); err != nil {
+		t.Fatalf("scan rows: %v", err)
+	}
+	if scanned.Amount != 700 {
+		t.Fatalf("expected custom scanner amount 700, got %d", scanned.Amount)
 	}
 }
 
