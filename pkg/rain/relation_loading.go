@@ -252,7 +252,7 @@ func (q *SelectQuery) validateRelationField(parent reflect.Value, relation schem
 	}
 	field := parent.FieldByIndex(fieldInfo.index)
 	switch relation.Type {
-	case schema.RelationTypeBelongsTo:
+	case schema.RelationTypeBelongsTo, schema.RelationTypeHasOne:
 		if field.Kind() != reflect.Struct && field.Kind() != reflect.Pointer {
 			return fmt.Errorf("rain: relation %q must target a struct or pointer-to-struct field", relation.Name)
 		}
@@ -298,7 +298,7 @@ func (q *SelectQuery) relationElementTypeFromType(parentType reflect.Type, relat
 	}
 	fieldType := parentType.FieldByIndex(fieldInfo.index).Type
 	switch relation.Type {
-	case schema.RelationTypeBelongsTo:
+	case schema.RelationTypeBelongsTo, schema.RelationTypeHasOne:
 		if fieldType.Kind() == reflect.Pointer {
 			return fieldType.Elem(), nil
 		}
@@ -345,7 +345,7 @@ func setRelationValue(parent reflect.Value, relationName string, relationType sc
 	field := parent.FieldByIndex(fieldInfo.index)
 
 	switch relationType {
-	case schema.RelationTypeBelongsTo:
+	case schema.RelationTypeBelongsTo, schema.RelationTypeHasOne:
 		if len(matches) == 0 {
 			return nil
 		}

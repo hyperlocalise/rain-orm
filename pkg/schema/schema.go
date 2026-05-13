@@ -175,6 +175,7 @@ type RelationType string
 
 const (
 	RelationTypeBelongsTo RelationType = "belongs_to"
+	RelationTypeHasOne    RelationType = "has_one"
 	RelationTypeHasMany   RelationType = "has_many"
 )
 
@@ -609,6 +610,17 @@ func (t *TableModel) BelongsTo(name string, source ColumnReference, target Colum
 	t.addRelation(RelationDef{
 		Name:         name,
 		Type:         RelationTypeBelongsTo,
+		SourceColumn: source.ColumnDef(),
+		TargetTable:  target.ColumnDef().Table,
+		TargetColumn: target.ColumnDef(),
+	})
+}
+
+// HasOne registers a has-one relation on the table.
+func (t *TableModel) HasOne(name string, source ColumnReference, target ColumnReference) {
+	t.addRelation(RelationDef{
+		Name:         name,
+		Type:         RelationTypeHasOne,
 		SourceColumn: source.ColumnDef(),
 		TargetTable:  target.ColumnDef().Table,
 		TargetColumn: target.ColumnDef(),
