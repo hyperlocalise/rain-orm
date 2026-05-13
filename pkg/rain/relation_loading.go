@@ -349,6 +349,9 @@ func setRelationValue(parent reflect.Value, relationName string, relationType sc
 		if len(matches) == 0 {
 			return nil
 		}
+		if relationType == schema.RelationTypeHasOne && len(matches) > 1 {
+			return fmt.Errorf("rain: has_one relation %q returned %d matches, expected at most 1", relationName, len(matches))
+		}
 		item := dereferenceModelValue(matches[0])
 		if !item.IsValid() {
 			return nil
