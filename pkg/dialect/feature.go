@@ -12,6 +12,7 @@ const (
 	FeatureCTE
 	FeatureDefaultPlaceholder
 	FeatureSavepoint
+	FeatureSelectLocking
 )
 
 // HasFeature reports whether a feature set includes the requested capability.
