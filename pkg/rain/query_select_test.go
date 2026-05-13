@@ -711,6 +711,7 @@ func TestSelectLockingToSQL(t *testing.T) {
 	type tc struct {
 		name    string
 		dialect string
+		op      string // "count", "exists", or "" for ToSQL
 		build   func(*rain.DB) *rain.SelectQuery
 		wantSQL string
 		wantErr string
@@ -796,6 +797,7 @@ func TestSelectLockingToSQL(t *testing.T) {
 		{
 			name:    "locking with count error",
 			dialect: "postgres",
+			op:      "count",
 			build: func(db *rain.DB) *rain.SelectQuery {
 				return db.Select().Table(users).ForUpdate()
 			},
@@ -804,6 +806,7 @@ func TestSelectLockingToSQL(t *testing.T) {
 		{
 			name:    "locking with exists error",
 			dialect: "postgres",
+			op:      "exists",
 			build: func(db *rain.DB) *rain.SelectQuery {
 				return db.Select().Table(users).ForUpdate()
 			},
@@ -823,19 +826,22 @@ func TestSelectLockingToSQL(t *testing.T) {
 
 			q := tt.build(db)
 
-			if tt.name == "locking with count error" {
+			switch tt.op {
+			case "count":
 				_, err := q.Count(context.Background())
 				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
 					t.Fatalf("expected error containing %q, got %v", tt.wantErr, err)
 				}
 				return
-			}
-			if tt.name == "locking with exists error" {
+			case "exists":
 				_, err := q.Exists(context.Background())
 				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
 					t.Fatalf("expected error containing %q, got %v", tt.wantErr, err)
 				}
 				return
+			case "":
+			default:
+				t.Fatalf("unknown select test operation %q", tt.op)
 			}
 
 			sqlText, _, err := q.ToSQL()
