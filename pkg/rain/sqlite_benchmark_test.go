@@ -414,7 +414,7 @@ func newSQLiteBenchmarkFixture(b *testing.B, dataset benchmarkDataset) *benchmar
 
 	ctx := context.Background()
 	db := openSQLiteTestDB(b)
-	users, posts := defineSQLiteTables()
+	users, posts, _ := defineSQLiteTables()
 	createSQLiteSchema(b, ctx, db)
 	seedSQLiteBenchmarkData(b, ctx, db, users, posts, dataset)
 	validateSQLiteBenchmarkData(b, ctx, db, users, posts, dataset)

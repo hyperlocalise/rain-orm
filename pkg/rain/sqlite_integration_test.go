@@ -34,6 +34,13 @@ type sqlitePostsTable struct {
 	Title  *schema.Column[string]
 }
 
+type sqliteProfilesTable struct {
+	schema.TableModel
+	ID     *schema.Column[int64]
+	UserID *schema.Column[int64]
+	Bio    *schema.Column[string]
+}
+
 type sqliteInsertModel struct {
 	Email    string
 	Name     rain.Set[string]
@@ -169,6 +176,19 @@ type sqliteRichUserWithPostsRow struct {
 	Posts []sqliteRichPostWithRelationsRow `rain:"relation:posts"`
 }
 
+type sqliteProfileRow struct {
+	ID     int64
+	UserID int64
+	Bio    string
+}
+
+type sqliteUserWithProfileRow struct {
+	ID         int64
+	Email      string
+	Profile    sqliteProfileRow  `rain:"relation:profile"`
+	ProfilePtr *sqliteProfileRow `rain:"relation:profile_ptr"`
+}
+
 type sqliteRichUserWithPostPointersRow struct {
 	ID    int64
 	Email string
@@ -189,7 +209,7 @@ type sqliteRichSeedData struct {
 	EngineeringID int64
 }
 
-func defineSQLiteTables() (*sqliteUsersTable, *sqlitePostsTable) {
+func defineSQLiteTables() (*sqliteUsersTable, *sqlitePostsTable, *sqliteProfilesTable) {
 	users := schema.Define("users", func(t *sqliteUsersTable) {
 		t.ID = t.BigSerial("id").PrimaryKey()
 		t.Email = t.VarChar("email", 255).NotNull()
@@ -205,9 +225,19 @@ func defineSQLiteTables() (*sqliteUsersTable, *sqlitePostsTable) {
 		t.Title = t.Text("title").NotNull()
 		t.BelongsTo("author", t.UserID, users.ID)
 	})
-	users.HasMany("posts", users.ID, posts.UserID)
 
-	return users, posts
+	profiles := schema.Define("profiles", func(t *sqliteProfilesTable) {
+		t.ID = t.BigSerial("id").PrimaryKey()
+		t.UserID = t.BigInt("user_id").NotNull().References(users.ID)
+		t.Bio = t.Text("bio").NotNull()
+		t.BelongsTo("user", t.UserID, users.ID)
+	})
+
+	users.HasMany("posts", users.ID, posts.UserID)
+	users.HasOne("profile", users.ID, profiles.UserID)
+	users.HasOne("profile_ptr", users.ID, profiles.UserID)
+
+	return users, posts, profiles
 }
 
 func defineSQLiteRichTables() sqliteRichFixture {
@@ -286,7 +316,7 @@ func TestSQLiteIntegrationInsertDefaultsOverridesAndScan(t *testing.T) {
 
 	ctx := context.Background()
 	db := openSQLiteTestDB(t)
-	users, posts := defineSQLiteTables()
+	users, posts, _ := defineSQLiteTables()
 
 	createSQLiteSchema(t, ctx, db)
 
@@ -705,12 +735,89 @@ func TestSQLiteIntegrationRichAdvancedSelectsAndPreparedQueries(t *testing.T) {
 	}
 }
 
+func TestSQLiteIntegrationHasOneRelation(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db := openSQLiteTestDB(t)
+	users, _, profiles := defineSQLiteTables()
+
+	for _, table := range []schema.TableReference{users, profiles} {
+		statement, err := db.CreateTableSQL(table)
+		if err != nil {
+			t.Fatalf("compile schema for %q: %v", table.TableDef().Name, err)
+		}
+		if _, err := db.Exec(ctx, statement); err != nil {
+			t.Fatalf("exec schema statement %q: %v", statement, err)
+		}
+	}
+
+	res, err := db.Insert().
+		Table(users).
+		Set(users.Email, "hasone@example.com").
+		Exec(ctx)
+	if err != nil {
+		t.Fatalf("insert user failed: %v", err)
+	}
+	userID, _ := res.LastInsertId()
+
+	if _, err := db.Insert().
+		Table(profiles).
+		Set(profiles.UserID, userID).
+		Set(profiles.Bio, "Go Developer").
+		Exec(ctx); err != nil {
+		t.Fatalf("insert profile failed: %v", err)
+	}
+
+	var row sqliteUserWithProfileRow
+	if err := db.Select().
+		Table(users).
+		Where(users.ID.Eq(userID)).
+		WithRelations("profile", "profile_ptr").
+		Scan(ctx, &row); err != nil {
+		t.Fatalf("scan with has_one relations failed: %v", err)
+	}
+
+	if row.Profile.Bio != "Go Developer" {
+		t.Fatalf("expected profile bio 'Go Developer', got %q", row.Profile.Bio)
+	}
+	if row.ProfilePtr == nil || row.ProfilePtr.Bio != "Go Developer" {
+		t.Fatalf("expected profile pointer bio 'Go Developer', got %#v", row.ProfilePtr)
+	}
+
+	t.Run("ErrorOnMultipleMatches", func(t *testing.T) {
+		// Insert a second profile for the same user (manually, bypassing UNIQUE constraint if it wasn't there)
+		// Our current schema has a UNIQUE constraint on UserID, so we'd need to bypass it or use a table without it.
+		// For the sake of testing the ORM check, we can just insert another row.
+		// Since we're using SQLite, we can just use raw SQL to insert another profile if needed,
+		// but since defineSQLiteTables uses UNIQUE, we should use a different table setup or just verify the error
+		// if we can get multiple rows there.
+
+		// To properly test this, let's create a table WITHOUT unique constraint.
+		_, err := db.Exec(ctx, "INSERT INTO profiles (user_id, bio) VALUES (?, ?)", userID, "Duplicate Bio")
+		if err != nil {
+			t.Fatalf("failed to insert duplicate profile: %v", err)
+		}
+
+		var row2 sqliteUserWithProfileRow
+		err = db.Select().
+			Table(users).
+			Where(users.ID.Eq(userID)).
+			WithRelations("profile").
+			Scan(ctx, &row2)
+
+		if err == nil || !strings.Contains(err.Error(), "returned 2 matches, expected at most 1") {
+			t.Fatalf("expected error about multiple matches, got %v", err)
+		}
+	})
+}
+
 func TestSQLiteIntegrationOperators(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
 	db := openSQLiteTestDB(t)
-	users, _ := defineSQLiteTables()
+	users, _, _ := defineSQLiteTables()
 	createSQLiteSchema(t, ctx, db)
 
 	// Seed data
@@ -1085,9 +1192,9 @@ func openSQLiteTestDB(tb testing.TB) *rain.DB {
 func createSQLiteSchema(tb testing.TB, ctx context.Context, db *rain.DB) {
 	tb.Helper()
 
-	users, posts := defineSQLiteTables()
+	users, posts, profiles := defineSQLiteTables()
 
-	for _, table := range []schema.TableReference{users, posts} {
+	for _, table := range []schema.TableReference{users, posts, profiles} {
 		statement, err := db.CreateTableSQL(table)
 		if err != nil {
 			tb.Fatalf("compile schema for %q: %v", table.TableDef().Name, err)
