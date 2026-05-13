@@ -34,7 +34,9 @@ type scanColumnPlan struct {
 	index0     int
 	isComplex  bool
 	isJSON     bool
+	isDirect   bool
 	columnDef  *schema.ColumnDef
+	fieldType  reflect.Type
 }
 
 type rowScanPlan struct {
@@ -192,11 +194,7 @@ func scanRowsAgainstTableDirect(rows *sql.Rows, dest any, table *schema.TableDef
 			return sql.ErrNoRows
 		}
 
-		scanTargets := make([]any, len(cols))
-		scanned := make([]any, len(cols))
-		for idx := range cols {
-			scanTargets[idx] = &scanned[idx]
-		}
+		scanTargets, scanned := newScanTargets(cols, plan)
 		if err := rows.Scan(scanTargets...); err != nil {
 			return err
 		}
@@ -213,17 +211,10 @@ func scanRowsAgainstTableDirect(rows *sql.Rows, dest any, table *schema.TableDef
 			return err
 		}
 
-		scanTargets := make([]any, len(cols))
-		scanned := make([]any, len(cols))
-		for idx := range cols {
-			scanTargets[idx] = &scanned[idx]
-		}
+		scanTargets, scanned := newScanTargets(cols, plan)
 
 		items := target
 		for rows.Next() {
-			for idx := range scanned {
-				scanned[idx] = nil
-			}
 			if err := rows.Scan(scanTargets...); err != nil {
 				return err
 			}
@@ -257,6 +248,50 @@ func scanRowsAgainstTableDirect(rows *sql.Rows, dest any, table *schema.TableDef
 	}
 }
 
+func newScanTargets(cols []string, plan *rowScanPlan) ([]any, []any) {
+	scanTargets := make([]any, len(cols))
+	scanned := make([]any, len(cols))
+
+	for idx := range cols {
+		scanTargets[idx] = &scanned[idx]
+	}
+
+	for i := range plan.columns {
+		p := &plan.columns[i]
+		if !p.isDirect {
+			continue
+		}
+
+		idx := p.scanIndex
+		switch p.fieldType.Kind() {
+		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+			reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+			var v sql.NullInt64
+			scanned[idx] = &v
+			scanTargets[idx] = &v
+		case reflect.String:
+			var v sql.NullString
+			scanned[idx] = &v
+			scanTargets[idx] = &v
+		case reflect.Bool:
+			var v sql.NullBool
+			scanned[idx] = &v
+			scanTargets[idx] = &v
+		case reflect.Float32, reflect.Float64:
+			var v sql.NullFloat64
+			scanned[idx] = &v
+			scanTargets[idx] = &v
+		case reflect.Struct:
+			if p.fieldType == reflect.TypeFor[time.Time]() {
+				var v sql.NullTime
+				scanned[idx] = &v
+				scanTargets[idx] = &v
+			}
+		}
+	}
+	return scanTargets, scanned
+}
+
 func scanDirectRowWithPlan(scanned []any, target reflect.Value, plan *rowScanPlan) error {
 	for _, column := range plan.columns {
 		var field reflect.Value
@@ -270,16 +305,88 @@ func scanDirectRowWithPlan(scanned []any, target reflect.Value, plan *rowScanPla
 			field = target.Field(column.index0)
 		}
 
-		raw := scanned[column.scanIndex]
+		val := scanned[column.scanIndex]
+		if column.isDirect {
+			if err := assignDirectly(field, val); err != nil {
+				return err
+			}
+			continue
+		}
+
 		if column.isJSON {
-			if s, ok := raw.(string); ok {
-				raw = []byte(s)
+			if s, ok := val.(string); ok {
+				val = []byte(s)
 			}
 		}
 
-		if err := assignRawValueToField(field, raw); err != nil {
+		if err := assignRawValueToField(field, val); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+func assignDirectly(field reflect.Value, val any) error {
+	switch v := val.(type) {
+	case *sql.NullInt64:
+		if !v.Valid {
+			return assignRawValueToField(field, nil)
+		}
+		switch field.Kind() {
+		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+			if field.OverflowInt(v.Int64) {
+				return fmt.Errorf("rain: value %d overflows field %s", v.Int64, field.Type())
+			}
+			field.SetInt(v.Int64)
+		case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+			if v.Int64 < 0 || field.OverflowUint(uint64(v.Int64)) {
+				return fmt.Errorf("rain: value %d overflows field %s", v.Int64, field.Type())
+			}
+			field.SetUint(uint64(v.Int64))
+		default:
+			return assignRawValueToField(field, v.Int64)
+		}
+	case *sql.NullString:
+		if !v.Valid {
+			return assignRawValueToField(field, nil)
+		}
+		if field.Kind() == reflect.String {
+			field.SetString(v.String)
+		} else {
+			return assignRawValueToField(field, v.String)
+		}
+	case *sql.NullBool:
+		if !v.Valid {
+			return assignRawValueToField(field, nil)
+		}
+		if field.Kind() == reflect.Bool {
+			field.SetBool(v.Bool)
+		} else {
+			return assignRawValueToField(field, v.Bool)
+		}
+	case *sql.NullFloat64:
+		if !v.Valid {
+			return assignRawValueToField(field, nil)
+		}
+		if field.Kind() == reflect.Float32 || field.Kind() == reflect.Float64 {
+			if field.OverflowFloat(v.Float64) {
+				return fmt.Errorf("rain: value %f overflows field %s", v.Float64, field.Type())
+			}
+			field.SetFloat(v.Float64)
+		} else {
+			return assignRawValueToField(field, v.Float64)
+		}
+	case *sql.NullTime:
+		if !v.Valid {
+			return assignRawValueToField(field, nil)
+		}
+		if field.Type() == reflect.TypeFor[time.Time]() {
+			*field.Addr().Interface().(*time.Time) = v.Time
+		} else {
+			return assignRawValueToField(field, v.Time)
+		}
+	default:
+		return assignRawValueToField(field, val)
 	}
 	return nil
 }
@@ -384,6 +491,21 @@ func newRowScanPlanForColumns(cols []string, modelType reflect.Type, table *sche
 			index0 = fieldInfo.index[0]
 		}
 
+		var fieldType reflect.Type
+		if isComplex {
+			fieldType = modelType
+			for _, i := range fieldInfo.index {
+				if fieldType.Kind() == reflect.Pointer {
+					fieldType = fieldType.Elem()
+				}
+				fieldType = fieldType.Field(i).Type
+			}
+		} else {
+			fieldType = modelType.Field(index0).Type
+		}
+
+		isDirect := !isJSON && isSimpleDirectType(fieldType)
+
 		plan.columns = append(plan.columns, scanColumnPlan{
 			columnName: name,
 			scanIndex:  idx,
@@ -391,10 +513,28 @@ func newRowScanPlanForColumns(cols []string, modelType reflect.Type, table *sche
 			index0:     index0,
 			isComplex:  isComplex,
 			isJSON:     isJSON,
+			isDirect:   isDirect,
 			columnDef:  columnDef,
+			fieldType:  fieldType,
 		})
 	}
 	return plan, nil
+}
+
+func isSimpleDirectType(t reflect.Type) bool {
+	if t.Kind() == reflect.Pointer {
+		return false
+	}
+	switch t.Kind() {
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64,
+		reflect.Float32, reflect.Float64,
+		reflect.String, reflect.Bool:
+		return true
+	case reflect.Struct:
+		return t == reflect.TypeFor[time.Time]()
+	}
+	return false
 }
 
 func readCachedSelectRows(rows *sql.Rows) (*cachedSelectRows, error) {
