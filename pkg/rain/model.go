@@ -525,6 +525,10 @@ func isSimpleDirectType(t reflect.Type) bool {
 	if t.Kind() == reflect.Pointer {
 		return false
 	}
+	scannerType := reflect.TypeFor[scannerInterface]()
+	if t.Implements(scannerType) || reflect.PointerTo(t).Implements(scannerType) {
+		return false
+	}
 	switch t.Kind() {
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
 		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64,
