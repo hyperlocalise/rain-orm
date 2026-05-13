@@ -99,7 +99,7 @@ func (p *PreparedSelectQuery) Scan(ctx context.Context, args PreparedArgs, dest 
 		return err
 	}
 	table := p.query.scanValidationTable()
-	if cacheOptions != nil && !cacheOptions.bypass && len(p.query.relationNames) == 0 {
+	if cacheOptions != nil && !cacheOptions.bypass && len(p.query.relationNames) == 0 && p.query.locking == nil {
 		cached, ok, cacheErr := p.query.cache.Get(ctx, cacheKey)
 		if cacheErr != nil {
 			return cacheErr
@@ -117,7 +117,7 @@ func (p *PreparedSelectQuery) Scan(ctx context.Context, args PreparedArgs, dest 
 	defer closeRows(rows, &err)
 
 	if len(p.query.relationNames) == 0 {
-		if cacheKey != "" && cacheOptions != nil && !cacheOptions.bypass {
+		if cacheKey != "" && cacheOptions != nil && !cacheOptions.bypass && p.query.locking == nil {
 			result, readErr := readCachedSelectRows(rows)
 			if readErr != nil {
 				return readErr

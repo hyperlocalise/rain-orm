@@ -249,7 +249,8 @@ func (q *SelectQuery) isBareCompound() bool {
 		!q.distinct && len(q.cols) == 0 && q.table == nil &&
 		len(q.where) == 0 && len(q.joins) == 0 &&
 		len(q.groupBy) == 0 && len(q.having) == 0 &&
-		len(q.relationNames) == 0 && len(q.ctes) == 0
+		len(q.relationNames) == 0 && len(q.ctes) == 0 &&
+		q.locking == nil
 }
 
 func (q *SelectQuery) wrapSetOp(operator setOperator, other *SelectQuery) *SelectQuery {
@@ -422,8 +423,19 @@ func (q *SelectQuery) writeLocking(ctx *compileContext) error {
 		return fmt.Errorf("rain: select locking is not supported by %s dialect", ctx.dialect.Name())
 	}
 
+	if q.locking.noWait && q.locking.skipLocked {
+		return errors.New("rain: select locking cannot combine NOWAIT and SKIP LOCKED")
+	}
+
+	mode := q.locking.mode
+	if ctx.dialect.Name() == "mysql" {
+		if mode != LockUpdate && mode != LockShare {
+			return fmt.Errorf("rain: MySQL select locking only supports UPDATE and SHARE modes, got %s", mode)
+		}
+	}
+
 	ctx.writeString(" FOR ")
-	ctx.writeString(string(q.locking.mode))
+	ctx.writeString(string(mode))
 
 	if len(q.locking.of) > 0 {
 		ctx.writeString(" OF ")
@@ -453,9 +465,9 @@ func (q *SelectQuery) writeCompoundOperandSQL(ctx *compileContext) error {
 	if len(q.ctes) > 0 {
 		return fmt.Errorf("rain: compound query operand cannot contain CTEs")
 	}
-	// Use parentheses if the operand has its own ORDER BY, LIMIT, or is itself a compound query.
+	// Use parentheses if the operand has its own ORDER BY, LIMIT, locking, or is itself a compound query.
 	// Flattening is handled during builder chaining in wrapSetOp.
-	useParens := len(q.order) > 0 || q.limit > 0 || q.offset > 0 || q.firstOperand != nil
+	useParens := len(q.order) > 0 || q.limit > 0 || q.offset > 0 || q.locking != nil || q.firstOperand != nil
 	if useParens {
 		ctx.writeByte('(')
 	}
@@ -517,7 +529,7 @@ func (q *SelectQuery) Scan(ctx context.Context, dest any) error {
 		return err
 	}
 	table := q.scanValidationTable()
-	if cacheOptions != nil && !cacheOptions.bypass && len(q.relationNames) == 0 {
+	if cacheOptions != nil && !cacheOptions.bypass && len(q.relationNames) == 0 && q.locking == nil {
 		cached, ok, cacheErr := q.cache.Get(ctx, cacheKey)
 		if cacheErr != nil {
 			return cacheErr
@@ -535,7 +547,7 @@ func (q *SelectQuery) Scan(ctx context.Context, dest any) error {
 	defer closeRows(rows, &err)
 
 	if len(q.relationNames) == 0 {
-		if cacheKey != "" && cacheOptions != nil && !cacheOptions.bypass {
+		if cacheKey != "" && cacheOptions != nil && !cacheOptions.bypass && q.locking == nil {
 			result, readErr := readCachedSelectRows(rows)
 			if readErr != nil {
 				return readErr
@@ -558,6 +570,9 @@ func (q *SelectQuery) Scan(ctx context.Context, dest any) error {
 
 // Count executes SELECT COUNT(*).
 func (q *SelectQuery) Count(ctx context.Context) (int64, error) {
+	if q.locking != nil {
+		return 0, errors.New("rain: aggregate helpers do not support FOR locking clauses")
+	}
 	if q.runner == nil {
 		return 0, ErrNoConnection
 	}
@@ -607,6 +622,9 @@ func (q *SelectQuery) Count(ctx context.Context) (int64, error) {
 
 // Exists executes a SELECT EXISTS query.
 func (q *SelectQuery) Exists(ctx context.Context) (bool, error) {
+	if q.locking != nil {
+		return false, errors.New("rain: exists checks do not support FOR locking clauses")
+	}
 	if q.runner == nil {
 		return false, ErrNoConnection
 	}
@@ -819,6 +837,9 @@ func (q *SelectQuery) compileAggregate(selection string) (compiledQuery, error) 
 }
 
 func (q *SelectQuery) compileExists() (compiledQuery, error) {
+	if q.locking != nil {
+		return compiledQuery{}, errors.New("rain: exists checks do not support FOR locking clauses")
+	}
 	compiled, err := q.compile()
 	if err != nil {
 		return compiledQuery{}, err
