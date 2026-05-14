@@ -1318,3 +1318,94 @@ func seedSQLiteRichFixture(tb testing.TB, ctx context.Context, db *rain.DB, fixt
 		EngineeringID: engineeringID,
 	}
 }
+
+func TestSQLiteIntegrationAdvancedPredicatesAndOrder(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db := openSQLiteTestDB(t)
+	users, _, _ := defineSQLiteTables()
+	createSQLiteSchema(t, ctx, db)
+
+	// Seed data
+	if _, err := db.Insert().Table(users).Values(
+		map[schema.ColumnReference]any{users.ID: 1, users.Email: "alice@example.com", users.Name: "Alice", users.Active: true, users.Nickname: "ali"},
+		map[schema.ColumnReference]any{users.ID: 2, users.Email: "bob@example.com", users.Name: "Bob", users.Active: true, users.Nickname: nil},
+		map[schema.ColumnReference]any{users.ID: 3, users.Email: "carol@example.com", users.Name: "Carol", users.Active: false, users.Nickname: "caz"},
+	).Exec(ctx); err != nil {
+		t.Fatalf("seed data failed: %v", err)
+	}
+
+	t.Run("CaseExpression", func(t *testing.T) {
+		caseExpr := schema.Case().
+			When(users.Active.Eq(true), schema.ValueExpr{Value: "OK"}).
+			Else(schema.ValueExpr{Value: "NOT OK"}).
+			End()
+
+		var rows []struct {
+			Email  string
+			Status string `db:"status"`
+		}
+		if err := db.Select().
+			Table(users).
+			Column(users.Email, caseExpr.As("status")).
+			OrderBy(users.ID.Asc()).
+			Scan(ctx, &rows); err != nil {
+			t.Fatalf("Case expression scan failed: %v", err)
+		}
+
+		if len(rows) != 3 {
+			t.Fatalf("expected 3 rows, got %d", len(rows))
+		}
+		if rows[0].Status != "OK" || rows[2].Status != "NOT OK" {
+			t.Fatalf("unexpected case results: %++v", rows)
+		}
+	})
+
+	t.Run("InSubquery", func(t *testing.T) {
+		subquery := db.Select().Table(users).Column(users.ID).Where(users.Active.Eq(true))
+
+		var rows []sqliteUserRow
+		if err := db.Select().
+			Table(users).
+			Where(users.ID.InSubquery(subquery)).
+			OrderBy(users.ID.Asc()).
+			Scan(ctx, &rows); err != nil {
+			t.Fatalf("InSubquery scan failed: %v", err)
+		}
+
+		if len(rows) != 2 {
+			t.Fatalf("expected 2 rows, got %d", len(rows))
+		}
+		if rows[0].Email != "alice@example.com" || rows[1].Email != "bob@example.com" {
+			t.Fatalf("unexpected InSubquery results: %+v", rows)
+		}
+	})
+
+	t.Run("NullsOrder", func(t *testing.T) {
+		var rows []sqliteUserRow
+		if err := db.Select().
+			Table(users).
+			OrderBy(users.Nickname.Asc().NullsFirst()).
+			Scan(ctx, &rows); err != nil {
+			t.Fatalf("NullsOrder scan failed: %v", err)
+		}
+
+		if len(rows) != 3 {
+			t.Fatalf("expected 3 rows, got %d", len(rows))
+		}
+		if rows[0].Email != "bob@example.com" {
+			t.Fatalf("expected bob (null nickname) first with NULLS FIRST, got %s", rows[0].Email)
+		}
+
+		if err := db.Select().
+			Table(users).
+			OrderBy(users.Nickname.Asc().NullsLast()).
+			Scan(ctx, &rows); err != nil {
+			t.Fatalf("NullsOrder scan failed: %v", err)
+		}
+		if rows[2].Email != "bob@example.com" {
+			t.Fatalf("expected bob (null nickname) last with NULLS LAST, got %s", rows[2].Email)
+		}
+	})
+}

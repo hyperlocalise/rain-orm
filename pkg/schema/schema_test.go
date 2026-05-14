@@ -1,6 +1,7 @@
 package schema_test
 
 import (
+	"reflect"
 	"testing"
 	"time"
 
@@ -291,5 +292,109 @@ func TestComputedExpressionHelpers(t *testing.T) {
 	rawAlias := schema.Raw("COUNT(*)").As("post_count")
 	if rawAlias.Alias != "post_count" {
 		t.Fatalf("expected alias post_count, got %q", rawAlias.Alias)
+	}
+}
+
+func TestCaseExpressionMetadata(t *testing.T) {
+	users := schema.Define("users", func(tu *usersTable) {
+		tu.ID = tu.BigSerial("id").PrimaryKey()
+		tu.Active = tu.Boolean("active").NotNull().Default(true)
+	})
+
+	// Searched CASE
+	searched := schema.Case().
+		When(users.Active.Eq(true), schema.ValueExpr{Value: "active"}).
+		When(users.Active.Eq(false), schema.ValueExpr{Value: "inactive"}).
+		Else(schema.ValueExpr{Value: "unknown"}).
+		End()
+
+	if searched.ValueExpression != nil {
+		t.Fatalf("expected nil ValueExpression for searched CASE")
+	}
+	if len(searched.WhenThenPairs) != 2 {
+		t.Fatalf("expected 2 WHEN clauses, got %d", len(searched.WhenThenPairs))
+	}
+	if searched.ElseExpression == nil {
+		t.Fatalf("expected non-nil ElseExpression")
+	}
+
+	// Simple CASE
+	simple := schema.Case(users.ID).
+		When(schema.ValueExpr{Value: int64(1)}, schema.ValueExpr{Value: "one"}).
+		End()
+
+	if simple.ValueExpression == nil {
+		t.Fatalf("expected non-nil ValueExpression for simple CASE")
+	}
+	if len(simple.WhenThenPairs) != 1 {
+		t.Fatalf("expected 1 WHEN clause, got %d", len(simple.WhenThenPairs))
+	}
+}
+
+func TestCaseRejectsMultipleValueExpressions(t *testing.T) {
+	users := schema.Define("users", func(tu *usersTable) {
+		tu.ID = tu.BigSerial("id").PrimaryKey()
+		tu.Email = tu.Text("email")
+	})
+
+	defer func() {
+		if recover() == nil {
+			t.Fatalf("expected Case with multiple value expressions to panic")
+		}
+	}()
+
+	_ = schema.Case(users.ID, users.Email)
+}
+
+func TestCaseEndAllowsCompilerValidation(t *testing.T) {
+	caseExpr := schema.Case().End()
+	if len(caseExpr.WhenThenPairs) != 0 {
+		t.Fatalf("expected no WHEN clauses, got %d", len(caseExpr.WhenThenPairs))
+	}
+}
+
+func TestInSubqueryPredicate(t *testing.T) {
+	users := schema.Define("users", func(tu *usersTable) {
+		tu.ID = tu.BigSerial("id").PrimaryKey()
+	})
+
+	subquery := schema.Raw("SELECT id FROM other")
+	in := users.ID.InSubquery(subquery)
+
+	if in.Left != users.ID {
+		t.Fatalf("unexpected Left column in IN predicate")
+	}
+	if len(in.Values) != 1 || !reflect.DeepEqual(in.Values[0], subquery) {
+		t.Fatalf("unexpected subquery in IN predicate")
+	}
+	if in.Negated {
+		t.Fatalf("expected non-negated IN predicate")
+	}
+
+	notIn := users.ID.NotInSubquery(subquery)
+	if !notIn.Negated {
+		t.Fatalf("expected negated NOT IN predicate")
+	}
+}
+
+func TestOrderExprNulls(t *testing.T) {
+	users := schema.Define("users", func(tu *usersTable) {
+		tu.ID = tu.BigSerial("id").PrimaryKey()
+	})
+
+	asc := users.ID.Asc().NullsFirst()
+	if asc.Direction != schema.SortAsc {
+		t.Fatalf("expected ASC direction")
+	}
+	if asc.NullsOrder != schema.NullsFirst {
+		t.Fatalf("expected NULLS FIRST")
+	}
+
+	desc := users.ID.Desc().NullsLast()
+	if desc.Direction != schema.SortDesc {
+		t.Fatalf("expected DESC direction")
+	}
+	if desc.NullsOrder != schema.NullsLast {
+		t.Fatalf("expected NULLS LAST")
 	}
 }

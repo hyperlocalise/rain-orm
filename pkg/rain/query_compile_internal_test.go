@@ -186,6 +186,9 @@ func TestCompileContextAndAssignmentsHelpers(t *testing.T) {
 	if err := newCompileContext(dialectForTest(t, "postgres")).writeExpression(schema.CoalesceExpr{Exprs: []schema.Expression{users.Email}}); err == nil || !strings.Contains(err.Error(), "at least two expressions") {
 		t.Fatalf("expected COALESCE arity error, got %v", err)
 	}
+	if err := newCompileContext(dialectForTest(t, "postgres")).writeExpression(schema.CaseExpr{}); err == nil || !strings.Contains(err.Error(), "CASE expression requires at least one WHEN clause") {
+		t.Fatalf("expected CASE arity error, got %v", err)
+	}
 	if err := newCompileContext(dialectForTest(t, "postgres")).writeExpression(users.ID.In()); err == nil || !strings.Contains(err.Error(), "requires at least one value") {
 		t.Fatalf("expected empty IN error, got %v", err)
 	}

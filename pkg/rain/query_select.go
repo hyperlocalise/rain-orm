@@ -498,6 +498,13 @@ func (q *SelectQuery) writeOrderLimit(ctx *compileContext) error {
 			}
 			ctx.writeByte(' ')
 			ctx.writeString(string(item.Direction))
+			if item.NullsOrder != "" {
+				if !dialect.HasFeature(ctx.dialect.Features(), dialect.FeatureNullsOrder) {
+					return fmt.Errorf("rain: NULLS FIRST/LAST is not supported by %s dialect", ctx.dialect.Name())
+				}
+				ctx.writeByte(' ')
+				ctx.writeString(string(item.NullsOrder))
+			}
 		}
 	}
 

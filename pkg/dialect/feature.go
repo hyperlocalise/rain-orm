@@ -13,6 +13,7 @@ const (
 	FeatureDefaultPlaceholder
 	FeatureSavepoint
 	FeatureSelectLocking
+	FeatureNullsOrder
 )
 
 // HasFeature reports whether a feature set includes the requested capability.

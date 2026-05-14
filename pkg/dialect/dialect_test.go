@@ -134,7 +134,7 @@ func TestPostgresDialect(t *testing.T) {
 	if got := d.Name(); got != "postgres" {
 		t.Fatalf("unexpected name: %q", got)
 	}
-	if got := d.Features(); got != FeatureInsertReturning|FeatureUpdateReturning|FeatureDeleteReturning|FeatureOffset|FeatureUpsert|FeatureCTE|FeatureDefaultPlaceholder|FeatureSavepoint|FeatureSelectLocking {
+	if got := d.Features(); got != FeatureInsertReturning|FeatureUpdateReturning|FeatureDeleteReturning|FeatureOffset|FeatureUpsert|FeatureCTE|FeatureDefaultPlaceholder|FeatureSavepoint|FeatureSelectLocking|FeatureNullsOrder {
 		t.Fatalf("unexpected features: %b", got)
 	}
 	if got := d.QuoteIdentifier(`user"name`); got != `"user""name"` {
@@ -314,7 +314,7 @@ func TestSQLiteDialect(t *testing.T) {
 	if got := d.Name(); got != "sqlite" {
 		t.Fatalf("unexpected name: %q", got)
 	}
-	if got := d.Features(); got != FeatureInsertReturning|FeatureUpdateReturning|FeatureDeleteReturning|FeatureOffset|FeatureUpsert|FeatureSavepoint {
+	if got := d.Features(); got != FeatureInsertReturning|FeatureUpdateReturning|FeatureDeleteReturning|FeatureOffset|FeatureUpsert|FeatureSavepoint|FeatureNullsOrder {
 		t.Fatalf("unexpected features: %b", got)
 	}
 	if got := d.QuoteIdentifier(`user"name`); got != `"user""name"` {

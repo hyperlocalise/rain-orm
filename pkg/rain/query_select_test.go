@@ -43,6 +43,128 @@ func TestSelectToSQL(t *testing.T) {
 	}
 }
 
+func TestSelectAdvancedPredicatesAndOrderToSQL(t *testing.T) {
+	t.Parallel()
+
+	users, posts := defineTables()
+
+	type tc struct {
+		name     string
+		dialect  string
+		build    func(*rain.DB) *rain.SelectQuery
+		wantSQL  string
+		wantArgs []any
+		wantErr  string
+	}
+
+	cases := []tc{
+		{
+			name:    "searched case expression postgres",
+			dialect: "postgres",
+			build: func(db *rain.DB) *rain.SelectQuery {
+				caseExpr := schema.Case().
+					When(users.Active.Eq(true), schema.ValueExpr{Value: "active"}).
+					When(users.Active.Eq(false), schema.ValueExpr{Value: "inactive"}).
+					Else(schema.ValueExpr{Value: "unknown"}).
+					End()
+				return db.Select().Table(users).Column(caseExpr.As("status"))
+			},
+			wantSQL:  `SELECT CASE WHEN "users"."active" = $1 THEN $2 WHEN "users"."active" = $3 THEN $4 ELSE $5 END AS "status" FROM "users"`,
+			wantArgs: []any{true, "active", false, "inactive", "unknown"},
+		},
+		{
+			name:    "simple case expression mysql",
+			dialect: "mysql",
+			build: func(db *rain.DB) *rain.SelectQuery {
+				caseExpr := schema.Case(users.ID).
+					When(schema.ValueExpr{Value: int64(1)}, schema.ValueExpr{Value: "one"}).
+					Else(schema.ValueExpr{Value: "other"}).
+					End()
+				return db.Select().Table(users).Column(caseExpr)
+			},
+			wantSQL:  "SELECT CASE `users`.`id` WHEN ? THEN ? ELSE ? END FROM `users`",
+			wantArgs: []any{int64(1), "one", "other"},
+		},
+		{
+			name:    "in subquery postgres",
+			dialect: "postgres",
+			build: func(db *rain.DB) *rain.SelectQuery {
+				subquery := db.Select().Table(posts).Column(posts.UserID).Where(posts.ID.Gt(int64(100)))
+				return db.Select().Table(users).Where(users.ID.InSubquery(subquery))
+			},
+			wantSQL:  `SELECT * FROM "users" WHERE "users"."id" IN (SELECT "posts"."user_id" FROM "posts" WHERE "posts"."id" > $1)`,
+			wantArgs: []any{int64(100)},
+		},
+		{
+			name:    "in array of expressions postgres",
+			dialect: "postgres",
+			build: func(db *rain.DB) *rain.SelectQuery {
+				return db.Select().Table(users).Where(schema.Ref(users.ID.ColumnDef()).In(int64(1), schema.Raw("10 + 10")))
+			},
+			wantSQL:  `SELECT * FROM "users" WHERE "users"."id" IN ($1, 10 + 10)`,
+			wantArgs: []any{int64(1)},
+		},
+		{
+			name:    "order by nulls first postgres",
+			dialect: "postgres",
+			build: func(db *rain.DB) *rain.SelectQuery {
+				return db.Select().Table(users).OrderBy(users.ID.Asc().NullsFirst())
+			},
+			wantSQL: `SELECT * FROM "users" ORDER BY "users"."id" ASC NULLS FIRST`,
+		},
+		{
+			name:    "order by nulls last sqlite",
+			dialect: "sqlite",
+			build: func(db *rain.DB) *rain.SelectQuery {
+				return db.Select().Table(users).OrderBy(users.ID.Desc().NullsLast())
+			},
+			wantSQL: `SELECT * FROM "users" ORDER BY "users"."id" DESC NULLS LAST`,
+		},
+		{
+			name:    "nulls order unsupported mysql",
+			dialect: "mysql",
+			build: func(db *rain.DB) *rain.SelectQuery {
+				return db.Select().Table(users).OrderBy(users.ID.Asc().NullsFirst())
+			},
+			wantErr: "NULLS FIRST/LAST is not supported by mysql dialect",
+		},
+	}
+
+	for _, tt := range cases {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			db, err := rain.OpenDialect(tt.dialect)
+			if err != nil {
+				t.Fatalf("OpenDialect returned error: %v", err)
+			}
+
+			sqlText, args, err := tt.build(db).ToSQL()
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("expected error containing %q, got %v", tt.wantErr, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ToSQL returned error: %v", err)
+			}
+			if sqlText != tt.wantSQL {
+				t.Fatalf("unexpected SQL:\nwant: %s\ngot:  %s", tt.wantSQL, sqlText)
+			}
+			if len(args) != len(tt.wantArgs) {
+				t.Fatalf("unexpected arg count: want %d got %d (%#v)", len(tt.wantArgs), len(args), args)
+			}
+			for idx := range tt.wantArgs {
+				if args[idx] != tt.wantArgs[idx] {
+					t.Fatalf("unexpected arg[%d]: want %#v got %#v", idx, tt.wantArgs[idx], args[idx])
+				}
+			}
+		})
+	}
+}
+
 func TestSelectSetOperationsToSQL(t *testing.T) {
 	t.Parallel()
 
