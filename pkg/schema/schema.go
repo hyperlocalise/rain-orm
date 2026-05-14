@@ -60,6 +60,14 @@ const (
 	SortDesc SortDirection = "DESC"
 )
 
+// NullsOrder represents a NULLS FIRST or NULLS LAST clause.
+type NullsOrder string
+
+const (
+	NullsFirst NullsOrder = "NULLS FIRST"
+	NullsLast  NullsOrder = "NULLS LAST"
+)
+
 // TableReference is implemented by typed table handles.
 type TableReference interface {
 	TableDef() *TableDef
@@ -527,13 +535,27 @@ func (c *AnyColumn) IsNotNull() NullCheckExpr {
 	return NullCheckExpr{Expr: c, Negated: true}
 }
 
-// In compares this column to a set of Go values using SQL IN.
+// In compares this column to a set of Go values or expressions using SQL IN.
 func (c *AnyColumn) In(values ...any) InExpr {
 	exprs := make([]Expression, 0, len(values))
 	for _, value := range values {
-		exprs = append(exprs, ValueExpr{Value: value})
+		if expr, ok := value.(Expression); ok {
+			exprs = append(exprs, expr)
+		} else {
+			exprs = append(exprs, ValueExpr{Value: value})
+		}
 	}
 	return InExpr{Left: c, Values: exprs}
+}
+
+// InSubquery compares this column to the result of a subquery.
+func (c *AnyColumn) InSubquery(subquery Expression) InExpr {
+	return InExpr{Left: c, Values: []Expression{subquery}}
+}
+
+// NotInSubquery compares this column to the result of a subquery.
+func (c *AnyColumn) NotInSubquery(subquery Expression) InExpr {
+	return InExpr{Left: c, Values: []Expression{subquery}, Negated: true}
 }
 
 func (c *AnyColumn) isExpression()         {}
@@ -733,6 +755,16 @@ func (c *Column[T]) In(values ...T) InExpr {
 	return InExpr{Left: c, Values: exprs}
 }
 
+// InSubquery compares this column to the result of a subquery.
+func (c *Column[T]) InSubquery(subquery Expression) InExpr {
+	return InExpr{Left: c, Values: []Expression{subquery}}
+}
+
+// NotInSubquery compares this column to the result of a subquery.
+func (c *Column[T]) NotInSubquery(subquery Expression) InExpr {
+	return InExpr{Left: c, Values: []Expression{subquery}, Negated: true}
+}
+
 // IsNull creates an IS NULL predicate.
 func (c *Column[T]) IsNull() NullCheckExpr {
 	return NullCheckExpr{Expr: c, Negated: false}
@@ -852,11 +884,80 @@ func (LogicalExpr) isPredicate()  {}
 
 // OrderExpr renders ORDER BY expressions and indexed sort directions.
 type OrderExpr struct {
-	Expr      Expression
-	Direction SortDirection
+	Expr       Expression
+	Direction  SortDirection
+	NullsOrder NullsOrder
+}
+
+// NullsFirst sets NULLS FIRST on the order expression.
+func (o OrderExpr) NullsFirst() OrderExpr {
+	o.NullsOrder = NullsFirst
+	return o
+}
+
+// NullsLast sets NULLS LAST on the order expression.
+func (o OrderExpr) NullsLast() OrderExpr {
+	o.NullsOrder = NullsLast
+	return o
 }
 
 func (OrderExpr) indexColumnSpec() {}
+
+// CaseExpr represents a SQL CASE expression.
+type CaseExpr struct {
+	ValueExpression Expression // Used for simple CASE
+	WhenThenPairs   []WhenThen
+	ElseExpression  Expression
+}
+
+func (CaseExpr) isExpression() {}
+
+// WhenThen represents a single WHEN ... THEN pair in a CASE expression.
+type WhenThen struct {
+	When Expression
+	Then Expression
+}
+
+// CaseBuilder provides a fluent API for building CASE expressions.
+type CaseBuilder struct {
+	caseExpr CaseExpr
+}
+
+// Case starts a new CASE expression.
+// If an expression is provided, it builds a simple CASE (CASE expr WHEN ...).
+// If no expression is provided, it builds a searched CASE (CASE WHEN ...).
+func Case(expr ...Expression) *CaseBuilder {
+	builder := &CaseBuilder{}
+	if len(expr) > 0 {
+		builder.caseExpr.ValueExpression = expr[0]
+	}
+	return builder
+}
+
+// When adds a WHEN ... THEN pair to the CASE expression.
+func (b *CaseBuilder) When(when Expression, then Expression) *CaseBuilder {
+	b.caseExpr.WhenThenPairs = append(b.caseExpr.WhenThenPairs, WhenThen{When: when, Then: then})
+	return b
+}
+
+// Else sets the optional ELSE expression for the CASE expression.
+func (b *CaseBuilder) Else(elseExpr Expression) *CaseBuilder {
+	b.caseExpr.ElseExpression = elseExpr
+	return b
+}
+
+// End finishes building the CASE expression and returns it.
+func (b *CaseBuilder) End() CaseExpr {
+	if len(b.caseExpr.WhenThenPairs) == 0 {
+		panic("schema: CASE expression must have at least one WHEN clause")
+	}
+	return b.caseExpr
+}
+
+// As aliases this CASE expression in a SELECT list.
+func (c CaseExpr) As(alias string) AliasExpr {
+	return As(c, alias)
+}
 
 // AggregateExpr renders SQL aggregate functions.
 //
@@ -1406,6 +1507,23 @@ func cloneExpressionForTable(expr Expression, table *TableDef) Expression {
 		cloned := value
 		if value.Expr != nil {
 			cloned.Expr = cloneExpressionForTable(value.Expr, table)
+		}
+		return cloned
+	case CaseExpr:
+		cloned := CaseExpr{
+			WhenThenPairs: make([]WhenThen, len(value.WhenThenPairs)),
+		}
+		if value.ValueExpression != nil {
+			cloned.ValueExpression = cloneExpressionForTable(value.ValueExpression, table)
+		}
+		for idx, pair := range value.WhenThenPairs {
+			cloned.WhenThenPairs[idx] = WhenThen{
+				When: cloneExpressionForTable(pair.When, table),
+				Then: cloneExpressionForTable(pair.Then, table),
+			}
+		}
+		if value.ElseExpression != nil {
+			cloned.ElseExpression = cloneExpressionForTable(value.ElseExpression, table)
 		}
 		return cloned
 	case AliasExpr:

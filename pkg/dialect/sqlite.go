@@ -24,7 +24,8 @@ func (d *SQLiteDialect) Features() Feature {
 		FeatureDeleteReturning |
 		FeatureOffset |
 		FeatureUpsert |
-		FeatureSavepoint
+		FeatureSavepoint |
+		FeatureNullsOrder
 }
 
 // QuoteIdentifier quotes identifiers with double quotes.

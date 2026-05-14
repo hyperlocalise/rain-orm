@@ -288,6 +288,31 @@ func (c *compileContext) writeExpressionInContext(expr schema.Expression, contex
 			}
 		}
 		c.writeByte(')')
+	case schema.CaseExpr:
+		c.writeString("CASE")
+		if value.ValueExpression != nil {
+			c.writeByte(' ')
+			if err := c.writeExpression(value.ValueExpression); err != nil {
+				return err
+			}
+		}
+		for _, pair := range value.WhenThenPairs {
+			c.writeString(" WHEN ")
+			if err := c.writeExpression(pair.When); err != nil {
+				return err
+			}
+			c.writeString(" THEN ")
+			if err := c.writeExpression(pair.Then); err != nil {
+				return err
+			}
+		}
+		if value.ElseExpression != nil {
+			c.writeString(" ELSE ")
+			if err := c.writeExpression(value.ElseExpression); err != nil {
+				return err
+			}
+		}
+		c.writeString(" END")
 	case schema.AggregateExpr:
 		if value.Function == "" {
 			return errors.New("rain: aggregate function name cannot be empty")

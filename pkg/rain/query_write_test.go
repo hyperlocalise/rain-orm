@@ -161,7 +161,8 @@ func TestDialectFeatures(t *testing.T) {
 				dialect.FeatureCTE |
 				dialect.FeatureDefaultPlaceholder |
 				dialect.FeatureSavepoint |
-				dialect.FeatureSelectLocking,
+				dialect.FeatureSelectLocking |
+				dialect.FeatureNullsOrder,
 		},
 		{
 			name:     "mysql",
@@ -183,7 +184,8 @@ func TestDialectFeatures(t *testing.T) {
 				dialect.FeatureDeleteReturning |
 				dialect.FeatureOffset |
 				dialect.FeatureUpsert |
-				dialect.FeatureSavepoint,
+				dialect.FeatureSavepoint |
+				dialect.FeatureNullsOrder,
 			missing: []dialect.Feature{
 				dialect.FeatureCTE,
 				dialect.FeatureDefaultPlaceholder,
