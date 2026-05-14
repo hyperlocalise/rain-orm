@@ -181,6 +181,10 @@ func scanRowsAgainstTableDirect(rows *sql.Rows, dest any, table *schema.TableDef
 	}
 
 	target := value.Elem()
+	if !target.CanSet() {
+		return fmt.Errorf("rain: destination must be settable (pass a pointer to a slice or struct)")
+	}
+
 	switch target.Kind() {
 	case reflect.Struct:
 		plan, err := newRowScanPlanForColumns(cols, target.Type(), table)
@@ -194,7 +198,7 @@ func scanRowsAgainstTableDirect(rows *sql.Rows, dest any, table *schema.TableDef
 			return sql.ErrNoRows
 		}
 
-		scanTargets, scanned := newScanTargets(cols, plan)
+		scanTargets, scanned := newScanTargets(cols, plan, nil, nil)
 		if err := rows.Scan(scanTargets...); err != nil {
 			return err
 		}
@@ -211,23 +215,34 @@ func scanRowsAgainstTableDirect(rows *sql.Rows, dest any, table *schema.TableDef
 			return err
 		}
 
-		scanTargets, scanned := newScanTargets(cols, plan)
+		scanTargets, scanned := newScanTargets(cols, plan, nil, nil)
+		zeroElem := reflect.Zero(elemType)
 
-		items := target
+		// Use a local slice header to grow the result set. If rows.Scan fails,
+		// the original target slice remains unmodified (atomic-like behavior).
+		items := target.Slice(0, 0)
 		for rows.Next() {
+			// Clear any previous generic scanned values to avoid carrying over data
+			// for non-direct columns. Direct columns use pointers to scratch variables
+			// that are overwritten by rows.Scan.
+			for idx := range scanned {
+				if scanTargets[idx] == &scanned[idx] {
+					scanned[idx] = nil
+				}
+			}
+
 			if err := rows.Scan(scanTargets...); err != nil {
 				return err
 			}
 
-			var item reflect.Value
-			if pointerElems {
-				item = reflect.New(structType)
-			} else {
-				item = reflect.New(structType).Elem()
-			}
+			// Grow the slice using reflect.Append. This is efficient as it reuses
+			// the capacity of the original target slice if available.
+			items = reflect.Append(items, zeroElem)
+			item := items.Index(items.Len() - 1)
 
 			var scanTarget reflect.Value
 			if pointerElems {
+				item.Set(reflect.New(structType))
 				scanTarget = item.Elem()
 			} else {
 				scanTarget = item
@@ -236,7 +251,6 @@ func scanRowsAgainstTableDirect(rows *sql.Rows, dest any, table *schema.TableDef
 			if err := scanDirectRowWithPlan(scanned, scanTarget, plan); err != nil {
 				return err
 			}
-			items = reflect.Append(items, item)
 		}
 		if err := rows.Err(); err != nil {
 			return err
@@ -248,11 +262,16 @@ func scanRowsAgainstTableDirect(rows *sql.Rows, dest any, table *schema.TableDef
 	}
 }
 
-func newScanTargets(cols []string, plan *rowScanPlan) ([]any, []any) {
-	scanTargets := make([]any, len(cols))
-	scanned := make([]any, len(cols))
+func newScanTargets(cols []string, plan *rowScanPlan, scanTargets, scanned []any) ([]any, []any) {
+	if scanTargets == nil {
+		scanTargets = make([]any, len(cols))
+	}
+	if scanned == nil {
+		scanned = make([]any, len(cols))
+	}
 
 	for idx := range cols {
+		scanned[idx] = nil
 		scanTargets[idx] = &scanned[idx]
 	}
 

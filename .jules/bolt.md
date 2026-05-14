@@ -5,3 +5,7 @@
 ## 2026-03-29 - [Caching Column Metadata for Hot Scan Loops]
 **Learning:** Performing `table.ColumnByName` lookups for every column of every row during scanning created a bottleneck that scaled with $O(Rows \times Columns)$. By moving this metadata resolution to a per-query "plan" phase, we reduced scanning overhead significantly. Additionally, adding a fast-path for single-level reflection (`fieldByIndexAlloc`) reduced loop and slicing overhead for the most common model field mappings.
 **Action:** Always pre-calculate and cache metadata (like column definitions and field indices) before entering high-iteration loops like database result scanning. Reflection operations should be specialized for simple paths when possible.
+
+## 2026-05-14 - [In-place Slice Growth for Faster Bulk Scanning]
+**Learning:** The ORM was allocating a new struct and an intermediate `reflect.Value` for every row in a slice scan, then copying it into the target. For a scan of $N$ rows, this added $2N$ heap allocations and $N$ full struct copies. By growing the slice in-place using `SetLen` and scanning directly into the pre-allocated memory at `Index(n)`, we eliminated these overheads.
+**Action:** When scanning into slices, use `reflect.Append` only when capacity is exceeded, and prefer `SetLen` + `Index(i)` to access existing memory. Reset existing elements to their zero state before reuse to avoid data carry-over.
