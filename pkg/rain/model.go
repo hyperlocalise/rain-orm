@@ -216,10 +216,11 @@ func scanRowsAgainstTableDirect(rows *sql.Rows, dest any, table *schema.TableDef
 		}
 
 		scanTargets, scanned := newScanTargets(cols, plan, nil, nil)
-
-		// Create a zero value once to reuse for resetting/appending elements
 		zeroElem := reflect.Zero(elemType)
 
+		// Use a local slice header to grow the result set. If rows.Scan fails,
+		// the original target slice remains unmodified (atomic-like behavior).
+		items := target.Slice(0, 0)
 		for rows.Next() {
 			// Clear any previous generic scanned values to avoid carrying over data
 			// for non-direct columns. Direct columns use pointers to scratch variables
@@ -234,25 +235,16 @@ func scanRowsAgainstTableDirect(rows *sql.Rows, dest any, table *schema.TableDef
 				return err
 			}
 
-			// Efficiently grow the slice by one element, reusing capacity if available
-			// to avoid the variadic allocation overhead of reflect.Append.
-			n := target.Len()
-			if n < target.Cap() {
-				target.SetLen(n + 1)
-			} else {
-				target.Set(reflect.Append(target, zeroElem))
-			}
-			item := target.Index(n)
+			// Grow the slice using reflect.Append. This is efficient as it reuses
+			// the capacity of the original target slice if available.
+			items = reflect.Append(items, zeroElem)
+			item := items.Index(items.Len() - 1)
 
 			var scanTarget reflect.Value
 			if pointerElems {
-				// For slices of pointers, we must allocate a new struct instance for each row.
 				item.Set(reflect.New(structType))
 				scanTarget = item.Elem()
 			} else {
-				// For slices of structs, we reset the existing element to its zero state
-				// and scan directly into the slice's memory, avoiding a per-row heap allocation.
-				item.Set(zeroElem)
 				scanTarget = item
 			}
 
@@ -263,6 +255,7 @@ func scanRowsAgainstTableDirect(rows *sql.Rows, dest any, table *schema.TableDef
 		if err := rows.Err(); err != nil {
 			return err
 		}
+		target.Set(items)
 		return nil
 	default:
 		return fmt.Errorf("rain: destination must point to a struct or slice")
