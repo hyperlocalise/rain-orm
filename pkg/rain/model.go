@@ -181,6 +181,10 @@ func scanRowsAgainstTableDirect(rows *sql.Rows, dest any, table *schema.TableDef
 	}
 
 	target := value.Elem()
+	if !target.CanSet() {
+		return fmt.Errorf("rain: destination must be settable (pass a pointer to a slice or struct)")
+	}
+
 	switch target.Kind() {
 	case reflect.Struct:
 		plan, err := newRowScanPlanForColumns(cols, target.Type(), table)
@@ -194,7 +198,7 @@ func scanRowsAgainstTableDirect(rows *sql.Rows, dest any, table *schema.TableDef
 			return sql.ErrNoRows
 		}
 
-		scanTargets, scanned := newScanTargets(cols, plan)
+		scanTargets, scanned := newScanTargets(cols, plan, nil, nil)
 		if err := rows.Scan(scanTargets...); err != nil {
 			return err
 		}
@@ -211,48 +215,70 @@ func scanRowsAgainstTableDirect(rows *sql.Rows, dest any, table *schema.TableDef
 			return err
 		}
 
-		scanTargets, scanned := newScanTargets(cols, plan)
+		scanTargets, scanned := newScanTargets(cols, plan, nil, nil)
 
-		items := target
+		// Create a zero value once to reuse for resetting/appending elements
+		zeroElem := reflect.Zero(elemType)
+
 		for rows.Next() {
+			// Clear any previous generic scanned values to avoid carrying over data
+			// for non-direct columns. Direct columns use pointers to scratch variables
+			// that are overwritten by rows.Scan.
+			for idx := range scanned {
+				if scanTargets[idx] == &scanned[idx] {
+					scanned[idx] = nil
+				}
+			}
+
 			if err := rows.Scan(scanTargets...); err != nil {
 				return err
 			}
 
-			var item reflect.Value
-			if pointerElems {
-				item = reflect.New(structType)
+			// Efficiently grow the slice by one element, reusing capacity if available
+			// to avoid the variadic allocation overhead of reflect.Append.
+			n := target.Len()
+			if n < target.Cap() {
+				target.SetLen(n + 1)
 			} else {
-				item = reflect.New(structType).Elem()
+				target.Set(reflect.Append(target, zeroElem))
 			}
+			item := target.Index(n)
 
 			var scanTarget reflect.Value
 			if pointerElems {
+				// For slices of pointers, we must allocate a new struct instance for each row.
+				item.Set(reflect.New(structType))
 				scanTarget = item.Elem()
 			} else {
+				// For slices of structs, we reset the existing element to its zero state
+				// and scan directly into the slice's memory, avoiding a per-row heap allocation.
+				item.Set(zeroElem)
 				scanTarget = item
 			}
 
 			if err := scanDirectRowWithPlan(scanned, scanTarget, plan); err != nil {
 				return err
 			}
-			items = reflect.Append(items, item)
 		}
 		if err := rows.Err(); err != nil {
 			return err
 		}
-		target.Set(items)
 		return nil
 	default:
 		return fmt.Errorf("rain: destination must point to a struct or slice")
 	}
 }
 
-func newScanTargets(cols []string, plan *rowScanPlan) ([]any, []any) {
-	scanTargets := make([]any, len(cols))
-	scanned := make([]any, len(cols))
+func newScanTargets(cols []string, plan *rowScanPlan, scanTargets, scanned []any) ([]any, []any) {
+	if scanTargets == nil {
+		scanTargets = make([]any, len(cols))
+	}
+	if scanned == nil {
+		scanned = make([]any, len(cols))
+	}
 
 	for idx := range cols {
+		scanned[idx] = nil
 		scanTargets[idx] = &scanned[idx]
 	}
 
