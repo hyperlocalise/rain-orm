@@ -289,6 +289,9 @@ func (c *compileContext) writeExpressionInContext(expr schema.Expression, contex
 		}
 		c.writeByte(')')
 	case schema.CaseExpr:
+		if len(value.WhenThenPairs) == 0 {
+			return errors.New("rain: CASE expression requires at least one WHEN clause")
+		}
 		c.writeString("CASE")
 		if value.ValueExpression != nil {
 			c.writeByte(' ')

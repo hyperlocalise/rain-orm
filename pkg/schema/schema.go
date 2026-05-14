@@ -926,9 +926,13 @@ type CaseBuilder struct {
 // Case starts a new CASE expression.
 // If an expression is provided, it builds a simple CASE (CASE expr WHEN ...).
 // If no expression is provided, it builds a searched CASE (CASE WHEN ...).
+// Passing more than one expression is a programming error and will panic.
 func Case(expr ...Expression) *CaseBuilder {
+	if len(expr) > 1 {
+		panic("schema: Case accepts at most one expression")
+	}
 	builder := &CaseBuilder{}
-	if len(expr) > 0 {
+	if len(expr) == 1 {
 		builder.caseExpr.ValueExpression = expr[0]
 	}
 	return builder
@@ -948,9 +952,6 @@ func (b *CaseBuilder) Else(elseExpr Expression) *CaseBuilder {
 
 // End finishes building the CASE expression and returns it.
 func (b *CaseBuilder) End() CaseExpr {
-	if len(b.caseExpr.WhenThenPairs) == 0 {
-		panic("schema: CASE expression must have at least one WHEN clause")
-	}
 	return b.caseExpr
 }
 

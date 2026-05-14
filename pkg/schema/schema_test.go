@@ -331,6 +331,28 @@ func TestCaseExpressionMetadata(t *testing.T) {
 	}
 }
 
+func TestCaseRejectsMultipleValueExpressions(t *testing.T) {
+	users := schema.Define("users", func(tu *usersTable) {
+		tu.ID = tu.BigSerial("id").PrimaryKey()
+		tu.Email = tu.Text("email")
+	})
+
+	defer func() {
+		if recover() == nil {
+			t.Fatalf("expected Case with multiple value expressions to panic")
+		}
+	}()
+
+	_ = schema.Case(users.ID, users.Email)
+}
+
+func TestCaseEndAllowsCompilerValidation(t *testing.T) {
+	caseExpr := schema.Case().End()
+	if len(caseExpr.WhenThenPairs) != 0 {
+		t.Fatalf("expected no WHEN clauses, got %d", len(caseExpr.WhenThenPairs))
+	}
+}
+
 func TestInSubqueryPredicate(t *testing.T) {
 	users := schema.Define("users", func(tu *usersTable) {
 		tu.ID = tu.BigSerial("id").PrimaryKey()
