@@ -74,6 +74,9 @@ func (q *UpdateQuery) ToSQL() (string, []any, error) {
 	ctx.writeTableName(q.table)
 	ctx.writeString(" SET ")
 	for idx, item := range q.values {
+		if err := validateAssignmentTarget(q.table, item); err != nil {
+			return "", nil, err
+		}
 		if idx > 0 {
 			ctx.writeString(", ")
 		}

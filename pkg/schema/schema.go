@@ -133,6 +133,8 @@ type ColumnDef struct {
 	PrimaryKey    bool
 	AutoIncrement bool
 	Unique        bool
+	GeneratedExpr Expression
+	GeneratedStored bool
 }
 
 // ForeignKeyDef stores a foreign-key relationship.
@@ -612,6 +614,16 @@ func (c *Column[T]) DefaultNow() *Column[T] {
 // Unique marks the column as unique.
 func (c *Column[T]) Unique() *Column[T] {
 	c.def.Unique = true
+	return c
+}
+
+// GeneratedAlwaysAs marks the column as a generated column.
+func (c *Column[T]) GeneratedAlwaysAs(expr Expression, stored bool) *Column[T] {
+	if expr == nil {
+		panic("schema: generated column requires an expression")
+	}
+	c.def.GeneratedExpr = expr
+	c.def.GeneratedStored = stored
 	return c
 }
 
@@ -1375,6 +1387,9 @@ func cloneTableDef(src *TableDef, alias string) *TableDef {
 		copyColumn := *column
 		copyColumn.Type.EnumValues = append([]string(nil), column.Type.EnumValues...)
 		copyColumn.Table = cloned
+		if column.GeneratedExpr != nil {
+			copyColumn.GeneratedExpr = cloneExpressionForTable(column.GeneratedExpr, cloned)
+		}
 		cloned.Columns = append(cloned.Columns, &copyColumn)
 		cloned.columnsByName[copyColumn.Name] = &copyColumn
 	}

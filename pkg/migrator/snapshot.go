@@ -38,6 +38,7 @@ type ColumnSnapshot struct {
 	PrimaryKey    bool              `json:"primary_key"`
 	AutoIncrement bool              `json:"auto_increment"`
 	Unique        bool              `json:"unique"`
+	GeneratedStored bool            `json:"generated_stored"`
 	DefinitionSQL string            `json:"definition_sql"`
 }
 
@@ -113,6 +114,7 @@ func BuildSnapshot(dialectName string, tables []schema.TableReference) (Snapshot
 				PrimaryKey:    column.PrimaryKey,
 				AutoIncrement: column.AutoIncrement,
 				Unique:        column.Unique,
+				GeneratedStored: column.GeneratedStored,
 				DefinitionSQL: definitionSQL,
 			})
 		}

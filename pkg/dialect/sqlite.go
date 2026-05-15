@@ -110,3 +110,12 @@ func (d *SQLiteDialect) BooleanLiteral(v bool) string {
 func (d *SQLiteDialect) CurrentTimestamp() string {
 	return "CURRENT_TIMESTAMP"
 }
+
+// GeneratedClause returns SQLite generated column syntax.
+func (d *SQLiteDialect) GeneratedClause(expr string, stored bool) (string, error) {
+	kind := "VIRTUAL"
+	if stored {
+		kind = "STORED"
+	}
+	return "GENERATED ALWAYS AS (" + expr + ") " + kind, nil
+}

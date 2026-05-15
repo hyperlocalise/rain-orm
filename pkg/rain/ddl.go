@@ -312,6 +312,18 @@ func columnDefinitionSQL(d dialect.Dialect, table *schema.TableDef, column *sche
 	if column.Unique {
 		parts = append(parts, "UNIQUE")
 	}
+
+	if column.GeneratedExpr != nil {
+		exprSQL, err := expressionDDLSQL(d, table, column.GeneratedExpr)
+		if err != nil {
+			return "", err
+		}
+		clause, err := d.GeneratedClause(exprSQL, column.GeneratedStored)
+		if err != nil {
+			return "", err
+		}
+		parts = append(parts, clause)
+	}
 	if column.HasDefault || column.DefaultSQL != "" {
 		defaultSQL, err := columnDefaultSQL(d, column)
 		if err != nil {
