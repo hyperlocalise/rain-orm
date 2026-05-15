@@ -123,17 +123,17 @@ type TableDef struct {
 
 // ColumnDef stores immutable column metadata after schema construction.
 type ColumnDef struct {
-	Table         *TableDef
-	Name          string
-	Type          ColumnType
-	Nullable      bool
-	Default       any
-	HasDefault    bool
-	DefaultSQL    string
-	PrimaryKey    bool
-	AutoIncrement bool
-	Unique        bool
-	GeneratedExpr Expression
+	Table           *TableDef
+	Name            string
+	Type            ColumnType
+	Nullable        bool
+	Default         any
+	HasDefault      bool
+	DefaultSQL      string
+	PrimaryKey      bool
+	AutoIncrement   bool
+	Unique          bool
+	GeneratedExpr   Expression
 	GeneratedStored bool
 }
 

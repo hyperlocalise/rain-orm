@@ -118,7 +118,6 @@ func TestGeneratedColumnInsertSkip(t *testing.T) {
 		Table(users).
 		Model(&User{FirstName: "John", LastName: "Doe", FullName: "SHOULD BE SKIPPED"}).
 		ToSQL()
-
 	if err != nil {
 		t.Fatalf("ToSQL failed: %v", err)
 	}
