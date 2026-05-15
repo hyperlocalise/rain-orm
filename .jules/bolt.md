@@ -9,3 +9,7 @@
 ## 2026-05-14 - [In-place Slice Growth for Faster Bulk Scanning]
 **Learning:** The ORM was allocating a new struct and an intermediate `reflect.Value` for every row in a slice scan, then copying it into the target. For a scan of $N$ rows, this added $2N$ heap allocations and $N$ full struct copies. By growing the slice in-place using `SetLen` and scanning directly into the pre-allocated memory at `Index(n)`, we eliminated these overheads.
 **Action:** When scanning into slices, use `reflect.Append` only when capacity is exceeded, and prefer `SetLen` + `Index(i)` to access existing memory. Reset existing elements to their zero state before reuse to avoid data carry-over.
+
+## 2026-05-15 - [Thread-Safe Compiled Scan Plans via Binding]
+**Learning:** Moving reflection-heavy logic into closures (pre-compiled scan plans) can significantly reduce per-row overhead. However, when these plans are cached and shared across goroutines, any mutable state (like scan closures or index lists) must be isolated per-query. By introducing a separate 'boundRowScanPlan' created via a 'bind' method at query runtime, we achieved optimized, closure-based scanning while maintaining absolute thread safety and avoiding data corruption.
+**Action:** When implementing closure-based optimizations for cached metadata objects, always separate the static 'plan' from the runtime 'bound' state to ensure thread safety and prevent concurrent query interference.

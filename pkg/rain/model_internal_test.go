@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -166,6 +167,34 @@ func TestScanRowsUsesScannerForNamedPrimitiveType(t *testing.T) {
 	}
 	if scanned.Amount != 700 {
 		t.Fatalf("expected custom scanner amount 700, got %d", scanned.Amount)
+	}
+}
+
+func TestBoundDirectFallbackReadsCurrentScannedValue(t *testing.T) {
+	t.Parallel()
+
+	type row struct {
+		Name string `db:"name"`
+	}
+
+	scanned := []any{"stale"}
+	plan := &rowScanPlan{columns: []scanColumnPlan{{
+		scanIndex:  0,
+		fieldIndex: []int{0},
+		index0:     0,
+		isDirect:   true,
+		fieldType:  reflect.TypeFor[string](),
+	}}}
+	bound := plan.bind(scanned)
+
+	scanned[0] = "fresh"
+
+	var got row
+	if err := scanDirectRowWithPlan(reflect.ValueOf(&got).Elem(), bound); err != nil {
+		t.Fatalf("scan direct fallback: %v", err)
+	}
+	if got.Name != "fresh" {
+		t.Fatalf("expected fallback to read current scanned value, got %q", got.Name)
 	}
 }
 
