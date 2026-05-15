@@ -330,7 +330,6 @@ func scanDirectRowWithPlan(target reflect.Value, bound *boundRowScanPlan) error 
 	return nil
 }
 
-
 func scanCachedRowsAgainstTable(result *cachedSelectRows, dest any, table *schema.TableDef) error {
 	value := reflect.ValueOf(dest)
 	if value.Kind() != reflect.Pointer || value.IsNil() {
