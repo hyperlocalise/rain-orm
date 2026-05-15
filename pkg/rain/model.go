@@ -473,7 +473,7 @@ func (p *rowScanPlan) bind(scanned []any) *boundRowScanPlan {
 		// Pre-calculate which indices in the scanned slice should be cleared.
 		// These are the ones where we scan into the scanned slice itself,
 		// rather than into a specialized sql.Null* type.
-		if scanned[idx] == nil || &scanned[idx] == val {
+		if scanned[idx] == nil {
 			bound.clearIndices = append(bound.clearIndices, idx)
 		}
 
@@ -621,7 +621,7 @@ func (p *rowScanPlan) bind(scanned []any) *boundRowScanPlan {
 					} else {
 						field = target.Field(index0)
 					}
-					return assignRawValueToField(field, val)
+					return assignRawValueToField(field, scanned[idx])
 				}
 			}
 		} else {
