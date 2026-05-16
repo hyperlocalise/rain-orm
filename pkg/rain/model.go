@@ -232,7 +232,10 @@ func scanRowsAgainstTableDirect(rows *sql.Rows, dest any, table *schema.TableDef
 
 		// Use a local slice header to grow the result set. If rows.Scan fails,
 		// the original target slice remains unmodified (atomic-like behavior).
-		items := target.Slice(0, 0)
+		// We use an addressable local to allow for SetLen optimizations.
+		items := reflect.New(target.Type()).Elem()
+		items.Set(target.Slice(0, 0))
+
 		for rows.Next() {
 			// Clear any previous generic scanned values to avoid carrying over data
 			// for non-direct columns. Direct columns use pointers to scratch variables
@@ -245,16 +248,23 @@ func scanRowsAgainstTableDirect(rows *sql.Rows, dest any, table *schema.TableDef
 				return err
 			}
 
-			// Grow the slice using reflect.Append. This is efficient as it reuses
-			// the capacity of the original target slice if available.
-			items = reflect.Append(items, zeroElem)
-			item := items.Index(items.Len() - 1)
+			// Grow the slice efficiently. Use SetLen if capacity is available to
+			// avoid the heap allocations associated with reflect.Append.
+			n := items.Len()
+			if n < items.Cap() {
+				items.SetLen(n + 1)
+			} else {
+				items.Set(reflect.Append(items, zeroElem))
+			}
+			item := items.Index(n)
 
 			var scanTarget reflect.Value
 			if pointerElems {
 				item.Set(reflect.New(structType))
 				scanTarget = item.Elem()
 			} else {
+				// Reset existing element to its zero state before reuse to avoid data carry-over.
+				item.Set(zeroElem)
 				scanTarget = item
 			}
 
