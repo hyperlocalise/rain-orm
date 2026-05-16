@@ -1,6 +1,7 @@
 package dialect
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 
@@ -131,4 +132,12 @@ func (d *PostgresDialect) BooleanLiteral(v bool) string {
 // CurrentTimestamp returns PostgreSQL current timestamp.
 func (d *PostgresDialect) CurrentTimestamp() string {
 	return "CURRENT_TIMESTAMP"
+}
+
+// GeneratedClause returns PostgreSQL generated column syntax.
+func (d *PostgresDialect) GeneratedClause(expr string, stored bool) (string, error) {
+	if !stored {
+		return "", fmt.Errorf("postgres: generated columns must be STORED")
+	}
+	return "GENERATED ALWAYS AS (" + expr + ") STORED", nil
 }

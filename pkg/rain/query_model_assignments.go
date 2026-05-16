@@ -84,17 +84,31 @@ func mergeAssignments(table *schema.TableDef, base, overrides []assignment) ([]a
 
 func validateAssignmentTarget(table *schema.TableDef, item assignment) error {
 	column := item.column.ColumnDef()
+	if err := validateColumnBelongsToTable(table, column); err != nil {
+		return err
+	}
+	if column.GeneratedExpr != nil {
+		return fmt.Errorf("rain: cannot assign to generated column %s", column.Name)
+	}
+
+	return nil
+}
+
+func validateColumnBelongsToTable(table *schema.TableDef, column *schema.ColumnDef) error {
 	if column.Table != table {
 		return fmt.Errorf("rain: column %s belongs to table %s, not %s", column.Name, column.Table.Name, table.Name)
 	}
 	if _, ok := table.ColumnByName(column.Name); !ok {
 		return fmt.Errorf("rain: unknown column %s on table %s", column.Name, table.Name)
 	}
-
 	return nil
 }
 
 func fieldValueForInsert(column *schema.ColumnDef, fieldValue reflect.Value, skipAuto bool) (any, bool) {
+	if column.GeneratedExpr != nil {
+		return nil, false
+	}
+
 	resolvedValue, include, explicit := insertValueForField(fieldValue)
 	if !include {
 		return nil, false

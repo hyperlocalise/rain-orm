@@ -306,6 +306,18 @@ func columnDefinitionSQL(d dialect.Dialect, table *schema.TableDef, column *sche
 	if column.AutoIncrement && shouldEmitAutoIncrementKeyword(d, column, inlinePrimaryKey) {
 		parts = append(parts, d.AutoIncrementKeyword())
 	}
+	if column.GeneratedExpr != nil {
+		exprSQL, err := expressionDDLSQL(d, table, column.GeneratedExpr)
+		if err != nil {
+			return "", err
+		}
+		clause, err := d.GeneratedClause(exprSQL, column.GeneratedStored)
+		if err != nil {
+			return "", err
+		}
+		parts = append(parts, clause)
+	}
+
 	if !column.Nullable && !inlinePrimaryKey {
 		parts = append(parts, "NOT NULL")
 	}

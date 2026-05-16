@@ -123,3 +123,12 @@ func (d *MySQLDialect) BooleanLiteral(v bool) string {
 func (d *MySQLDialect) CurrentTimestamp() string {
 	return "CURRENT_TIMESTAMP"
 }
+
+// GeneratedClause returns MySQL generated column syntax.
+func (d *MySQLDialect) GeneratedClause(expr string, stored bool) (string, error) {
+	kind := "VIRTUAL"
+	if stored {
+		kind = "STORED"
+	}
+	return "GENERATED ALWAYS AS (" + expr + ") " + kind, nil
+}

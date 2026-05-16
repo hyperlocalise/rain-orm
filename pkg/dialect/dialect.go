@@ -43,6 +43,9 @@ type Dialect interface {
 
 	// BooleanLiteral returns the SQL boolean literal (TRUE/FALSE or 1/0).
 	BooleanLiteral(v bool) string
+
+	// GeneratedClause returns the SQL for a generated column clause.
+	GeneratedClause(expr string, stored bool) (string, error)
 }
 
 // BaseDialect provides common implementations.
@@ -105,6 +108,11 @@ func (d *BaseDialect) DataType(columnType schema.ColumnType) string {
 // DefaultValue returns default value representation.
 func (d *BaseDialect) DefaultValue(value interface{}) string {
 	return "DEFAULT"
+}
+
+// GeneratedClause returns an error by default as generated columns require dialect-specific syntax.
+func (d *BaseDialect) GeneratedClause(expr string, stored bool) (string, error) {
+	return "", fmt.Errorf("dialect does not support generated columns")
 }
 
 // UpsertClause returns generic upsert syntax.
