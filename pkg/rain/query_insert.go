@@ -419,7 +419,7 @@ func (q *InsertQuery) writeConflictClause(ctx *compileContext) error {
 
 	ctx.writeString(" ON CONFLICT (")
 	for idx, col := range q.conflict.columns {
-		if err := validateAssignmentTarget(q.table, assignment{column: col}); err != nil {
+		if err := validateColumnBelongsToTable(q.table, col.ColumnDef()); err != nil {
 			return err
 		}
 		if idx > 0 {

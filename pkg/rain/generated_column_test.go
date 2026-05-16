@@ -130,6 +130,51 @@ func TestGeneratedColumnInsertSkip(t *testing.T) {
 	}
 }
 
+func TestGeneratedColumnOnConflict(t *testing.T) {
+	t.Parallel()
+	users := defineGeneratedTable()
+	db, _ := rain.OpenDialect("postgres")
+
+	// ON CONFLICT (full_name) DO NOTHING should be allowed even if full_name is generated.
+	sql, _, err := db.Insert().
+		Table(users).
+		Set(users.FirstName, "John").
+		Set(users.LastName, "Doe").
+		OnConflict(users.FullName).
+		DoNothing().
+		ToSQL()
+	if err != nil {
+		t.Fatalf("ToSQL failed: %v", err)
+	}
+
+	if !strings.Contains(sql, `ON CONFLICT ("full_name") DO NOTHING`) {
+		t.Errorf("expected ON CONFLICT clause, got:\n%s", sql)
+	}
+}
+
+func TestGeneratedColumnNotNull(t *testing.T) {
+	t.Parallel()
+	users := schema.Define("users", func(t *generatedTable) {
+		t.ID = t.BigSerial("id").PrimaryKey()
+		t.FullName = t.VarChar("full_name", 201).NotNull().GeneratedAlwaysAs(
+			schema.Raw("first_name || ' ' || last_name"),
+			true,
+		)
+	})
+
+	db, _ := rain.OpenDialect("postgres")
+	sql, err := db.CreateTableSQL(users)
+	if err != nil {
+		t.Fatalf("CreateTableSQL: %v", err)
+	}
+
+	// Generated Always clause MUST come before NOT NULL in Postgres.
+	expected := `"full_name" VARCHAR(201) GENERATED ALWAYS AS (first_name || ' ' || last_name) STORED NOT NULL`
+	if !strings.Contains(sql, expected) {
+		t.Errorf("expected correct clause ordering, got:\n%s", sql)
+	}
+}
+
 func TestGeneratedColumnManualAssignmentErr(t *testing.T) {
 	t.Parallel()
 	users := defineGeneratedTable()

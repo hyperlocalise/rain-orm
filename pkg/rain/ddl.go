@@ -306,13 +306,6 @@ func columnDefinitionSQL(d dialect.Dialect, table *schema.TableDef, column *sche
 	if column.AutoIncrement && shouldEmitAutoIncrementKeyword(d, column, inlinePrimaryKey) {
 		parts = append(parts, d.AutoIncrementKeyword())
 	}
-	if !column.Nullable && !inlinePrimaryKey {
-		parts = append(parts, "NOT NULL")
-	}
-	if column.Unique {
-		parts = append(parts, "UNIQUE")
-	}
-
 	if column.GeneratedExpr != nil {
 		exprSQL, err := expressionDDLSQL(d, table, column.GeneratedExpr)
 		if err != nil {
@@ -323,6 +316,13 @@ func columnDefinitionSQL(d dialect.Dialect, table *schema.TableDef, column *sche
 			return "", err
 		}
 		parts = append(parts, clause)
+	}
+
+	if !column.Nullable && !inlinePrimaryKey {
+		parts = append(parts, "NOT NULL")
+	}
+	if column.Unique {
+		parts = append(parts, "UNIQUE")
 	}
 	if column.HasDefault || column.DefaultSQL != "" {
 		defaultSQL, err := columnDefaultSQL(d, column)
