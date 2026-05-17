@@ -52,7 +52,6 @@ type rowScanPlanKey struct {
 
 var rowScanPlanCache sync.Map
 
-
 var modelMetaCache sync.Map
 
 func lookupModelMeta(model any) (*modelMeta, reflect.Value, error) {
@@ -328,7 +327,6 @@ func newScanTargets(cols []string, plan *rowScanPlan, scanTargets, scanned []any
 	}
 	return scanTargets, scanned
 }
-
 
 func scanCachedRowsAgainstTable(result *cachedSelectRows, dest any, table *schema.TableDef) error {
 	value := reflect.ValueOf(dest)
