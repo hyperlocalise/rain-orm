@@ -170,7 +170,7 @@ func TestScanRowsUsesScannerForNamedPrimitiveType(t *testing.T) {
 	}
 }
 
-func TestBoundDirectFallbackReadsCurrentScannedValue(t *testing.T) {
+func TestPlanScanRowDirectFallbackReadsCurrentScannedValue(t *testing.T) {
 	t.Parallel()
 
 	type row struct {
@@ -185,12 +185,11 @@ func TestBoundDirectFallbackReadsCurrentScannedValue(t *testing.T) {
 		isDirect:   true,
 		fieldType:  reflect.TypeFor[string](),
 	}}}
-	bound := plan.bind(scanned)
 
 	scanned[0] = "fresh"
 
 	var got row
-	if err := scanDirectRowWithPlan(reflect.ValueOf(&got).Elem(), bound); err != nil {
+	if err := plan.scanRow(reflect.ValueOf(&got).Elem(), scanned); err != nil {
 		t.Fatalf("scan direct fallback: %v", err)
 	}
 	if got.Name != "fresh" {

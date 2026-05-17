@@ -13,3 +13,7 @@
 ## 2026-05-15 - [Thread-Safe Compiled Scan Plans via Binding]
 **Learning:** Moving reflection-heavy logic into closures (pre-compiled scan plans) can significantly reduce per-row overhead. However, when these plans are cached and shared across goroutines, any mutable state (like scan closures or index lists) must be isolated per-query. By introducing a separate 'boundRowScanPlan' created via a 'bind' method at query runtime, we achieved optimized, closure-based scanning while maintaining absolute thread safety and avoiding data corruption.
 **Action:** When implementing closure-based optimizations for cached metadata objects, always separate the static 'plan' from the runtime 'bound' state to ensure thread safety and prevent concurrent query interference.
+
+## 2026-05-17 - [Eliminating Per-Row Closure Allocations via Cached Plans]
+**Learning:** Closure-based scanning plans, while flexible, incur significant per-row allocation overhead (proportional to $Rows \times Columns$) because each closure capture results in a heap allocation. By replacing the `bind` + closure-dispatch approach with a globally cached `rowScanPlan` and a direct `scanRow` method using specialized assignment helpers, we reduced allocations by ~46% for point lookups and ~10-15% for bulk scans.
+**Action:** In high-frequency loops like database scanning, avoid creating closures or interface-wrapped functions. Use a cached plan object with a dispatch method and specialized, non-allocating assignment functions for common types.
