@@ -25,7 +25,6 @@ func TestInsertSelectToSQL(t *testing.T) {
 			Columns(posts.UserID, posts.Title).
 			Select(subquery).
 			ToSQL()
-
 		if err != nil {
 			t.Fatalf("ToSQL returned error: %v", err)
 		}
@@ -51,7 +50,6 @@ func TestInsertSelectToSQL(t *testing.T) {
 			Columns(posts.UserID, posts.Title).
 			Select(subquery).
 			ToSQL()
-
 		if err != nil {
 			t.Fatalf("ToSQL returned error: %v", err)
 		}
@@ -77,7 +75,6 @@ func TestInsertSelectToSQL(t *testing.T) {
 			Columns(posts.UserID, posts.Title).
 			Select(subquery).
 			ToSQL()
-
 		if err != nil {
 			t.Fatalf("ToSQL returned error: %v", err)
 		}
@@ -101,7 +98,6 @@ func TestInsertSelectToSQL(t *testing.T) {
 			Table(users).
 			Select(subquery).
 			ToSQL()
-
 		if err != nil {
 			t.Fatalf("ToSQL returned error: %v", err)
 		}
@@ -127,7 +123,6 @@ func TestInsertSelectToSQL(t *testing.T) {
 			DoNothing().
 			Returning(users.ID).
 			ToSQL()
-
 		if err != nil {
 			t.Fatalf("ToSQL returned error: %v", err)
 		}
