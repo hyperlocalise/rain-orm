@@ -13,15 +13,17 @@ import (
 
 // InsertQuery builds typed INSERT statements.
 type InsertQuery struct {
-	runner    queryRunner
-	dialect   dialect.Dialect
-	table     *schema.TableDef
-	model     any
-	models    any
-	values    []assignment
-	rows      []map[schema.ColumnReference]any
-	returning []schema.Expression
-	conflict  *insertConflictClause
+	runner        queryRunner
+	dialect       dialect.Dialect
+	table         *schema.TableDef
+	model         any
+	models        any
+	values        []assignment
+	rows          []map[schema.ColumnReference]any
+	selectQuery   *SelectQuery
+	selectColumns []schema.ColumnReference
+	returning     []schema.Expression
+	conflict      *insertConflictClause
 }
 
 type insertConflictAction uint8
@@ -83,6 +85,18 @@ func (q *InsertQuery) Values(rows ...map[schema.ColumnReference]any) *InsertQuer
 	return q
 }
 
+// Columns sets the target columns for an INSERT ... SELECT query.
+func (q *InsertQuery) Columns(cols ...schema.ColumnReference) *InsertQuery {
+	q.selectColumns = append(q.selectColumns, cols...)
+	return q
+}
+
+// Select sets the subquery source for an INSERT ... SELECT query.
+func (q *InsertQuery) Select(query *SelectQuery) *InsertQuery {
+	q.selectQuery = query
+	return q
+}
+
 // OnConflict starts an upsert clause for PostgreSQL and SQLite dialects.
 func (q *InsertQuery) OnConflict(columns ...schema.ColumnReference) *InsertConflictBuilder {
 	q.conflict = &insertConflictClause{columns: columns}
@@ -108,8 +122,43 @@ func (q *InsertQuery) Returning(exprs ...schema.Expression) *InsertQuery {
 	return q
 }
 
+func (q *InsertQuery) validateSources() error {
+	if q.table == nil {
+		return errors.New("rain: insert query requires a table")
+	}
+
+	sources := 0
+	if q.model != nil || len(q.values) > 0 {
+		sources++
+	}
+	if q.models != nil {
+		sources++
+	}
+	if len(q.rows) > 0 {
+		sources++
+	}
+	if q.selectQuery != nil {
+		sources++
+	}
+	if sources == 0 {
+		return errors.New("rain: insert query requires either explicit values, a model, or a subquery")
+	}
+	if sources > 1 {
+		return errors.New("rain: insert query requires exactly one value source: Model/Set, Models, Values, or Select")
+	}
+	return nil
+}
+
 // ToSQL compiles the insert into SQL and args.
 func (q *InsertQuery) ToSQL() (string, []any, error) {
+	if err := q.validateSources(); err != nil {
+		return "", nil, err
+	}
+
+	if q.selectQuery != nil {
+		return q.toSelectSQL()
+	}
+
 	rows, err := q.insertAssignments()
 	if err != nil {
 		return "", nil, err
@@ -204,27 +253,6 @@ func (q *InsertQuery) Scan(ctx context.Context, dest any) error {
 }
 
 func (q *InsertQuery) insertAssignments() ([][]assignment, error) {
-	if q.table == nil {
-		return nil, errors.New("rain: insert query requires a table")
-	}
-
-	sources := 0
-	if q.model != nil || len(q.values) > 0 {
-		sources++
-	}
-	if q.models != nil {
-		sources++
-	}
-	if len(q.rows) > 0 {
-		sources++
-	}
-	if sources == 0 {
-		return nil, errors.New("rain: insert query requires either explicit values or a model")
-	}
-	if sources > 1 {
-		return nil, errors.New("rain: insert query requires exactly one value source: Model/Set, Models, or Values")
-	}
-
 	var rows [][]assignment
 	if q.models != nil {
 		modelRows, err := q.assignmentsFromModels()
@@ -363,6 +391,42 @@ func validateInsertRowShape(rows [][]assignment) error {
 	}
 
 	return nil
+}
+
+func (q *InsertQuery) toSelectSQL() (string, []any, error) {
+	ctx := newCompileContext(q.dialect)
+	ctx.writeString("INSERT INTO ")
+	ctx.writeTableName(q.table)
+	if len(q.selectColumns) > 0 {
+		ctx.writeString(" (")
+		for idx, col := range q.selectColumns {
+			if idx > 0 {
+				ctx.writeString(", ")
+			}
+			ctx.writeQuotedIdentifier(col.ColumnDef().Name)
+		}
+		ctx.writeByte(')')
+	}
+	ctx.writeByte(' ')
+
+	if err := q.selectQuery.writeSQL(ctx); err != nil {
+		return "", nil, err
+	}
+
+	if err := q.writeConflictClause(ctx); err != nil {
+		return "", nil, err
+	}
+
+	if err := ctx.writeReturning(q.returning, q.returningClause()); err != nil {
+		return "", nil, err
+	}
+
+	compiled := ctx.compiledQuery()
+	args, err := compiled.literalArgs()
+	if err != nil {
+		return "", nil, err
+	}
+	return compiled.sql, args, ctx.err
 }
 
 func (q *InsertQuery) writeConflictClause(ctx *compileContext) error {

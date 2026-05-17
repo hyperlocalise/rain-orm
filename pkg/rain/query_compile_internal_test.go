@@ -45,7 +45,7 @@ func TestQueryBuilderAndHelperErrors(t *testing.T) {
 	if _, _, err := db.Insert().ToSQL(); err == nil || !strings.Contains(err.Error(), "requires a table") {
 		t.Fatalf("expected insert table error, got %v", err)
 	}
-	if _, _, err := db.Insert().Table(users).ToSQL(); err == nil || !strings.Contains(err.Error(), "requires either explicit values or a model") {
+	if _, _, err := db.Insert().Table(users).ToSQL(); err == nil || !strings.Contains(err.Error(), "requires either explicit values, a model, or a subquery") {
 		t.Fatalf("expected insert values error, got %v", err)
 	}
 	insertNoRunner := &InsertQuery{dialect: db.Dialect(), table: users.TableDef(), returning: []schema.Expression{users.ID}}

@@ -551,6 +551,71 @@ func TestSQLiteIntegrationRichWriteQueries(t *testing.T) {
 	if exists {
 		t.Fatalf("expected deleted row to be gone")
 	}
+
+	// Test INSERT ... SELECT
+	seedUsers := []struct {
+		Email string
+		Name  string
+	}{
+		{Email: "user1@example.com", Name: "User 1"},
+		{Email: "user2@example.com", Name: "User 2"},
+	}
+	for _, u := range seedUsers {
+		if _, err := db.Insert().
+			Table(fixture.users).
+			Set(fixture.users.Email, u.Email).
+			Set(fixture.users.Name, u.Name).
+			Set(fixture.users.Active, true).
+			Set(fixture.users.ExternalID, "ext-"+u.Name).
+			Set(fixture.users.Status, "active").
+			Exec(ctx); err != nil {
+			t.Fatalf("seed user insert failed: %v", err)
+		}
+	}
+
+	subquery := db.Select().
+		Table(fixture.users).
+		Column(
+			schema.Raw("email || '.backup'"),
+			schema.Raw("'Backup: ' || name"),
+			fixture.users.Active,
+			schema.Raw("external_id || '-backup'"),
+			schema.Raw("'disabled'"),
+		).
+		Where(fixture.users.Email.In("user1@example.com", "user2@example.com"))
+
+	if _, err := db.Insert().
+		Table(fixture.users).
+		Columns(
+			fixture.users.Email,
+			fixture.users.Name,
+			fixture.users.Active,
+			fixture.users.ExternalID,
+			fixture.users.Status,
+		).
+		Select(subquery).
+		Exec(ctx); err != nil {
+		t.Fatalf("insert select failed: %v", err)
+	}
+
+	var backupUsers []sqliteRichUserMutationRow
+	if err := db.Select().
+		Table(fixture.users).
+		Where(fixture.users.Email.Like("%.backup")).
+		OrderBy(fixture.users.Email.Asc()).
+		Scan(ctx, &backupUsers); err != nil {
+		t.Fatalf("select backup users failed: %v", err)
+	}
+
+	if len(backupUsers) != 2 {
+		t.Fatalf("expected 2 backup users, got %d", len(backupUsers))
+	}
+	if backupUsers[0].Email != "user1@example.com.backup" || backupUsers[0].Name != "Backup: User 1" || backupUsers[0].Status != "disabled" {
+		t.Fatalf("unexpected backup user 1: %#v", backupUsers[0])
+	}
+	if backupUsers[1].Email != "user2@example.com.backup" || backupUsers[1].Name != "Backup: User 2" || backupUsers[1].Status != "disabled" {
+		t.Fatalf("unexpected backup user 2: %#v", backupUsers[1])
+	}
 }
 
 func TestSQLiteIntegrationRichAdvancedSelectsAndPreparedQueries(t *testing.T) {
