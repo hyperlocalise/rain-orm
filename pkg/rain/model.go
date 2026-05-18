@@ -44,9 +44,11 @@ type rowScanPlan struct {
 }
 
 type rowScanPlanKey struct {
-	modelType reflect.Type
-	columns   string
-	table     *schema.TableDef
+	modelType  reflect.Type
+	columns    string
+	hasTable   bool
+	tableName  string
+	tableAlias string
 }
 
 var rowScanPlanCache sync.Map
@@ -422,7 +424,11 @@ func newRowScanPlanForColumns(cols []string, modelType reflect.Type, table *sche
 	key := rowScanPlanKey{
 		modelType: modelType,
 		columns:   columnKey,
-		table:     table,
+	}
+	if table != nil {
+		key.hasTable = true
+		key.tableName = table.Name
+		key.tableAlias = table.Alias
 	}
 
 	if cached, ok := rowScanPlanCache.Load(key); ok {

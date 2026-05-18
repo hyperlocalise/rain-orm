@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/hyperlocalise/rain-orm/pkg/schema"
 	_ "modernc.org/sqlite"
 )
 
@@ -72,6 +73,44 @@ func openModelInternalDB(t *testing.T) *sql.DB {
 	})
 
 	return db
+}
+
+func TestRowScanPlanCacheUsesStableTableIdentityForAliases(t *testing.T) {
+	rowScanPlanCache.Clear()
+
+	users, _ := defineInternalQueryTables()
+	cols := []string{"id", "email", "name", "nickname"}
+	columnKey := strings.Join(cols, "\x00")
+	modelType := reflect.TypeFor[internalUserRow]()
+
+	firstAlias := schema.Alias(users, "u")
+	firstPlan, err := newRowScanPlanForColumns(cols, modelType, firstAlias.TableDef())
+	if err != nil {
+		t.Fatalf("first row scan plan: %v", err)
+	}
+
+	for range 5 {
+		aliased := schema.Alias(users, "u")
+		nextPlan, err := newRowScanPlanForColumns(cols, modelType, aliased.TableDef())
+		if err != nil {
+			t.Fatalf("aliased row scan plan: %v", err)
+		}
+		if nextPlan != firstPlan {
+			t.Fatalf("expected dynamic aliases with the same table name and alias to reuse the cached plan")
+		}
+	}
+
+	var matchingEntries int
+	rowScanPlanCache.Range(func(key, _ any) bool {
+		planKey, ok := key.(rowScanPlanKey)
+		if ok && planKey.hasTable && planKey.tableName == "users" && planKey.tableAlias == "u" && planKey.columns == columnKey {
+			matchingEntries++
+		}
+		return true
+	})
+	if matchingEntries != 1 {
+		t.Fatalf("expected one row scan plan cache entry for dynamic aliases, got %d", matchingEntries)
+	}
 }
 
 func TestScanRowsSupportsExpandedNullableTypesAndEmbeddedStructs(t *testing.T) {
