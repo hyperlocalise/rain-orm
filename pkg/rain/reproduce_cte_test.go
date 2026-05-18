@@ -18,14 +18,13 @@ func TestInsertSelectWithCTEToSQL(t *testing.T) {
 		With("active_ids", db.Select().Table(users).Column(users.ID).Where(users.Active.Eq(true))).
 		Table(users).
 		Column(users.ID, schema.Raw("'Migrated'")).
-        Join(schema.Alias(users, "active_ids"), users.ID.EqCol(schema.Alias(users, "active_ids").ID))
+		Join(schema.Alias(users, "active_ids"), users.ID.EqCol(schema.Alias(users, "active_ids").ID))
 
 	sqlText, _, err := db.Insert().
 		Table(posts).
 		Columns(posts.UserID, posts.Title).
 		Select(subquery).
 		ToSQL()
-
 	if err != nil {
 		t.Fatalf("ToSQL returned error: %v", err)
 	}
