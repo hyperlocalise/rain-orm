@@ -488,6 +488,9 @@ func (q *InsertQuery) writeConflictClause(ctx *compileContext) error {
 			return nil
 		}
 		if q.conflict.action == insertConflictActionDoUpdateSet {
+			if q.selectQuery != nil {
+				return errors.New("rain: MySQL INSERT ... SELECT does not support DoUpdateSet because VALUES() would read as NULL")
+			}
 			if len(q.conflict.updates) == 0 {
 				return errors.New("rain: conflict DO UPDATE requires at least one update column")
 			}

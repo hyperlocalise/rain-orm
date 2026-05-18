@@ -2,6 +2,7 @@ package rain_test
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/hyperlocalise/rain-orm/pkg/rain"
@@ -158,6 +159,24 @@ func TestInsertSelectValidation(t *testing.T) {
 			ToSQL()
 		if err == nil || !reflect.DeepEqual(err.Error(), "rain: insert query requires either explicit values, a model, or a subquery") {
 			t.Fatalf("expected missing source error, got %v", err)
+		}
+	})
+
+	t.Run("mysql select do update set rejected", func(t *testing.T) {
+		db, _ := rain.OpenDialect("mysql")
+		subquery := db.Select().
+			Table(users).
+			Column(users.Email, users.Name)
+
+		_, _, err := db.Insert().
+			Table(users).
+			Columns(users.Email, users.Name).
+			Select(subquery).
+			OnConflict().
+			DoUpdateSet(users.Name).
+			ToSQL()
+		if err == nil || !strings.Contains(err.Error(), "MySQL INSERT ... SELECT does not support DoUpdateSet") {
+			t.Fatalf("expected mysql insert-select conflict update error, got %v", err)
 		}
 	})
 }
