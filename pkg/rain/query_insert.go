@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 
 	"github.com/hyperlocalise/rain-orm/pkg/dialect"
 	"github.com/hyperlocalise/rain-orm/pkg/schema"
@@ -21,7 +22,7 @@ type InsertQuery struct {
 	values        []assignment
 	rows          []map[schema.ColumnReference]any
 	selectQuery   *SelectQuery
-	selectColumns []schema.ColumnReference
+	targetColumns []schema.ColumnReference
 	returning     []schema.Expression
 	conflict      *insertConflictClause
 }
@@ -87,7 +88,7 @@ func (q *InsertQuery) Values(rows ...map[schema.ColumnReference]any) *InsertQuer
 
 // Columns sets the target columns for an INSERT ... SELECT query.
 func (q *InsertQuery) Columns(cols ...schema.ColumnReference) *InsertQuery {
-	q.selectColumns = append(q.selectColumns, cols...)
+	q.targetColumns = append(q.targetColumns, cols...)
 	return q
 }
 
@@ -395,11 +396,38 @@ func validateInsertRowShape(rows [][]assignment) error {
 
 func (q *InsertQuery) toSelectSQL() (string, []any, error) {
 	ctx := newCompileContext(q.dialect)
+
+	// If the subquery has CTEs, they must be written at the top of the INSERT statement.
+	if len(q.selectQuery.ctes) > 0 {
+		if !dialect.HasFeature(ctx.dialect.Features(), dialect.FeatureCTE) {
+			return "", nil, fmt.Errorf("rain: insert select does not support CTEs for %s dialect", ctx.dialect.Name())
+		}
+		ctx.writeString("WITH ")
+		for idx, cte := range q.selectQuery.ctes {
+			if idx > 0 {
+				ctx.writeString(", ")
+			}
+			if strings.TrimSpace(cte.name) == "" {
+				return "", nil, errors.New("rain: CTE name cannot be empty")
+			}
+			ctx.writeQuotedIdentifier(cte.name)
+			ctx.writeString(" AS (")
+			if err := cte.query.writeSQL(ctx); err != nil {
+				return "", nil, err
+			}
+			ctx.writeByte(')')
+		}
+		ctx.writeByte(' ')
+	}
+
 	ctx.writeString("INSERT INTO ")
 	ctx.writeTableName(q.table)
-	if len(q.selectColumns) > 0 {
+	if len(q.targetColumns) > 0 {
 		ctx.writeString(" (")
-		for idx, col := range q.selectColumns {
+		for idx, col := range q.targetColumns {
+			if err := validateColumnBelongsToTable(q.table, col.ColumnDef()); err != nil {
+				return "", nil, err
+			}
 			if idx > 0 {
 				ctx.writeString(", ")
 			}
@@ -409,9 +437,12 @@ func (q *InsertQuery) toSelectSQL() (string, []any, error) {
 	}
 	ctx.writeByte(' ')
 
+	// Signal to skip CTEs during subquery rendering because we already wrote them at the top.
+	ctx.skipCTEs = true
 	if err := q.selectQuery.writeSQL(ctx); err != nil {
 		return "", nil, err
 	}
+	ctx.skipCTEs = false
 
 	if err := q.writeConflictClause(ctx); err != nil {
 		return "", nil, err
