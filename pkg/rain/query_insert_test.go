@@ -204,6 +204,105 @@ func TestInsertOnConflictPostgres(t *testing.T) {
 	})
 }
 
+func TestInsertSelectToSQL(t *testing.T) {
+	t.Parallel()
+
+	users, posts := defineTables()
+
+	t.Run("postgres basic select", func(t *testing.T) {
+		db, _ := rain.OpenDialect("postgres")
+		subquery := db.Select().
+			Table(users).
+			Column(users.ID, users.Email).
+			Where(users.Active.Eq(true))
+
+		sqlText, args, err := db.Insert().
+			Table(posts).
+			Columns(posts.UserID, posts.Title).
+			Select(subquery).
+			ToSQL()
+		if err != nil {
+			t.Fatalf("ToSQL returned error: %v", err)
+		}
+
+		wantSQL := `INSERT INTO "posts" ("user_id", "title") SELECT "users"."id", "users"."email" FROM "users" WHERE "users"."active" = $1`
+		if sqlText != wantSQL {
+			t.Fatalf("unexpected SQL:\nwant: %s\ngot:  %s", wantSQL, sqlText)
+		}
+		if len(args) != 1 || args[0] != true {
+			t.Fatalf("unexpected args: %#v", args)
+		}
+	})
+
+	t.Run("sqlite with conflict and returning", func(t *testing.T) {
+		db, _ := rain.OpenDialect("sqlite")
+		subquery := db.Select().
+			Table(users).
+			Column(users.ID, users.Name).
+			Where(users.Active.Eq(true))
+
+		sqlText, args, err := db.Insert().
+			Table(users).
+			Columns(users.ID, users.Name).
+			Select(subquery).
+			OnConflict(users.ID).
+			DoNothing().
+			Returning(users.ID).
+			ToSQL()
+		if err != nil {
+			t.Fatalf("ToSQL returned error: %v", err)
+		}
+
+		wantSQL := `INSERT INTO "users" ("id", "name") SELECT "users"."id", "users"."name" FROM "users" WHERE "users"."active" = ? ON CONFLICT ("id") DO NOTHING RETURNING "users"."id"`
+		if sqlText != wantSQL {
+			t.Fatalf("unexpected SQL:\nwant: %s\ngot:  %s", wantSQL, sqlText)
+		}
+		if len(args) != 1 || args[0] != true {
+			t.Fatalf("unexpected args: %#v", args)
+		}
+	})
+
+	t.Run("mysql select", func(t *testing.T) {
+		db, _ := rain.OpenDialect("mysql")
+		subquery := db.Select().
+			Table(users).
+			Column(users.ID, users.Name).
+			Where(users.Active.Eq(true))
+
+		sqlText, args, err := db.Insert().
+			Table(users).
+			Columns(users.ID, users.Name).
+			Select(subquery).
+			ToSQL()
+		if err != nil {
+			t.Fatalf("ToSQL returned error: %v", err)
+		}
+
+		wantSQL := "INSERT INTO `users` (`id`, `name`) SELECT `users`.`id`, `users`.`name` FROM `users` WHERE `users`.`active` = ?"
+		if sqlText != wantSQL {
+			t.Fatalf("unexpected SQL:\nwant: %s\ngot:  %s", wantSQL, sqlText)
+		}
+		if len(args) != 1 || args[0] != true {
+			t.Fatalf("unexpected args: %#v", args)
+		}
+	})
+
+	t.Run("error when multiple sources provided", func(t *testing.T) {
+		db, _ := rain.OpenDialect("postgres")
+		subquery := db.Select().Table(users)
+
+		_, _, err := db.Insert().
+			Table(posts).
+			Model(&userModel{Email: "alice@example.com"}).
+			Select(subquery).
+			ToSQL()
+
+		if err == nil || !strings.Contains(err.Error(), "requires exactly one data source") {
+			t.Fatalf("expected multiple source error, got %v", err)
+		}
+	})
+}
+
 func TestInsertOnConflictSQLite(t *testing.T) {
 	t.Parallel()
 
