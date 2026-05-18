@@ -43,6 +43,16 @@ type rowScanPlan struct {
 	columns []scanColumnPlan
 }
 
+type rowScanPlanKey struct {
+	modelType  reflect.Type
+	columns    string
+	hasTable   bool
+	tableName  string
+	tableAlias string
+}
+
+var rowScanPlanCache sync.Map
+
 type boundRowScanPlan struct {
 	columns      []boundColumnScan
 	clearIndices []int
@@ -410,6 +420,21 @@ func sliceElementStructType(elemType reflect.Type) (reflect.Type, bool, error) {
 }
 
 func newRowScanPlanForColumns(cols []string, modelType reflect.Type, table *schema.TableDef) (*rowScanPlan, error) {
+	columnKey := strings.Join(cols, "\x00")
+	key := rowScanPlanKey{
+		modelType: modelType,
+		columns:   columnKey,
+	}
+	if table != nil {
+		key.hasTable = true
+		key.tableName = table.Name
+		key.tableAlias = table.Alias
+	}
+
+	if cached, ok := rowScanPlanCache.Load(key); ok {
+		return cached.(*rowScanPlan), nil
+	}
+
 	if err := validateScanColumnsAgainstTable(modelType, table, cols); err != nil {
 		return nil, err
 	}
@@ -467,7 +492,9 @@ func newRowScanPlanForColumns(cols []string, modelType reflect.Type, table *sche
 			fieldType:  fieldType,
 		})
 	}
-	return plan, nil
+
+	actual, _ := rowScanPlanCache.LoadOrStore(key, plan)
+	return actual.(*rowScanPlan), nil
 }
 
 func (p *rowScanPlan) bind(scanned []any) *boundRowScanPlan {
