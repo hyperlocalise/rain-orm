@@ -109,7 +109,7 @@ func (b *InsertConflictBuilder) DoNothing() *InsertQuery {
 	return b.query
 }
 
-// DoUpdateSet configures ON CONFLICT ... DO UPDATE SET using EXCLUDED values (PostgreSQL/SQLite) or VALUES() references (MySQL).
+// DoUpdateSet configures ON CONFLICT ... DO UPDATE SET using EXCLUDED values (PostgreSQL/SQLite) or VALUES() references for MySQL VALUES inserts.
 func (b *InsertConflictBuilder) DoUpdateSet(columns ...schema.ColumnReference) *InsertQuery {
 	b.query.conflict.action = insertConflictActionDoUpdateSet
 	b.query.conflict.updates = columns
@@ -180,6 +180,14 @@ func (q *InsertQuery) toSelectSQL() (string, []any, error) {
 	if err := q.validateSources(); err != nil {
 		return "", nil, err
 	}
+	if err := q.validateInsertSelectColumns(); err != nil {
+		return "", nil, err
+	}
+
+	selectQuery := q.selectQuery
+	if q.dialect.Name() == "sqlite" && q.conflict != nil {
+		selectQuery = selectQuery.withSQLiteInsertSelectConflictWhere()
+	}
 
 	ctx := newCompileContext(q.dialect)
 	ctx.writeString("INSERT INTO ")
@@ -197,7 +205,7 @@ func (q *InsertQuery) toSelectSQL() (string, []any, error) {
 	}
 
 	ctx.writeByte(' ')
-	if err := q.selectQuery.writeSQL(ctx); err != nil {
+	if err := selectQuery.writeSQL(ctx); err != nil {
 		return "", nil, err
 	}
 
@@ -215,6 +223,16 @@ func (q *InsertQuery) toSelectSQL() (string, []any, error) {
 		return "", nil, err
 	}
 	return compiled.sql, args, ctx.err
+}
+
+func (q *InsertQuery) validateInsertSelectColumns() error {
+	for _, col := range q.columns {
+		if err := validateAssignmentTarget(q.table, assignment{column: col}); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func (q *InsertQuery) returningClause() returningClause {
@@ -466,6 +484,9 @@ func (q *InsertQuery) writeConflictClause(ctx *compileContext) error {
 		if q.conflict.action == insertConflictActionDoUpdateSet {
 			if len(q.conflict.updates) == 0 {
 				return errors.New("rain: conflict DO UPDATE requires at least one update column")
+			}
+			if q.selectQuery != nil {
+				return errors.New("rain: MySQL conflict DO UPDATE is not supported for INSERT ... SELECT")
 			}
 			ctx.writeString(" ON DUPLICATE KEY UPDATE ")
 			for idx, col := range q.conflict.updates {

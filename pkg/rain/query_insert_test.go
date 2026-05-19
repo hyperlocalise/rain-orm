@@ -262,6 +262,32 @@ func TestInsertSelectToSQL(t *testing.T) {
 		}
 	})
 
+	t.Run("sqlite conflict without select where adds parser guard", func(t *testing.T) {
+		db, _ := rain.OpenDialect("sqlite")
+		subquery := db.Select().
+			Table(users).
+			Column(users.ID, users.Name)
+
+		sqlText, args, err := db.Insert().
+			Table(users).
+			Columns(users.ID, users.Name).
+			Select(subquery).
+			OnConflict(users.ID).
+			DoNothing().
+			ToSQL()
+		if err != nil {
+			t.Fatalf("ToSQL returned error: %v", err)
+		}
+
+		wantSQL := `INSERT INTO "users" ("id", "name") SELECT "users"."id", "users"."name" FROM "users" WHERE 1 = 1 ON CONFLICT ("id") DO NOTHING`
+		if sqlText != wantSQL {
+			t.Fatalf("unexpected SQL:\nwant: %s\ngot:  %s", wantSQL, sqlText)
+		}
+		if len(args) != 0 {
+			t.Fatalf("unexpected args: %#v", args)
+		}
+	})
+
 	t.Run("mysql select", func(t *testing.T) {
 		db, _ := rain.OpenDialect("mysql")
 		subquery := db.Select().
@@ -284,6 +310,61 @@ func TestInsertSelectToSQL(t *testing.T) {
 		}
 		if len(args) != 1 || args[0] != true {
 			t.Fatalf("unexpected args: %#v", args)
+		}
+	})
+
+	t.Run("mysql select with do update set returns error", func(t *testing.T) {
+		db, _ := rain.OpenDialect("mysql")
+		subquery := db.Select().
+			Table(users).
+			Column(users.ID, users.Name).
+			Where(users.Active.Eq(true))
+
+		_, _, err := db.Insert().
+			Table(users).
+			Columns(users.ID, users.Name).
+			Select(subquery).
+			OnConflict().
+			DoUpdateSet(users.Name).
+			ToSQL()
+
+		if err == nil || !strings.Contains(err.Error(), "MySQL conflict DO UPDATE is not supported for INSERT ... SELECT") {
+			t.Fatalf("expected mysql insert-select conflict update error, got %v", err)
+		}
+	})
+
+	t.Run("target columns must belong to insert table", func(t *testing.T) {
+		db, _ := rain.OpenDialect("postgres")
+		subquery := db.Select().
+			Table(users).
+			Column(users.ID)
+
+		_, _, err := db.Insert().
+			Table(users).
+			Columns(posts.UserID).
+			Select(subquery).
+			ToSQL()
+
+		if err == nil || !strings.Contains(err.Error(), "belongs to table posts, not users") {
+			t.Fatalf("expected insert-select target table error, got %v", err)
+		}
+	})
+
+	t.Run("generated target columns are rejected", func(t *testing.T) {
+		db, _ := rain.OpenDialect("postgres")
+		generatedUsers := defineGeneratedTable()
+		subquery := db.Select().
+			Table(generatedUsers).
+			Column(generatedUsers.FullName)
+
+		_, _, err := db.Insert().
+			Table(generatedUsers).
+			Columns(generatedUsers.FullName).
+			Select(subquery).
+			ToSQL()
+
+		if err == nil || !strings.Contains(err.Error(), "cannot assign to generated column full_name") {
+			t.Fatalf("expected generated insert-select target error, got %v", err)
 		}
 	})
 
