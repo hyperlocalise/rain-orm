@@ -553,6 +553,39 @@ func TestSQLiteIntegrationRichWriteQueries(t *testing.T) {
 	}
 }
 
+func TestSQLiteIntegrationInsertSelectConflictWithoutWhere(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db := openSQLiteTestDB(t)
+	users, _, _ := defineSQLiteTables()
+	createSQLiteSchema(t, ctx, db)
+
+	if _, err := db.Insert().
+		Table(users).
+		Set(users.ID, int64(1)).
+		Set(users.Email, "alice@example.com").
+		Set(users.Name, "Alice").
+		Set(users.Active, true).
+		Exec(ctx); err != nil {
+		t.Fatalf("insert seed user failed: %v", err)
+	}
+
+	subquery := db.Select().
+		Table(users).
+		Column(users.ID, users.Email, users.Name, users.Active)
+
+	if _, err := db.Insert().
+		Table(users).
+		Columns(users.ID, users.Email, users.Name, users.Active).
+		Select(subquery).
+		OnConflict(users.ID).
+		DoNothing().
+		Exec(ctx); err != nil {
+		t.Fatalf("insert-select conflict without WHERE failed: %v", err)
+	}
+}
+
 func TestSQLiteIntegrationRichAdvancedSelectsAndPreparedQueries(t *testing.T) {
 	t.Parallel()
 

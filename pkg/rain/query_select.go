@@ -243,6 +243,47 @@ func (q *SelectQuery) clone() *SelectQuery {
 	return &newQ
 }
 
+func (q *SelectQuery) withSQLiteInsertSelectConflictWhere() *SelectQuery {
+	rewritten, _ := q.withSQLiteInsertSelectConflictWhereChanged()
+	return rewritten
+}
+
+func (q *SelectQuery) withSQLiteInsertSelectConflictWhereChanged() (*SelectQuery, bool) {
+	if q == nil {
+		return q, false
+	}
+	if q.firstOperand != nil {
+		var changed bool
+		newQ := q.clone()
+		if firstOperand, ok := q.firstOperand.withSQLiteInsertSelectConflictWhereChanged(); ok {
+			newQ.firstOperand = firstOperand
+			changed = true
+		}
+		for idx, setOp := range q.setOps {
+			if setOp.query == nil {
+				continue
+			}
+			query, ok := setOp.query.withSQLiteInsertSelectConflictWhereChanged()
+			if !ok {
+				continue
+			}
+			newQ.setOps[idx].query = query
+			changed = true
+		}
+		if !changed {
+			return q, false
+		}
+		return newQ, true
+	}
+	if len(q.where) > 0 {
+		return q, false
+	}
+
+	newQ := q.clone()
+	newQ.where = append(newQ.where, schema.Raw("1 = 1"))
+	return newQ, true
+}
+
 func (q *SelectQuery) isBareCompound() bool {
 	return q.firstOperand != nil &&
 		len(q.order) == 0 && q.limit == 0 && q.offset == 0 &&
