@@ -134,7 +134,7 @@ func TestPostgresDialect(t *testing.T) {
 	if got := d.Name(); got != "postgres" {
 		t.Fatalf("unexpected name: %q", got)
 	}
-	if got := d.Features(); got != FeatureInsertReturning|FeatureUpdateReturning|FeatureDeleteReturning|FeatureOffset|FeatureUpsert|FeatureCTE|FeatureDefaultPlaceholder|FeatureSavepoint|FeatureSelectLocking|FeatureNullsOrder {
+	if got := d.Features(); got != FeatureInsertReturning|FeatureUpdateReturning|FeatureDeleteReturning|FeatureOffset|FeatureUpsert|FeatureCTE|FeatureDefaultPlaceholder|FeatureSavepoint|FeatureSelectLocking|FeatureNullsOrder|FeatureSelectDistinctOn {
 		t.Fatalf("unexpected features: %b", got)
 	}
 	if got := d.QuoteIdentifier(`user"name`); got != `"user""name"` {
