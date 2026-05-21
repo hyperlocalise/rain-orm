@@ -28,6 +28,7 @@ type SelectQuery struct {
 	firstOperand  *SelectQuery
 	setOps        []setOperation
 	distinct      bool
+	distinctOn    []schema.Expression
 	limit         int
 	offset        int
 	relationNames []string
@@ -86,6 +87,13 @@ func (q *SelectQuery) LeftJoinSubquery(query *SelectQuery, alias string, on sche
 // Distinct marks the SELECT query as DISTINCT.
 func (q *SelectQuery) Distinct() *SelectQuery {
 	q.distinct = true
+	return q
+}
+
+// DistinctOn marks the SELECT query as DISTINCT ON the provided expressions.
+// Supported by PostgreSQL.
+func (q *SelectQuery) DistinctOn(exprs ...schema.Expression) *SelectQuery {
+	q.distinctOn = append(q.distinctOn, exprs...)
 	return q
 }
 
@@ -234,6 +242,7 @@ func (q *SelectQuery) clone() *SelectQuery {
 	newQ.having = append([]schema.Predicate(nil), q.having...)
 	newQ.ctes = append([]cteDefinition(nil), q.ctes...)
 	newQ.setOps = append([]setOperation(nil), q.setOps...)
+	newQ.distinctOn = append([]schema.Expression(nil), q.distinctOn...)
 	newQ.relationNames = append([]string(nil), q.relationNames...)
 	if q.locking != nil {
 		copyLocking := *q.locking
@@ -287,7 +296,7 @@ func (q *SelectQuery) withSQLiteInsertSelectConflictWhereChanged() (*SelectQuery
 func (q *SelectQuery) isBareCompound() bool {
 	return q.firstOperand != nil &&
 		len(q.order) == 0 && q.limit == 0 && q.offset == 0 &&
-		!q.distinct && len(q.cols) == 0 && q.table == nil &&
+		!q.distinct && len(q.distinctOn) == 0 && len(q.cols) == 0 && q.table == nil &&
 		len(q.where) == 0 && len(q.joins) == 0 &&
 		len(q.groupBy) == 0 && len(q.having) == 0 &&
 		len(q.relationNames) == 0 && len(q.ctes) == 0 &&
@@ -390,6 +399,20 @@ func (q *SelectQuery) writeSQL(ctx *compileContext) error {
 	ctx.writeString("SELECT ")
 	if q.distinct {
 		ctx.writeString("DISTINCT ")
+	} else if len(q.distinctOn) > 0 {
+		if !dialect.HasFeature(ctx.dialect.Features(), dialect.FeatureSelectDistinctOn) {
+			return fmt.Errorf("rain: SELECT DISTINCT ON is not supported by %s dialect", ctx.dialect.Name())
+		}
+		ctx.writeString("DISTINCT ON (")
+		for idx, expr := range q.distinctOn {
+			if idx > 0 {
+				ctx.writeString(", ")
+			}
+			if err := ctx.writeExpression(expr); err != nil {
+				return err
+			}
+		}
+		ctx.writeString(") ")
 	}
 	if len(q.cols) == 0 {
 		ctx.writeString("*")
@@ -799,9 +822,16 @@ func (q *SelectQuery) compile() (compiledQuery, error) {
 		return compiledQuery{}, errors.New("rain: select query requires a table")
 	}
 
+	if q.distinct && len(q.distinctOn) > 0 {
+		return compiledQuery{}, errors.New("rain: SELECT DISTINCT and DISTINCT ON cannot be used together")
+	}
+
 	if q.firstOperand != nil {
 		if q.distinct {
 			return compiledQuery{}, errors.New("rain: compound queries do not support DISTINCT")
+		}
+		if len(q.distinctOn) > 0 {
+			return compiledQuery{}, errors.New("rain: compound queries do not support DISTINCT ON")
 		}
 		if len(q.cols) > 0 {
 			return compiledQuery{}, errors.New("rain: compound queries do not support Column()")
@@ -846,8 +876,8 @@ func (q *SelectQuery) compileAggregate(selection string) (compiledQuery, error) 
 	if len(q.ctes) > 0 {
 		return compiledQuery{}, errors.New("rain: aggregate helpers do not support WITH clauses")
 	}
-	if q.distinct || len(q.groupBy) > 0 || len(q.having) > 0 {
-		return compiledQuery{}, errors.New("rain: aggregate helpers do not support DISTINCT, GROUP BY, or HAVING clauses")
+	if q.distinct || len(q.distinctOn) > 0 || len(q.groupBy) > 0 || len(q.having) > 0 {
+		return compiledQuery{}, errors.New("rain: aggregate helpers do not support DISTINCT, DISTINCT ON, GROUP BY, or HAVING clauses")
 	}
 	if q.locking != nil {
 		return compiledQuery{}, errors.New("rain: aggregate helpers do not support FOR locking clauses")

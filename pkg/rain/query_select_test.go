@@ -982,3 +982,122 @@ func TestSelectLockingToSQL(t *testing.T) {
 		})
 	}
 }
+
+func TestSelectDistinctOnToSQL(t *testing.T) {
+	t.Parallel()
+
+	users, _ := defineTables()
+
+	type tc struct {
+		name    string
+		dialect string
+		build   func(*rain.DB) *rain.SelectQuery
+		wantSQL string
+		wantErr string
+	}
+
+	cases := []tc{
+		{
+			name:    "distinct on one column postgres",
+			dialect: "postgres",
+			build: func(db *rain.DB) *rain.SelectQuery {
+				return db.Select().Table(users).DistinctOn(users.ID).Column(users.ID, users.Email)
+			},
+			wantSQL: `SELECT DISTINCT ON ("users"."id") "users"."id", "users"."email" FROM "users"`,
+		},
+		{
+			name:    "distinct on multiple columns postgres",
+			dialect: "postgres",
+			build: func(db *rain.DB) *rain.SelectQuery {
+				return db.Select().Table(users).DistinctOn(users.ID, users.Email).Column(users.ID)
+			},
+			wantSQL: `SELECT DISTINCT ON ("users"."id", "users"."email") "users"."id" FROM "users"`,
+		},
+		{
+			name:    "distinct on with expression postgres",
+			dialect: "postgres",
+			build: func(db *rain.DB) *rain.SelectQuery {
+				return db.Select().Table(users).DistinctOn(schema.Raw("LOWER(email)")).Column(users.ID)
+			},
+			wantSQL: `SELECT DISTINCT ON (LOWER(email)) "users"."id" FROM "users"`,
+		},
+		{
+			name:    "distinct on unsupported on mysql",
+			dialect: "mysql",
+			build: func(db *rain.DB) *rain.SelectQuery {
+				return db.Select().Table(users).DistinctOn(users.ID)
+			},
+			wantErr: "SELECT DISTINCT ON is not supported by mysql dialect",
+		},
+		{
+			name:    "distinct on unsupported on sqlite",
+			dialect: "sqlite",
+			build: func(db *rain.DB) *rain.SelectQuery {
+				return db.Select().Table(users).DistinctOn(users.ID)
+			},
+			wantErr: "SELECT DISTINCT ON is not supported by sqlite dialect",
+		},
+		{
+			name:    "distinct and distinct on together error",
+			dialect: "postgres",
+			build: func(db *rain.DB) *rain.SelectQuery {
+				return db.Select().Table(users).Distinct().DistinctOn(users.ID)
+			},
+			wantErr: "SELECT DISTINCT and DISTINCT ON cannot be used together",
+		},
+		{
+			name:    "distinct on in compound query error",
+			dialect: "postgres",
+			build: func(db *rain.DB) *rain.SelectQuery {
+				q1 := db.Select().Table(users)
+				q2 := db.Select().Table(users)
+				return q1.Union(q2).DistinctOn(users.ID)
+			},
+			wantErr: "compound queries do not support DISTINCT ON",
+		},
+		{
+			name:    "aggregate helper fails with distinct on",
+			dialect: "postgres",
+			build: func(db *rain.DB) *rain.SelectQuery {
+				return db.Select().Table(users).DistinctOn(users.ID)
+			},
+			wantErr: "aggregate helpers do not support DISTINCT, DISTINCT ON, GROUP BY, or HAVING clauses",
+		},
+	}
+
+	for _, tt := range cases {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			db, err := rain.OpenDialect(tt.dialect)
+			if err != nil {
+				t.Fatalf("OpenDialect returned error: %v", err)
+			}
+
+			q := tt.build(db)
+
+			if strings.HasPrefix(tt.name, "aggregate helper fails") {
+				_, err := q.Count(context.Background())
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("expected error containing %q, got %v", tt.wantErr, err)
+				}
+				return
+			}
+
+			sqlText, _, err := q.ToSQL()
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("expected error containing %q, got %v", tt.wantErr, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ToSQL returned error: %v", err)
+			}
+			if sqlText != tt.wantSQL {
+				t.Fatalf("unexpected SQL:\nwant: %s\ngot:  %s", tt.wantSQL, sqlText)
+			}
+		})
+	}
+}
