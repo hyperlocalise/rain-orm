@@ -40,7 +40,14 @@ type scanColumnPlan struct {
 }
 
 type rowScanPlan struct {
-	columns []scanColumnPlan
+	columns      []scanColumnPlan
+	clearIndices []int
+	int64Cols    []scanColumnPlan
+	stringCols   []scanColumnPlan
+	boolCols     []scanColumnPlan
+	float64Cols  []scanColumnPlan
+	timeCols     []scanColumnPlan
+	otherCols    []scanColumnPlan
 }
 
 type rowScanPlanKey struct {
@@ -52,15 +59,6 @@ type rowScanPlanKey struct {
 }
 
 var rowScanPlanCache sync.Map
-
-type boundRowScanPlan struct {
-	columns      []boundColumnScan
-	clearIndices []int
-}
-
-type boundColumnScan struct {
-	scan func(reflect.Value) error
-}
 
 var modelMetaCache sync.Map
 
@@ -218,13 +216,12 @@ func scanRowsAgainstTableDirect(rows *sql.Rows, dest any, table *schema.TableDef
 		}
 
 		scanTargets, scanned := newScanTargets(cols, plan, nil, nil)
-		bound := plan.bind(scanned)
 
 		if err := rows.Scan(scanTargets...); err != nil {
 			return err
 		}
 
-		return scanDirectRowWithPlan(target, bound)
+		return scanDirectRow(target, plan, scanned)
 	case reflect.Slice:
 		elemType := target.Type().Elem()
 		structType, pointerElems, err := sliceElementStructType(elemType)
@@ -237,7 +234,6 @@ func scanRowsAgainstTableDirect(rows *sql.Rows, dest any, table *schema.TableDef
 		}
 
 		scanTargets, scanned := newScanTargets(cols, plan, nil, nil)
-		bound := plan.bind(scanned)
 		zeroElem := reflect.Zero(elemType)
 
 		// Use a local slice header to grow the result set. If rows.Scan fails,
@@ -250,7 +246,7 @@ func scanRowsAgainstTableDirect(rows *sql.Rows, dest any, table *schema.TableDef
 			// Clear any previous generic scanned values to avoid carrying over data
 			// for non-direct columns. Direct columns use pointers to scratch variables
 			// that are overwritten by rows.Scan.
-			for _, idx := range bound.clearIndices {
+			for _, idx := range plan.clearIndices {
 				scanned[idx] = nil
 			}
 
@@ -278,7 +274,7 @@ func scanRowsAgainstTableDirect(rows *sql.Rows, dest any, table *schema.TableDef
 				scanTarget = item
 			}
 
-			if err := scanDirectRowWithPlan(scanTarget, bound); err != nil {
+			if err := scanDirectRow(scanTarget, plan, scanned); err != nil {
 				return err
 			}
 		}
@@ -341,9 +337,203 @@ func newScanTargets(cols []string, plan *rowScanPlan, scanTargets, scanned []any
 	return scanTargets, scanned
 }
 
-func scanDirectRowWithPlan(target reflect.Value, bound *boundRowScanPlan) error {
-	for i := range bound.columns {
-		if err := bound.columns[i].scan(target); err != nil {
+func scanDirectRow(target reflect.Value, plan *rowScanPlan, scanned []any) error {
+	for i := range plan.int64Cols {
+		col := &plan.int64Cols[i]
+		v := scanned[col.scanIndex].(*sql.NullInt64)
+		var field reflect.Value
+		if col.isComplex {
+			var err error
+			field, err = fieldByIndexAlloc(target, col.fieldIndex)
+			if err != nil {
+				return err
+			}
+		} else {
+			field = target.Field(col.index0)
+		}
+		if !v.Valid {
+			if err := assignRawValueToField(field, nil); err != nil {
+				return err
+			}
+			continue
+		}
+		if field.Kind() == reflect.Pointer {
+			if field.IsNil() {
+				field.Set(reflect.New(field.Type().Elem()))
+			}
+			field = field.Elem()
+		}
+		switch field.Kind() {
+		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+			if field.OverflowInt(v.Int64) {
+				return fmt.Errorf("rain: value %d overflows field %s", v.Int64, field.Type())
+			}
+			field.SetInt(v.Int64)
+		case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+			if v.Int64 < 0 || field.OverflowUint(uint64(v.Int64)) {
+				return fmt.Errorf("rain: value %d overflows field %s", v.Int64, field.Type())
+			}
+			field.SetUint(uint64(v.Int64))
+		default:
+			if err := assignRawValueToField(field, v.Int64); err != nil {
+				return err
+			}
+		}
+	}
+	for i := range plan.stringCols {
+		col := &plan.stringCols[i]
+		v := scanned[col.scanIndex].(*sql.NullString)
+		var field reflect.Value
+		if col.isComplex {
+			var err error
+			field, err = fieldByIndexAlloc(target, col.fieldIndex)
+			if err != nil {
+				return err
+			}
+		} else {
+			field = target.Field(col.index0)
+		}
+		if !v.Valid {
+			if err := assignRawValueToField(field, nil); err != nil {
+				return err
+			}
+			continue
+		}
+		if field.Kind() == reflect.Pointer {
+			if field.IsNil() {
+				field.Set(reflect.New(field.Type().Elem()))
+			}
+			field = field.Elem()
+		}
+		if field.Kind() == reflect.String {
+			field.SetString(v.String)
+		} else {
+			if err := assignRawValueToField(field, v.String); err != nil {
+				return err
+			}
+		}
+	}
+	for i := range plan.boolCols {
+		col := &plan.boolCols[i]
+		v := scanned[col.scanIndex].(*sql.NullBool)
+		var field reflect.Value
+		if col.isComplex {
+			var err error
+			field, err = fieldByIndexAlloc(target, col.fieldIndex)
+			if err != nil {
+				return err
+			}
+		} else {
+			field = target.Field(col.index0)
+		}
+		if !v.Valid {
+			if err := assignRawValueToField(field, nil); err != nil {
+				return err
+			}
+			continue
+		}
+		if field.Kind() == reflect.Pointer {
+			if field.IsNil() {
+				field.Set(reflect.New(field.Type().Elem()))
+			}
+			field = field.Elem()
+		}
+		if field.Kind() == reflect.Bool {
+			field.SetBool(v.Bool)
+		} else {
+			if err := assignRawValueToField(field, v.Bool); err != nil {
+				return err
+			}
+		}
+	}
+	for i := range plan.float64Cols {
+		col := &plan.float64Cols[i]
+		v := scanned[col.scanIndex].(*sql.NullFloat64)
+		var field reflect.Value
+		if col.isComplex {
+			var err error
+			field, err = fieldByIndexAlloc(target, col.fieldIndex)
+			if err != nil {
+				return err
+			}
+		} else {
+			field = target.Field(col.index0)
+		}
+		if !v.Valid {
+			if err := assignRawValueToField(field, nil); err != nil {
+				return err
+			}
+			continue
+		}
+		if field.Kind() == reflect.Pointer {
+			if field.IsNil() {
+				field.Set(reflect.New(field.Type().Elem()))
+			}
+			field = field.Elem()
+		}
+		if field.Kind() == reflect.Float32 || field.Kind() == reflect.Float64 {
+			if field.OverflowFloat(v.Float64) {
+				return fmt.Errorf("rain: value %f overflows field %s", v.Float64, field.Type())
+			}
+			field.SetFloat(v.Float64)
+		} else {
+			if err := assignRawValueToField(field, v.Float64); err != nil {
+				return err
+			}
+		}
+	}
+	for i := range plan.timeCols {
+		col := &plan.timeCols[i]
+		v := scanned[col.scanIndex].(*sql.NullTime)
+		var field reflect.Value
+		if col.isComplex {
+			var err error
+			field, err = fieldByIndexAlloc(target, col.fieldIndex)
+			if err != nil {
+				return err
+			}
+		} else {
+			field = target.Field(col.index0)
+		}
+		if !v.Valid {
+			if err := assignRawValueToField(field, nil); err != nil {
+				return err
+			}
+			continue
+		}
+		if field.Kind() == reflect.Pointer {
+			if field.IsNil() {
+				field.Set(reflect.New(field.Type().Elem()))
+			}
+			field = field.Elem()
+		}
+		if field.Type() == reflect.TypeFor[time.Time]() {
+			*field.Addr().Interface().(*time.Time) = v.Time
+		} else {
+			if err := assignRawValueToField(field, v.Time); err != nil {
+				return err
+			}
+		}
+	}
+	for i := range plan.otherCols {
+		col := &plan.otherCols[i]
+		var field reflect.Value
+		if col.isComplex {
+			var err error
+			field, err = fieldByIndexAlloc(target, col.fieldIndex)
+			if err != nil {
+				return err
+			}
+		} else {
+			field = target.Field(col.index0)
+		}
+		rowVal := scanned[col.scanIndex]
+		if !col.isDirect && col.isJSON {
+			if s, ok := rowVal.(string); ok {
+				rowVal = []byte(s)
+			}
+		}
+		if err := assignRawValueToField(field, rowVal); err != nil {
 			return err
 		}
 	}
@@ -443,10 +633,20 @@ func newRowScanPlanForColumns(cols []string, modelType reflect.Type, table *sche
 		return nil, err
 	}
 
-	plan := &rowScanPlan{columns: make([]scanColumnPlan, 0, len(cols))}
+	plan := &rowScanPlan{
+		columns:      make([]scanColumnPlan, 0, len(cols)),
+		clearIndices: make([]int, 0),
+		int64Cols:    make([]scanColumnPlan, 0),
+		stringCols:   make([]scanColumnPlan, 0),
+		boolCols:     make([]scanColumnPlan, 0),
+		float64Cols:  make([]scanColumnPlan, 0),
+		timeCols:     make([]scanColumnPlan, 0),
+		otherCols:    make([]scanColumnPlan, 0),
+	}
 	for idx, name := range cols {
 		fieldInfo, ok := meta.byColumn[name]
 		if !ok {
+			plan.clearIndices = append(plan.clearIndices, idx)
 			continue
 		}
 
@@ -479,8 +679,11 @@ func newRowScanPlanForColumns(cols []string, modelType reflect.Type, table *sche
 		}
 
 		isDirect := !isJSON && isSimpleDirectType(fieldType)
+		if !isDirect {
+			plan.clearIndices = append(plan.clearIndices, idx)
+		}
 
-		plan.columns = append(plan.columns, scanColumnPlan{
+		colPlan := scanColumnPlan{
 			columnName: name,
 			scanIndex:  idx,
 			fieldIndex: fieldInfo.index,
@@ -490,203 +693,36 @@ func newRowScanPlanForColumns(cols []string, modelType reflect.Type, table *sche
 			isDirect:   isDirect,
 			columnDef:  columnDef,
 			fieldType:  fieldType,
-		})
+		}
+		plan.columns = append(plan.columns, colPlan)
+
+		if isDirect {
+			switch fieldType.Kind() {
+			case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+				reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+				plan.int64Cols = append(plan.int64Cols, colPlan)
+			case reflect.String:
+				plan.stringCols = append(plan.stringCols, colPlan)
+			case reflect.Bool:
+				plan.boolCols = append(plan.boolCols, colPlan)
+			case reflect.Float32, reflect.Float64:
+				plan.float64Cols = append(plan.float64Cols, colPlan)
+			case reflect.Struct:
+				if fieldType == reflect.TypeFor[time.Time]() {
+					plan.timeCols = append(plan.timeCols, colPlan)
+				} else {
+					plan.otherCols = append(plan.otherCols, colPlan)
+				}
+			default:
+				plan.otherCols = append(plan.otherCols, colPlan)
+			}
+		} else {
+			plan.otherCols = append(plan.otherCols, colPlan)
+		}
 	}
 
 	actual, _ := rowScanPlanCache.LoadOrStore(key, plan)
 	return actual.(*rowScanPlan), nil
-}
-
-func (p *rowScanPlan) bind(scanned []any) *boundRowScanPlan {
-	bound := &boundRowScanPlan{
-		columns: make([]boundColumnScan, len(p.columns)),
-	}
-
-	for i := range p.columns {
-		col := &p.columns[i]
-		idx := col.scanIndex
-		val := scanned[idx]
-
-		// Pre-calculate which indices in the scanned slice should be cleared.
-		// These are the ones where we scan into the scanned slice itself,
-		// rather than into a specialized sql.Null* type.
-		if scanned[idx] == nil {
-			bound.clearIndices = append(bound.clearIndices, idx)
-		}
-
-		fieldIndex := col.fieldIndex
-		isComplex := col.isComplex
-		index0 := col.index0
-		isDirect := col.isDirect
-		isJSON := col.isJSON
-
-		var scanFn func(reflect.Value) error
-
-		if isDirect {
-			switch v := val.(type) {
-			case *sql.NullInt64:
-				scanFn = func(target reflect.Value) error {
-					var field reflect.Value
-					if isComplex {
-						var err error
-						field, err = fieldByIndexAlloc(target, fieldIndex)
-						if err != nil {
-							return err
-						}
-					} else {
-						field = target.Field(index0)
-					}
-					if !v.Valid {
-						return assignRawValueToField(field, nil)
-					}
-					switch field.Kind() {
-					case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-						if field.OverflowInt(v.Int64) {
-							return fmt.Errorf("rain: value %d overflows field %s", v.Int64, field.Type())
-						}
-						field.SetInt(v.Int64)
-					case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-						if v.Int64 < 0 || field.OverflowUint(uint64(v.Int64)) {
-							return fmt.Errorf("rain: value %d overflows field %s", v.Int64, field.Type())
-						}
-						field.SetUint(uint64(v.Int64))
-					default:
-						return assignRawValueToField(field, v.Int64)
-					}
-					return nil
-				}
-			case *sql.NullString:
-				scanFn = func(target reflect.Value) error {
-					var field reflect.Value
-					if isComplex {
-						var err error
-						field, err = fieldByIndexAlloc(target, fieldIndex)
-						if err != nil {
-							return err
-						}
-					} else {
-						field = target.Field(index0)
-					}
-					if !v.Valid {
-						return assignRawValueToField(field, nil)
-					}
-					if field.Kind() == reflect.String {
-						field.SetString(v.String)
-					} else {
-						return assignRawValueToField(field, v.String)
-					}
-					return nil
-				}
-			case *sql.NullBool:
-				scanFn = func(target reflect.Value) error {
-					var field reflect.Value
-					if isComplex {
-						var err error
-						field, err = fieldByIndexAlloc(target, fieldIndex)
-						if err != nil {
-							return err
-						}
-					} else {
-						field = target.Field(index0)
-					}
-					if !v.Valid {
-						return assignRawValueToField(field, nil)
-					}
-					if field.Kind() == reflect.Bool {
-						field.SetBool(v.Bool)
-					} else {
-						return assignRawValueToField(field, v.Bool)
-					}
-					return nil
-				}
-			case *sql.NullFloat64:
-				scanFn = func(target reflect.Value) error {
-					var field reflect.Value
-					if isComplex {
-						var err error
-						field, err = fieldByIndexAlloc(target, fieldIndex)
-						if err != nil {
-							return err
-						}
-					} else {
-						field = target.Field(index0)
-					}
-					if !v.Valid {
-						return assignRawValueToField(field, nil)
-					}
-					if field.Kind() == reflect.Float32 || field.Kind() == reflect.Float64 {
-						if field.OverflowFloat(v.Float64) {
-							return fmt.Errorf("rain: value %f overflows field %s", v.Float64, field.Type())
-						}
-						field.SetFloat(v.Float64)
-					} else {
-						return assignRawValueToField(field, v.Float64)
-					}
-					return nil
-				}
-			case *sql.NullTime:
-				scanFn = func(target reflect.Value) error {
-					var field reflect.Value
-					if isComplex {
-						var err error
-						field, err = fieldByIndexAlloc(target, fieldIndex)
-						if err != nil {
-							return err
-						}
-					} else {
-						field = target.Field(index0)
-					}
-					if !v.Valid {
-						return assignRawValueToField(field, nil)
-					}
-					if field.Type() == reflect.TypeFor[time.Time]() {
-						*field.Addr().Interface().(*time.Time) = v.Time
-					} else {
-						return assignRawValueToField(field, v.Time)
-					}
-					return nil
-				}
-			default:
-				scanFn = func(target reflect.Value) error {
-					var field reflect.Value
-					if isComplex {
-						var err error
-						field, err = fieldByIndexAlloc(target, fieldIndex)
-						if err != nil {
-							return err
-						}
-					} else {
-						field = target.Field(index0)
-					}
-					return assignRawValueToField(field, scanned[idx])
-				}
-			}
-		} else {
-			scanFn = func(target reflect.Value) error {
-				var field reflect.Value
-				if isComplex {
-					var err error
-					field, err = fieldByIndexAlloc(target, fieldIndex)
-					if err != nil {
-						return err
-					}
-				} else {
-					field = target.Field(index0)
-				}
-
-				rowVal := scanned[idx]
-				if isJSON {
-					if s, ok := rowVal.(string); ok {
-						rowVal = []byte(s)
-					}
-				}
-
-				return assignRawValueToField(field, rowVal)
-			}
-		}
-		bound.columns[i] = boundColumnScan{scan: scanFn}
-	}
-	return bound
 }
 
 func isSimpleDirectType(t reflect.Type) bool {
