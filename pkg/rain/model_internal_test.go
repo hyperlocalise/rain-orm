@@ -224,8 +224,8 @@ func TestBoundDirectFallbackReadsCurrentScannedValue(t *testing.T) {
 		fieldType:  reflect.TypeFor[string](),
 	}
 	plan := &rowScanPlan{
-		columns:    []scanColumnPlan{colPlan},
-		stringCols: []scanColumnPlan{colPlan},
+		columns:         []scanColumnPlan{colPlan},
+		stringValueCols: []scanColumnPlan{colPlan},
 	}
 
 	scanned := []any{&sql.NullString{String: "stale", Valid: true}}

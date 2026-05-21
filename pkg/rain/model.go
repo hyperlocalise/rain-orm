@@ -42,12 +42,23 @@ type scanColumnPlan struct {
 type rowScanPlan struct {
 	columns      []scanColumnPlan
 	clearIndices []int
-	int64Cols    []scanColumnPlan
-	stringCols   []scanColumnPlan
-	boolCols     []scanColumnPlan
-	float64Cols  []scanColumnPlan
-	timeCols     []scanColumnPlan
-	otherCols    []scanColumnPlan
+
+	int64ValueCols   []scanColumnPlan
+	int64PointerCols []scanColumnPlan
+
+	stringValueCols   []scanColumnPlan
+	stringPointerCols []scanColumnPlan
+
+	boolValueCols   []scanColumnPlan
+	boolPointerCols []scanColumnPlan
+
+	float64ValueCols   []scanColumnPlan
+	float64PointerCols []scanColumnPlan
+
+	timeValueCols   []scanColumnPlan
+	timePointerCols []scanColumnPlan
+
+	otherCols []scanColumnPlan
 }
 
 type rowScanPlanKey struct {
@@ -338,9 +349,12 @@ func newScanTargets(cols []string, plan *rowScanPlan, scanTargets, scanned []any
 }
 
 func scanDirectRow(target reflect.Value, plan *rowScanPlan, scanned []any) error {
-	for i := range plan.int64Cols {
-		col := &plan.int64Cols[i]
+	for i := range plan.int64ValueCols {
+		col := &plan.int64ValueCols[i]
 		v := scanned[col.scanIndex].(*sql.NullInt64)
+		if !v.Valid {
+			return fmt.Errorf("rain: cannot assign NULL to non-pointer field %s", col.fieldType)
+		}
 		var field reflect.Value
 		if col.isComplex {
 			var err error
@@ -350,18 +364,6 @@ func scanDirectRow(target reflect.Value, plan *rowScanPlan, scanned []any) error
 			}
 		} else {
 			field = target.Field(col.index0)
-		}
-		if !v.Valid {
-			if err := assignRawValueToField(field, nil); err != nil {
-				return err
-			}
-			continue
-		}
-		if field.Kind() == reflect.Pointer {
-			if field.IsNil() {
-				field.Set(reflect.New(field.Type().Elem()))
-			}
-			field = field.Elem()
 		}
 		switch field.Kind() {
 		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
@@ -380,8 +382,70 @@ func scanDirectRow(target reflect.Value, plan *rowScanPlan, scanned []any) error
 			}
 		}
 	}
-	for i := range plan.stringCols {
-		col := &plan.stringCols[i]
+	for i := range plan.int64PointerCols {
+		col := &plan.int64PointerCols[i]
+		v := scanned[col.scanIndex].(*sql.NullInt64)
+		var field reflect.Value
+		if col.isComplex {
+			var err error
+			field, err = fieldByIndexAlloc(target, col.fieldIndex)
+			if err != nil {
+				return err
+			}
+		} else {
+			field = target.Field(col.index0)
+		}
+		if !v.Valid {
+			field.SetZero()
+			continue
+		}
+		if field.IsNil() {
+			field.Set(reflect.New(field.Type().Elem()))
+		}
+		field = field.Elem()
+		switch field.Kind() {
+		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+			if field.OverflowInt(v.Int64) {
+				return fmt.Errorf("rain: value %d overflows field %s", v.Int64, field.Type())
+			}
+			field.SetInt(v.Int64)
+		case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+			if v.Int64 < 0 || field.OverflowUint(uint64(v.Int64)) {
+				return fmt.Errorf("rain: value %d overflows field %s", v.Int64, field.Type())
+			}
+			field.SetUint(uint64(v.Int64))
+		default:
+			if err := assignRawValueToField(field, v.Int64); err != nil {
+				return err
+			}
+		}
+	}
+	for i := range plan.stringValueCols {
+		col := &plan.stringValueCols[i]
+		v := scanned[col.scanIndex].(*sql.NullString)
+		if !v.Valid {
+			return fmt.Errorf("rain: cannot assign NULL to non-pointer field %s", col.fieldType)
+		}
+		var field reflect.Value
+		if col.isComplex {
+			var err error
+			field, err = fieldByIndexAlloc(target, col.fieldIndex)
+			if err != nil {
+				return err
+			}
+		} else {
+			field = target.Field(col.index0)
+		}
+		if field.Kind() == reflect.String {
+			field.SetString(v.String)
+		} else {
+			if err := assignRawValueToField(field, v.String); err != nil {
+				return err
+			}
+		}
+	}
+	for i := range plan.stringPointerCols {
+		col := &plan.stringPointerCols[i]
 		v := scanned[col.scanIndex].(*sql.NullString)
 		var field reflect.Value
 		if col.isComplex {
@@ -394,17 +458,13 @@ func scanDirectRow(target reflect.Value, plan *rowScanPlan, scanned []any) error
 			field = target.Field(col.index0)
 		}
 		if !v.Valid {
-			if err := assignRawValueToField(field, nil); err != nil {
-				return err
-			}
+			field.SetZero()
 			continue
 		}
-		if field.Kind() == reflect.Pointer {
-			if field.IsNil() {
-				field.Set(reflect.New(field.Type().Elem()))
-			}
-			field = field.Elem()
+		if field.IsNil() {
+			field.Set(reflect.New(field.Type().Elem()))
 		}
+		field = field.Elem()
 		if field.Kind() == reflect.String {
 			field.SetString(v.String)
 		} else {
@@ -413,8 +473,32 @@ func scanDirectRow(target reflect.Value, plan *rowScanPlan, scanned []any) error
 			}
 		}
 	}
-	for i := range plan.boolCols {
-		col := &plan.boolCols[i]
+	for i := range plan.boolValueCols {
+		col := &plan.boolValueCols[i]
+		v := scanned[col.scanIndex].(*sql.NullBool)
+		if !v.Valid {
+			return fmt.Errorf("rain: cannot assign NULL to non-pointer field %s", col.fieldType)
+		}
+		var field reflect.Value
+		if col.isComplex {
+			var err error
+			field, err = fieldByIndexAlloc(target, col.fieldIndex)
+			if err != nil {
+				return err
+			}
+		} else {
+			field = target.Field(col.index0)
+		}
+		if field.Kind() == reflect.Bool {
+			field.SetBool(v.Bool)
+		} else {
+			if err := assignRawValueToField(field, v.Bool); err != nil {
+				return err
+			}
+		}
+	}
+	for i := range plan.boolPointerCols {
+		col := &plan.boolPointerCols[i]
 		v := scanned[col.scanIndex].(*sql.NullBool)
 		var field reflect.Value
 		if col.isComplex {
@@ -427,17 +511,13 @@ func scanDirectRow(target reflect.Value, plan *rowScanPlan, scanned []any) error
 			field = target.Field(col.index0)
 		}
 		if !v.Valid {
-			if err := assignRawValueToField(field, nil); err != nil {
-				return err
-			}
+			field.SetZero()
 			continue
 		}
-		if field.Kind() == reflect.Pointer {
-			if field.IsNil() {
-				field.Set(reflect.New(field.Type().Elem()))
-			}
-			field = field.Elem()
+		if field.IsNil() {
+			field.Set(reflect.New(field.Type().Elem()))
 		}
+		field = field.Elem()
 		if field.Kind() == reflect.Bool {
 			field.SetBool(v.Bool)
 		} else {
@@ -446,9 +526,12 @@ func scanDirectRow(target reflect.Value, plan *rowScanPlan, scanned []any) error
 			}
 		}
 	}
-	for i := range plan.float64Cols {
-		col := &plan.float64Cols[i]
+	for i := range plan.float64ValueCols {
+		col := &plan.float64ValueCols[i]
 		v := scanned[col.scanIndex].(*sql.NullFloat64)
+		if !v.Valid {
+			return fmt.Errorf("rain: cannot assign NULL to non-pointer field %s", col.fieldType)
+		}
 		var field reflect.Value
 		if col.isComplex {
 			var err error
@@ -458,18 +541,6 @@ func scanDirectRow(target reflect.Value, plan *rowScanPlan, scanned []any) error
 			}
 		} else {
 			field = target.Field(col.index0)
-		}
-		if !v.Valid {
-			if err := assignRawValueToField(field, nil); err != nil {
-				return err
-			}
-			continue
-		}
-		if field.Kind() == reflect.Pointer {
-			if field.IsNil() {
-				field.Set(reflect.New(field.Type().Elem()))
-			}
-			field = field.Elem()
 		}
 		if field.Kind() == reflect.Float32 || field.Kind() == reflect.Float64 {
 			if field.OverflowFloat(v.Float64) {
@@ -482,8 +553,64 @@ func scanDirectRow(target reflect.Value, plan *rowScanPlan, scanned []any) error
 			}
 		}
 	}
-	for i := range plan.timeCols {
-		col := &plan.timeCols[i]
+	for i := range plan.float64PointerCols {
+		col := &plan.float64PointerCols[i]
+		v := scanned[col.scanIndex].(*sql.NullFloat64)
+		var field reflect.Value
+		if col.isComplex {
+			var err error
+			field, err = fieldByIndexAlloc(target, col.fieldIndex)
+			if err != nil {
+				return err
+			}
+		} else {
+			field = target.Field(col.index0)
+		}
+		if !v.Valid {
+			field.SetZero()
+			continue
+		}
+		if field.IsNil() {
+			field.Set(reflect.New(field.Type().Elem()))
+		}
+		field = field.Elem()
+		if field.Kind() == reflect.Float32 || field.Kind() == reflect.Float64 {
+			if field.OverflowFloat(v.Float64) {
+				return fmt.Errorf("rain: value %f overflows field %s", v.Float64, field.Type())
+			}
+			field.SetFloat(v.Float64)
+		} else {
+			if err := assignRawValueToField(field, v.Float64); err != nil {
+				return err
+			}
+		}
+	}
+	for i := range plan.timeValueCols {
+		col := &plan.timeValueCols[i]
+		v := scanned[col.scanIndex].(*sql.NullTime)
+		if !v.Valid {
+			return fmt.Errorf("rain: cannot assign NULL to non-pointer field %s", col.fieldType)
+		}
+		var field reflect.Value
+		if col.isComplex {
+			var err error
+			field, err = fieldByIndexAlloc(target, col.fieldIndex)
+			if err != nil {
+				return err
+			}
+		} else {
+			field = target.Field(col.index0)
+		}
+		if field.Type() == reflect.TypeFor[time.Time]() {
+			*field.Addr().Interface().(*time.Time) = v.Time
+		} else {
+			if err := assignRawValueToField(field, v.Time); err != nil {
+				return err
+			}
+		}
+	}
+	for i := range plan.timePointerCols {
+		col := &plan.timePointerCols[i]
 		v := scanned[col.scanIndex].(*sql.NullTime)
 		var field reflect.Value
 		if col.isComplex {
@@ -496,17 +623,13 @@ func scanDirectRow(target reflect.Value, plan *rowScanPlan, scanned []any) error
 			field = target.Field(col.index0)
 		}
 		if !v.Valid {
-			if err := assignRawValueToField(field, nil); err != nil {
-				return err
-			}
+			field.SetZero()
 			continue
 		}
-		if field.Kind() == reflect.Pointer {
-			if field.IsNil() {
-				field.Set(reflect.New(field.Type().Elem()))
-			}
-			field = field.Elem()
+		if field.IsNil() {
+			field.Set(reflect.New(field.Type().Elem()))
 		}
+		field = field.Elem()
 		if field.Type() == reflect.TypeFor[time.Time]() {
 			*field.Addr().Interface().(*time.Time) = v.Time
 		} else {
@@ -636,12 +759,6 @@ func newRowScanPlanForColumns(cols []string, modelType reflect.Type, table *sche
 	plan := &rowScanPlan{
 		columns:      make([]scanColumnPlan, 0, len(cols)),
 		clearIndices: make([]int, 0),
-		int64Cols:    make([]scanColumnPlan, 0),
-		stringCols:   make([]scanColumnPlan, 0),
-		boolCols:     make([]scanColumnPlan, 0),
-		float64Cols:  make([]scanColumnPlan, 0),
-		timeCols:     make([]scanColumnPlan, 0),
-		otherCols:    make([]scanColumnPlan, 0),
 	}
 	for idx, name := range cols {
 		fieldInfo, ok := meta.byColumn[name]
@@ -697,19 +814,45 @@ func newRowScanPlanForColumns(cols []string, modelType reflect.Type, table *sche
 		plan.columns = append(plan.columns, colPlan)
 
 		if isDirect {
-			switch fieldType.Kind() {
+			isPtr := fieldType.Kind() == reflect.Pointer
+			baseType := fieldType
+			if isPtr {
+				baseType = fieldType.Elem()
+			}
+
+			switch baseType.Kind() {
 			case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
 				reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-				plan.int64Cols = append(plan.int64Cols, colPlan)
+				if isPtr {
+					plan.int64PointerCols = append(plan.int64PointerCols, colPlan)
+				} else {
+					plan.int64ValueCols = append(plan.int64ValueCols, colPlan)
+				}
 			case reflect.String:
-				plan.stringCols = append(plan.stringCols, colPlan)
+				if isPtr {
+					plan.stringPointerCols = append(plan.stringPointerCols, colPlan)
+				} else {
+					plan.stringValueCols = append(plan.stringValueCols, colPlan)
+				}
 			case reflect.Bool:
-				plan.boolCols = append(plan.boolCols, colPlan)
+				if isPtr {
+					plan.boolPointerCols = append(plan.boolPointerCols, colPlan)
+				} else {
+					plan.boolValueCols = append(plan.boolValueCols, colPlan)
+				}
 			case reflect.Float32, reflect.Float64:
-				plan.float64Cols = append(plan.float64Cols, colPlan)
+				if isPtr {
+					plan.float64PointerCols = append(plan.float64PointerCols, colPlan)
+				} else {
+					plan.float64ValueCols = append(plan.float64ValueCols, colPlan)
+				}
 			case reflect.Struct:
-				if fieldType == reflect.TypeFor[time.Time]() {
-					plan.timeCols = append(plan.timeCols, colPlan)
+				if baseType == reflect.TypeFor[time.Time]() {
+					if isPtr {
+						plan.timePointerCols = append(plan.timePointerCols, colPlan)
+					} else {
+						plan.timeValueCols = append(plan.timeValueCols, colPlan)
+					}
 				} else {
 					plan.otherCols = append(plan.otherCols, colPlan)
 				}
