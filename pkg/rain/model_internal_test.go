@@ -216,20 +216,23 @@ func TestBoundDirectFallbackReadsCurrentScannedValue(t *testing.T) {
 		Name string `db:"name"`
 	}
 
-	scanned := []any{"stale"}
-	plan := &rowScanPlan{columns: []scanColumnPlan{{
+	colPlan := scanColumnPlan{
 		scanIndex:  0,
 		fieldIndex: []int{0},
 		index0:     0,
 		isDirect:   true,
 		fieldType:  reflect.TypeFor[string](),
-	}}}
-	bound := plan.bind(scanned)
+	}
+	plan := &rowScanPlan{
+		columns:         []scanColumnPlan{colPlan},
+		stringValueCols: []scanColumnPlan{colPlan},
+	}
 
-	scanned[0] = "fresh"
+	scanned := []any{&sql.NullString{String: "stale", Valid: true}}
+	scanned[0].(*sql.NullString).String = "fresh"
 
 	var got row
-	if err := scanDirectRowWithPlan(reflect.ValueOf(&got).Elem(), bound); err != nil {
+	if err := scanDirectRow(reflect.ValueOf(&got).Elem(), plan, scanned); err != nil {
 		t.Fatalf("scan direct fallback: %v", err)
 	}
 	if got.Name != "fresh" {
