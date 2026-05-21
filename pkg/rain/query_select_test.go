@@ -1055,6 +1055,14 @@ func TestSelectDistinctOnToSQL(t *testing.T) {
 			},
 			wantErr: "compound queries do not support DISTINCT ON",
 		},
+		{
+			name:    "aggregate helper fails with distinct on",
+			dialect: "postgres",
+			build: func(db *rain.DB) *rain.SelectQuery {
+				return db.Select().Table(users).DistinctOn(users.ID)
+			},
+			wantErr: "aggregate helpers do not support DISTINCT, DISTINCT ON, GROUP BY, or HAVING clauses",
+		},
 	}
 
 	for _, tt := range cases {
@@ -1067,7 +1075,17 @@ func TestSelectDistinctOnToSQL(t *testing.T) {
 				t.Fatalf("OpenDialect returned error: %v", err)
 			}
 
-			sqlText, _, err := tt.build(db).ToSQL()
+			q := tt.build(db)
+
+			if strings.HasPrefix(tt.name, "aggregate helper fails") {
+				_, err := q.Count(context.Background())
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("expected error containing %q, got %v", tt.wantErr, err)
+				}
+				return
+			}
+
+			sqlText, _, err := q.ToSQL()
 			if tt.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
 					t.Fatalf("expected error containing %q, got %v", tt.wantErr, err)

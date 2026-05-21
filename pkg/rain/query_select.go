@@ -876,8 +876,8 @@ func (q *SelectQuery) compileAggregate(selection string) (compiledQuery, error) 
 	if len(q.ctes) > 0 {
 		return compiledQuery{}, errors.New("rain: aggregate helpers do not support WITH clauses")
 	}
-	if q.distinct || len(q.groupBy) > 0 || len(q.having) > 0 {
-		return compiledQuery{}, errors.New("rain: aggregate helpers do not support DISTINCT, GROUP BY, or HAVING clauses")
+	if q.distinct || len(q.distinctOn) > 0 || len(q.groupBy) > 0 || len(q.having) > 0 {
+		return compiledQuery{}, errors.New("rain: aggregate helpers do not support DISTINCT, DISTINCT ON, GROUP BY, or HAVING clauses")
 	}
 	if q.locking != nil {
 		return compiledQuery{}, errors.New("rain: aggregate helpers do not support FOR locking clauses")
