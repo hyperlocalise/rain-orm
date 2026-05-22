@@ -36,7 +36,7 @@ func TestViewSQL(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	expected := `CREATE VIEW "users_over_100" AS SELECT "users"."id", "users"."email" FROM "users" WHERE "users"."id" > $1`
+	expected := `CREATE VIEW "users_over_100" AS SELECT "users"."id", "users"."email" FROM "users" WHERE "users"."id" > 100`
 	if sql != expected {
 		t.Errorf("expected %q, got %q", expected, sql)
 	}

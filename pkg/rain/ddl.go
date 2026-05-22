@@ -167,6 +167,7 @@ func createViewSQL(d dialect.Dialect, table *schema.TableDef) (string, error) {
 	}
 
 	ctx := newCompileContext(d)
+	ctx.useLiterals = true
 	if err := ctx.writeExpressionInContext(table.ViewQuery, expressionContext{noParens: true}); err != nil {
 		return "", err
 	}
