@@ -293,32 +293,6 @@ func (q *SelectQuery) withSQLiteInsertSelectConflictWhereChanged() (*SelectQuery
 	return newQ, true
 }
 
-func (q *SelectQuery) ReferencedTables() []*schema.TableDef {
-	return q.appendReferencedTables(nil)
-}
-
-func (q *SelectQuery) appendReferencedTables(acc []*schema.TableDef) []*schema.TableDef {
-	if q == nil {
-		return acc
-	}
-	if q.firstOperand != nil {
-		acc = q.firstOperand.appendReferencedTables(acc)
-		for _, setOp := range q.setOps {
-			acc = setOp.query.appendReferencedTables(acc)
-		}
-		return acc
-	}
-	if q.table != nil {
-		acc = q.table.appendReferencedTables(acc)
-	}
-	for _, join := range q.joins {
-		acc = join.table.appendReferencedTables(acc)
-	}
-	// CTEs and subqueries in WHERE/HAVING could also reference tables, but for view dependency
-	// tracking we primarily care about FROM and JOIN.
-	return acc
-}
-
 func (q *SelectQuery) isBareCompound() bool {
 	return q.firstOperand != nil &&
 		len(q.order) == 0 && q.limit == 0 && q.offset == 0 &&

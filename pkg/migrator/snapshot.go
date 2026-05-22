@@ -22,9 +22,6 @@ type Snapshot struct {
 type TableSnapshot struct {
 	Name           string               `json:"name"`
 	CreateTableSQL string               `json:"create_table_sql"`
-	IsView         bool                 `json:"is_view,omitempty"`
-	ViewQuery       string               `json:"view_query,omitempty"`
-	ReferencedNames []string             `json:"referenced_names,omitempty"`
 	Columns        []ColumnSnapshot     `json:"columns"`
 	Constraints    []ConstraintSnapshot `json:"constraints"`
 	ForeignKeys    []ForeignKeySnapshot `json:"foreign_keys"`
@@ -168,25 +165,10 @@ func BuildSnapshot(dialectName string, tables []schema.TableReference) (Snapshot
 			return compareStrings(a.Name, b.Name)
 		})
 
-		var viewQuery string
-		var referencedNames []string
-		if tableDef.IsView && tableDef.ViewQuery != nil {
-			if explorer, ok := tableDef.ViewQuery.(schema.ReferencedTableExplorer); ok {
-				for _, ref := range explorer.ReferencedTables() {
-					referencedNames = append(referencedNames, ref.Name)
-				}
-				slices.Sort(referencedNames)
-				referencedNames = slices.Compact(referencedNames)
-			}
-		}
-
 		tableSnapshots = append(tableSnapshots, TableSnapshot{
-			Name:            tableDef.Name,
-			CreateTableSQL:  createTableSQL,
-			IsView:           tableDef.IsView,
-			ViewQuery:       viewQuery,
-			ReferencedNames: referencedNames,
-			Columns:         columnSnapshots,
+			Name:           tableDef.Name,
+			CreateTableSQL: createTableSQL,
+			Columns:        columnSnapshots,
 			Constraints:    constraintSnapshots,
 			ForeignKeys:    foreignKeySnapshots,
 			Indexes:        indexSnapshots,
@@ -263,13 +245,6 @@ func orderManagedTables(tables []schema.TableReference) ([]schema.TableReference
 				continue
 			}
 			addTableDependency(tableByName, inDegree, dependents, seenDeps, tableDef.Name, constraint.ReferencedTable)
-		}
-		if tableDef.IsView && tableDef.ViewQuery != nil {
-			if explorer, ok := tableDef.ViewQuery.(schema.ReferencedTableExplorer); ok {
-				for _, ref := range explorer.ReferencedTables() {
-					addTableDependency(tableByName, inDegree, dependents, seenDeps, tableDef.Name, ref)
-				}
-			}
 		}
 	}
 

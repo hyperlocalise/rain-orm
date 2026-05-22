@@ -61,16 +61,8 @@ func DiffSnapshots(previous *Snapshot, current Snapshot) (Plan, error) {
 		statements = append(statements, tableStatements...)
 	}
 
-	for name, previousTable := range previousTables {
+	for name := range previousTables {
 		if _, exists := currentTables[name]; !exists {
-			if previousTable.IsView {
-				drop := "DROP VIEW " + quoteIdentifier(current.Dialect, name)
-				if current.Dialect == "postgres" || current.Dialect == "postgresql" {
-					drop += " CASCADE"
-				}
-				statements = append(statements, drop)
-				continue
-			}
 			return Plan{}, fmt.Errorf("migrator: dropping table %q is not supported", name)
 		}
 	}
@@ -90,28 +82,6 @@ func planCreateAll(snapshot Snapshot) Plan {
 }
 
 func diffTable(previous, current TableSnapshot, dialectName string) ([]string, error) {
-	if previous.IsView || current.IsView {
-		if previous.IsView && current.IsView {
-			if normalizeSQL(previous.CreateTableSQL) == normalizeSQL(current.CreateTableSQL) {
-				return nil, nil
-			}
-
-			drop := "DROP VIEW " + quoteIdentifier(dialectName, current.Name)
-			if dialectName == "postgres" || dialectName == "postgresql" {
-				drop += " CASCADE"
-			}
-
-			return []string{
-				drop,
-				current.CreateTableSQL,
-			}, nil
-		}
-		if previous.IsView {
-			return nil, fmt.Errorf("migrator: changing view %q to table is not supported", current.Name)
-		}
-		return nil, fmt.Errorf("migrator: changing table %q to view is not supported", current.Name)
-	}
-
 	var statements []string
 
 	previousColumns := make(map[string]ColumnSnapshot, len(previous.Columns))

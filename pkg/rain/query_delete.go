@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"fmt"
 
 	"github.com/hyperlocalise/rain-orm/pkg/dialect"
 	"github.com/hyperlocalise/rain-orm/pkg/schema"
@@ -48,9 +47,6 @@ func (q *DeleteQuery) Unbounded() *DeleteQuery {
 func (q *DeleteQuery) ToSQL() (string, []any, error) {
 	if q.table == nil {
 		return "", nil, errors.New("rain: delete query requires a table")
-	}
-	if q.table.IsView {
-		return "", nil, fmt.Errorf("rain: cannot delete from view %q", q.table.Name)
 	}
 	if len(q.where) == 0 && !q.unbounded {
 		return "", nil, errors.New("rain: delete query requires at least one WHERE predicate; call Unbounded() to allow all rows")
