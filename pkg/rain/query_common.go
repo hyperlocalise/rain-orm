@@ -39,6 +39,7 @@ type returningClause struct {
 
 type selectTableSource interface {
 	writeSQL(*compileContext) error
+	appendReferencedTables([]*schema.TableDef) []*schema.TableDef
 }
 
 type tableDefSource struct {
@@ -55,6 +56,10 @@ func tableDefFromSelectSource(source selectTableSource) *schema.TableDef {
 func (s tableDefSource) writeSQL(ctx *compileContext) error {
 	ctx.writeTable(s.table)
 	return nil
+}
+
+func (s tableDefSource) appendReferencedTables(acc []*schema.TableDef) []*schema.TableDef {
+	return append(acc, s.table)
 }
 
 type subqueryTableSource struct {
@@ -76,6 +81,13 @@ func (s subqueryTableSource) writeSQL(ctx *compileContext) error {
 	ctx.writeString(") AS ")
 	ctx.writeQuotedIdentifier(s.alias)
 	return nil
+}
+
+func (s subqueryTableSource) appendReferencedTables(acc []*schema.TableDef) []*schema.TableDef {
+	if s.query == nil {
+		return acc
+	}
+	return s.query.appendReferencedTables(acc)
 }
 
 type cteDefinition struct {

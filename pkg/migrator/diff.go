@@ -64,7 +64,11 @@ func DiffSnapshots(previous *Snapshot, current Snapshot) (Plan, error) {
 	for name, previousTable := range previousTables {
 		if _, exists := currentTables[name]; !exists {
 			if previousTable.IsView {
-				statements = append(statements, fmt.Sprintf("DROP VIEW %s", quoteIdentifier(current.Dialect, name)))
+				drop := "DROP VIEW " + quoteIdentifier(current.Dialect, name)
+				if current.Dialect == "postgres" || current.Dialect == "postgresql" {
+					drop += " CASCADE"
+				}
+				statements = append(statements, drop)
 				continue
 			}
 			return Plan{}, fmt.Errorf("migrator: dropping table %q is not supported", name)
@@ -91,8 +95,14 @@ func diffTable(previous, current TableSnapshot, dialectName string) ([]string, e
 			if normalizeSQL(previous.CreateTableSQL) == normalizeSQL(current.CreateTableSQL) {
 				return nil, nil
 			}
+
+			drop := "DROP VIEW " + quoteIdentifier(dialectName, current.Name)
+			if dialectName == "postgres" || dialectName == "postgresql" {
+				drop += " CASCADE"
+			}
+
 			return []string{
-				fmt.Sprintf("DROP VIEW %s", quoteIdentifier(dialectName, current.Name)),
+				drop,
 				current.CreateTableSQL,
 			}, nil
 		}

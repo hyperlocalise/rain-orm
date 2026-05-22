@@ -75,6 +75,11 @@ type TableReference interface {
 	TableDef() *TableDef
 }
 
+// ReferencedTableExplorer is implemented by expressions that can reference tables (e.g. SelectQuery).
+type ReferencedTableExplorer interface {
+	ReferencedTables() []*TableDef
+}
+
 // Expression is implemented by all query expressions.
 type Expression interface {
 	isExpression()
