@@ -412,17 +412,22 @@ func shouldEmitAutoIncrementKeyword(d dialect.Dialect, column *schema.ColumnDef,
 	if !inlinePrimaryKey {
 		return false
 	}
-	if column.Type.DataType != schema.TypeBigSerial {
-		return true
-	}
-
 	switch d.Name() {
 	case "postgres":
-		return false
+		return !isPostgresSerialType(column.Type.DataType)
 	case "sqlite":
 		return true
 	default:
 		return true
+	}
+}
+
+func isPostgresSerialType(dataType schema.DataType) bool {
+	switch dataType {
+	case schema.TypeBigSerial, schema.TypeSerial, schema.TypeSmallSerial:
+		return true
+	default:
+		return false
 	}
 }
 

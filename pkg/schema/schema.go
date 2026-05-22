@@ -1348,6 +1348,10 @@ type tableCloner interface {
 	cloneForTable(*TableDef) any
 }
 
+type expressionCloner interface {
+	CloneExpressionForTable(*TableDef) Expression
+}
+
 func (c *AnyColumn) cloneForTable(table *TableDef) any {
 	clonedMeta, ok := table.columnsByName[c.def.Name]
 	if !ok {
@@ -1517,6 +1521,8 @@ func cloneExpressionForTable(expr Expression, table *TableDef) Expression {
 			panic(fmt.Sprintf("schema: cloned expression %T is not an expression", value))
 		}
 		return cloned
+	case expressionCloner:
+		return value.CloneExpressionForTable(table)
 	case ValueExpr:
 		return value
 	case PlaceholderExpr:

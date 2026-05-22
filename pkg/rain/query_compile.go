@@ -395,6 +395,21 @@ func (c *compileContext) writeRaw(raw schema.RawExpr) error {
 		if argIndex >= len(raw.Args) {
 			return errors.New("rain: raw SQL placeholder count does not match args")
 		}
+		if c.useLiterals {
+			if expr, ok := raw.Args[argIndex].(schema.Expression); ok {
+				if err := c.writeExpression(expr); err != nil {
+					return err
+				}
+			} else {
+				literal, err := literalDDLSQL(c.dialect, raw.Args[argIndex])
+				if err != nil {
+					return err
+				}
+				c.writeString(literal)
+			}
+			argIndex++
+			continue
+		}
 		index := c.nextPlaceholderIndex()
 		c.argPlan = append(c.argPlan, compiledArg{kind: compiledArgLiteral, value: raw.Args[argIndex]})
 		c.writeString(c.dialect.Placeholder(index))

@@ -252,6 +252,12 @@ func (q *SelectQuery) clone() *SelectQuery {
 	return &newQ
 }
 
+// CloneExpressionForTable preserves SELECT subqueries when schema metadata is
+// cloned for an alias. The query's own table sources remain unchanged.
+func (q *SelectQuery) CloneExpressionForTable(*schema.TableDef) schema.Expression {
+	return q
+}
+
 func (q *SelectQuery) withSQLiteInsertSelectConflictWhere() *SelectQuery {
 	rewritten, _ := q.withSQLiteInsertSelectConflictWhereChanged()
 	return rewritten

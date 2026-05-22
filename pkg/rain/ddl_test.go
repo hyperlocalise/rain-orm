@@ -40,6 +40,21 @@ type ddlMembershipsTable struct {
 	Active    *schema.Column[bool]
 }
 
+type ddlSerialTable struct {
+	schema.TableModel
+	ID *schema.Column[int32]
+}
+
+type ddlSmallSerialTable struct {
+	schema.TableModel
+	ID *schema.Column[int16]
+}
+
+type ddlUserEmailView struct {
+	schema.TableModel
+	Email *schema.Column[string]
+}
+
 func defineDDLTables() (*ddlUsersTable, *ddlPostsTable, *ddlMembershipsTable) {
 	users := schema.Define("users", func(t *ddlUsersTable) {
 		t.ID = t.BigSerial("id").PrimaryKey()
@@ -76,6 +91,97 @@ func defineDDLTables() (*ddlUsersTable, *ddlPostsTable, *ddlMembershipsTable) {
 	})
 
 	return users, posts, memberships
+}
+
+func TestCreateViewSQLRawExprUsesLiterals(t *testing.T) {
+	t.Parallel()
+
+	db, err := rain.OpenDialect("postgres")
+	if err != nil {
+		t.Fatalf("OpenDialect(postgres): %v", err)
+	}
+	users, _, _ := defineDDLTables()
+	query := db.Select().
+		Table(users).
+		Column(users.Email).
+		Where(schema.Raw("? = ?", users.Email, "alice@example.com"))
+	view := schema.DefineView("user_email_view", query, func(v *ddlUserEmailView) {
+		v.Email = v.VarChar("email", 255)
+	})
+
+	sql, err := db.CreateTableSQL(view)
+	if err != nil {
+		t.Fatalf("CreateTableSQL(view): %v", err)
+	}
+	if strings.Contains(sql, "$1") || strings.Contains(sql, "$2") {
+		t.Fatalf("expected view DDL to inline raw args, got:\n%s", sql)
+	}
+	if !strings.Contains(sql, `"users"."email" = 'alice@example.com'`) {
+		t.Fatalf("expected view DDL to include literalized raw predicate, got:\n%s", sql)
+	}
+}
+
+func TestAliasViewWithSelectQueryDoesNotPanic(t *testing.T) {
+	t.Parallel()
+
+	db, err := rain.OpenDialect("postgres")
+	if err != nil {
+		t.Fatalf("OpenDialect(postgres): %v", err)
+	}
+	users, _, _ := defineDDLTables()
+	query := db.Select().Table(users).Column(users.Email)
+	view := schema.DefineView("user_email_view_alias_source", query, func(v *ddlUserEmailView) {
+		v.Email = v.VarChar("email", 255)
+	})
+
+	aliased := schema.Alias(view, "uev")
+	sql, args, err := db.Select().Table(aliased).Column(aliased.Email).ToSQL()
+	if err != nil {
+		t.Fatalf("Select aliased view: %v", err)
+	}
+	if len(args) != 0 {
+		t.Fatalf("expected no args, got %#v", args)
+	}
+	if !strings.Contains(sql, `FROM "user_email_view_alias_source" AS "uev"`) {
+		t.Fatalf("expected aliased view table source, got:\n%s", sql)
+	}
+}
+
+func TestCreateTableSQLPostgresSerialPrimaryKeysDoNotRepeatSerialKeyword(t *testing.T) {
+	t.Parallel()
+
+	db, err := rain.OpenDialect("postgres")
+	if err != nil {
+		t.Fatalf("OpenDialect(postgres): %v", err)
+	}
+	serialTable := schema.Define("serial_ids", func(t *ddlSerialTable) {
+		t.ID = t.Serial("id").PrimaryKey()
+	})
+	smallSerialTable := schema.Define("small_serial_ids", func(t *ddlSmallSerialTable) {
+		t.ID = t.SmallSerial("id").PrimaryKey()
+	})
+
+	for _, tc := range []struct {
+		name  string
+		table schema.TableReference
+		want  string
+	}{
+		{name: "serial", table: serialTable, want: `"id" SERIAL PRIMARY KEY`},
+		{name: "smallserial", table: smallSerialTable, want: `"id" SMALLSERIAL PRIMARY KEY`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sql, err := db.CreateTableSQL(tc.table)
+			if err != nil {
+				t.Fatalf("CreateTableSQL: %v", err)
+			}
+			if !strings.Contains(sql, tc.want) {
+				t.Fatalf("expected SQL to contain %q, got:\n%s", tc.want, sql)
+			}
+			if strings.Contains(sql, "PRIMARY KEY SERIAL") || strings.Contains(sql, "PRIMARY KEY SMALLSERIAL") {
+				t.Fatalf("expected SQL not to repeat serial keyword, got:\n%s", sql)
+			}
+		})
+	}
 }
 
 func TestCreateTableSQLAcrossDialects(t *testing.T) {
