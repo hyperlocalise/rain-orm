@@ -342,7 +342,7 @@ func newScanTargets(cols []string, plan *rowScanPlan, scanTargets, scanned []any
 			scanned[idx] = &v
 			scanTargets[idx] = &v
 		case reflect.Struct:
-			if p.fieldType == reflect.TypeFor[time.Time]() {
+			if fieldType == reflect.TypeFor[time.Time]() {
 				var v sql.NullTime
 				scanned[idx] = &v
 				scanTargets[idx] = &v
