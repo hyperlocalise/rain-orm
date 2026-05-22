@@ -61,8 +61,12 @@ func DiffSnapshots(previous *Snapshot, current Snapshot) (Plan, error) {
 		statements = append(statements, tableStatements...)
 	}
 
-	for name := range previousTables {
+	for name, previousTable := range previousTables {
 		if _, exists := currentTables[name]; !exists {
+			if previousTable.IsView {
+				statements = append(statements, fmt.Sprintf("DROP VIEW %s", quoteIdentifier(current.Dialect, name)))
+				continue
+			}
 			return Plan{}, fmt.Errorf("migrator: dropping table %q is not supported", name)
 		}
 	}

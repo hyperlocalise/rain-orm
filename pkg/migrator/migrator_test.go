@@ -230,6 +230,44 @@ func TestDiffSnapshotsAddView(t *testing.T) {
 	}
 }
 
+func TestDiffSnapshotsDropView(t *testing.T) {
+	t.Parallel()
+
+	type usersTable struct {
+		schema.TableModel
+		ID *schema.Column[int64]
+	}
+	Users := schema.Define("users", func(t *usersTable) {
+		t.ID = t.BigSerial("id").PrimaryKey()
+	})
+
+	db, _ := rain.OpenDialect("postgres")
+	query := db.Select().Table(Users).Column(Users.ID)
+
+	type UsersView struct {
+		schema.TableModel
+		ID *schema.Column[int64]
+	}
+	View := schema.DefineView("active_users", query, func(t *UsersView) {
+		t.ID = t.BigInt("id")
+	})
+
+	before := mustBuildSnapshot(t, "postgres", []schema.TableReference{Users, View})
+	after := mustBuildSnapshot(t, "postgres", []schema.TableReference{Users})
+
+	plan, err := DiffSnapshots(&before, after)
+	if err != nil {
+		t.Fatalf("DiffSnapshots returned error: %v", err)
+	}
+
+	if len(plan.Statements) != 1 {
+		t.Fatalf("expected 1 statement (DROP), got %d: %v", len(plan.Statements), plan.Statements)
+	}
+	if !strings.Contains(plan.Statements[0], `DROP VIEW "active_users"`) {
+		t.Fatalf("expected DROP VIEW statement, got %q", plan.Statements[0])
+	}
+}
+
 func TestDiffSnapshotsUpdateView(t *testing.T) {
 	t.Parallel()
 
