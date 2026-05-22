@@ -222,14 +222,14 @@ func TestBoundDirectFallbackReadsCurrentScannedValue(t *testing.T) {
 		fieldIndex: []int{0},
 		index0:     0,
 		isDirect:   true,
+		directKind: scanDirectNone, // Force fallback to scanned[idx]
 		fieldType:  reflect.TypeFor[string](),
 	}}}
-	bound := plan.bind(scanned)
 
 	scanned[0] = "fresh"
 
 	var got row
-	if err := scanDirectRowWithPlan(reflect.ValueOf(&got).Elem(), bound); err != nil {
+	if err := scanDirectRowWithPlan(reflect.ValueOf(&got).Elem(), plan, scanned); err != nil {
 		t.Fatalf("scan direct fallback: %v", err)
 	}
 	if got.Name != "fresh" {
