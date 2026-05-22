@@ -140,6 +140,10 @@ func createTableSQL(d dialect.Dialect, table *schema.TableDef) (string, error) {
 		return "", errors.New("rain: create table requires a non-nil table")
 	}
 
+	if table.IsView {
+		return createViewSQL(d, table)
+	}
+
 	var definitions []string
 	tablePrimaryKey, err := tablePrimaryKeyConstraint(table)
 	if err != nil {
@@ -349,7 +353,7 @@ func columnTypeSQL(d dialect.Dialect, column *schema.ColumnDef) string {
 		typeSQL = fmt.Sprintf("%s(%d)", typeSQL, column.Type.TimePrecision)
 	}
 
-	if column.AutoIncrement && d.Name() == "sqlite" && column.Type.DataType == schema.TypeBigSerial {
+	if column.AutoIncrement && d.Name() == "sqlite" && (column.Type.DataType == schema.TypeSmallSerial || column.Type.DataType == schema.TypeSerial || column.Type.DataType == schema.TypeBigSerial) {
 		return "INTEGER"
 	}
 
@@ -363,7 +367,7 @@ func shouldEmitAutoIncrementKeyword(d dialect.Dialect, column *schema.ColumnDef,
 	if !inlinePrimaryKey {
 		return false
 	}
-	if column.Type.DataType != schema.TypeBigSerial {
+	if column.Type.DataType != schema.TypeSmallSerial && column.Type.DataType != schema.TypeSerial && column.Type.DataType != schema.TypeBigSerial {
 		return true
 	}
 
@@ -568,8 +572,37 @@ func predicateDDLSQL(d dialect.Dialect, table *schema.TableDef, predicate schema
 	return expressionDDLSQL(d, table, predicate)
 }
 
+func createViewSQL(d dialect.Dialect, table *schema.TableDef) (string, error) {
+	if table.ViewQuery == nil {
+		return "", fmt.Errorf("rain: view %q requires a defining query", table.Name)
+	}
+
+	ctx := newCompileContext(d)
+	ctx.useLiterals = true
+	// Views usually don't support or need parentheses around the entire SELECT
+	// across all dialects, and SQLite specifically rejects them.
+	if selectQuery, ok := table.ViewQuery.(*SelectQuery); ok {
+		if err := selectQuery.writeSQL(ctx); err != nil {
+			return "", err
+		}
+	} else {
+		if err := ctx.writeExpression(table.ViewQuery); err != nil {
+			return "", err
+		}
+	}
+
+	return "CREATE VIEW " + d.QuoteIdentifier(table.Name) + " AS " + ctx.String(), nil
+}
+
 func expressionDDLSQL(d dialect.Dialect, table *schema.TableDef, expr schema.Expression) (string, error) {
 	switch value := expr.(type) {
+	case *SelectQuery:
+		ctx := newCompileContext(d)
+		ctx.useLiterals = true
+		if err := value.writeSQL(ctx); err != nil {
+			return "", err
+		}
+		return ctx.String(), nil
 	case schema.ColumnReference:
 		column := value.ColumnDef()
 		if column == nil {

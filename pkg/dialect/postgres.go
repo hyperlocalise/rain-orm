@@ -49,6 +49,10 @@ func (d *PostgresDialect) DataType(columnType schema.ColumnType) string {
 	typ := normalizeType(columnType.DataType)
 
 	switch typ {
+	case "smallserial":
+		return "SMALLSERIAL"
+	case "serial":
+		return "SERIAL"
 	case "bigserial":
 		return "BIGSERIAL"
 	case "smallint":

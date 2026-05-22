@@ -38,6 +38,10 @@ func (d *MySQLDialect) DataType(columnType schema.ColumnType) string {
 	typ := normalizeType(columnType.DataType)
 
 	switch typ {
+	case "smallserial":
+		return "SMALLINT"
+	case "serial":
+		return "INT"
 	case "bigserial":
 		return "BIGINT"
 	case "smallint":

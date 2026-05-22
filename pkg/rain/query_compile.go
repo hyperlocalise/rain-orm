@@ -76,11 +76,12 @@ func (q compiledQuery) bind(args PreparedArgs) ([]any, error) {
 }
 
 type compileContext struct {
-	builder  strings.Builder
-	dialect  dialect.Dialect
-	argPlan  []compiledArg
-	err      error
-	skipCTEs bool
+	builder     strings.Builder
+	dialect     dialect.Dialect
+	argPlan     []compiledArg
+	err         error
+	skipCTEs    bool
+	useLiterals bool
 }
 
 func newCompileContext(d dialect.Dialect) *compileContext {
@@ -137,6 +138,15 @@ func (c *compileContext) writeTable(table *schema.TableDef) {
 	}
 }
 
+func (c *compileContext) writeLiteral(value any) error {
+	literal, err := literalDDLSQL(c.dialect, value)
+	if err != nil {
+		return err
+	}
+	c.writeString(literal)
+	return nil
+}
+
 func (c *compileContext) writeReturning(exprs []schema.Expression, clause returningClause) error {
 	if len(exprs) == 0 {
 		return nil
@@ -180,9 +190,15 @@ func (c *compileContext) writeExpressionInContext(expr schema.Expression, contex
 	case schema.ColumnReference:
 		c.writeColumn(value)
 	case schema.ValueExpr:
-		index := c.nextPlaceholderIndex()
-		c.argPlan = append(c.argPlan, compiledArg{kind: compiledArgLiteral, value: value.Value})
-		c.writeString(c.dialect.Placeholder(index))
+		if c.useLiterals {
+			if err := c.writeLiteral(value.Value); err != nil {
+				return err
+			}
+		} else {
+			index := c.nextPlaceholderIndex()
+			c.argPlan = append(c.argPlan, compiledArg{kind: compiledArgLiteral, value: value.Value})
+			c.writeString(c.dialect.Placeholder(index))
+		}
 	case schema.PlaceholderExpr:
 		if strings.TrimSpace(value.Name) == "" {
 			return errors.New("rain: placeholder name cannot be empty")
@@ -260,9 +276,12 @@ func (c *compileContext) writeExpressionInContext(expr schema.Expression, contex
 		if !context.noParens {
 			c.writeByte('(')
 		}
+		prevSkip := c.skipCTEs
+		c.skipCTEs = true
 		if err := value.writeSQL(c); err != nil {
 			return err
 		}
+		c.skipCTEs = prevSkip
 		if !context.noParens {
 			c.writeByte(')')
 		}

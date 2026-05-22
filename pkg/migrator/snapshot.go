@@ -21,6 +21,7 @@ type Snapshot struct {
 // TableSnapshot stores a portable, deterministic representation of one table.
 type TableSnapshot struct {
 	Name           string               `json:"name"`
+	IsView         bool                 `json:"is_view,omitempty"`
 	CreateTableSQL string               `json:"create_table_sql"`
 	Columns        []ColumnSnapshot     `json:"columns"`
 	Constraints    []ConstraintSnapshot `json:"constraints"`
@@ -167,6 +168,7 @@ func BuildSnapshot(dialectName string, tables []schema.TableReference) (Snapshot
 
 		tableSnapshots = append(tableSnapshots, TableSnapshot{
 			Name:           tableDef.Name,
+			IsView:         tableDef.IsView,
 			CreateTableSQL: createTableSQL,
 			Columns:        columnSnapshots,
 			Constraints:    constraintSnapshots,

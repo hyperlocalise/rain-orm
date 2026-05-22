@@ -61,6 +61,10 @@ func (d *BaseDialect) DataType(columnType schema.ColumnType) string {
 	typ := normalizeType(columnType.DataType)
 
 	switch typ {
+	case "smallserial":
+		return "SMALLINT"
+	case "serial":
+		return "INTEGER"
 	case "bigserial":
 		return "BIGSERIAL"
 	case "smallint":
