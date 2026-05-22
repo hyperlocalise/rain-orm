@@ -22,6 +22,7 @@ type Snapshot struct {
 type TableSnapshot struct {
 	Name           string               `json:"name"`
 	CreateTableSQL string               `json:"create_table_sql"`
+	IsView         bool                 `json:"is_view,omitempty"`
 	Columns        []ColumnSnapshot     `json:"columns"`
 	Constraints    []ConstraintSnapshot `json:"constraints"`
 	ForeignKeys    []ForeignKeySnapshot `json:"foreign_keys"`
@@ -168,6 +169,7 @@ func BuildSnapshot(dialectName string, tables []schema.TableReference) (Snapshot
 		tableSnapshots = append(tableSnapshots, TableSnapshot{
 			Name:           tableDef.Name,
 			CreateTableSQL: createTableSQL,
+			IsView:         tableDef.IsView,
 			Columns:        columnSnapshots,
 			Constraints:    constraintSnapshots,
 			ForeignKeys:    foreignKeySnapshots,

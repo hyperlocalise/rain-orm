@@ -768,6 +768,86 @@ func TestSQLiteIntegrationRichAdvancedSelectsAndPreparedQueries(t *testing.T) {
 	}
 }
 
+func TestSQLiteIntegrationViews(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db, err := rain.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+
+	type usersTable struct {
+		schema.TableModel
+		ID    *schema.Column[int64]
+		Name  *schema.Column[string]
+		Email *schema.Column[string]
+	}
+	Users := schema.Define("users", func(t *usersTable) {
+		t.ID = t.BigSerial("id").PrimaryKey()
+		t.Name = t.Text("name").NotNull()
+		t.Email = t.Text("email").NotNull()
+	})
+
+	if _, err := db.Exec(ctx, `CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, email TEXT NOT NULL)`); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = db.Insert().Table(Users).Models([]struct {
+		Name  string
+		Email string
+	}{
+		{Name: "Alice", Email: "alice@example.com"},
+		{Name: "Bob", Email: "bob@example.com"},
+	}).Exec(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	query := db.Select().Table(Users).Column(Users.ID, Users.Name).Where(Users.Name.EqExpr(schema.Raw("'Alice'")))
+
+	type AliceView struct {
+		schema.TableModel
+		ID   *schema.Column[int64]
+		Name *schema.Column[string]
+	}
+	Alices := schema.DefineView("alices", query, func(t *AliceView) {
+		t.ID = t.BigInt("id")
+		t.Name = t.Text("name")
+	})
+
+	viewSQL, err := db.CreateTableSQL(Alices)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(ctx, viewSQL); err != nil {
+		t.Fatal(err)
+	}
+
+	var results []struct {
+		ID   int64
+		Name string
+	}
+	err = db.Select().Table(Alices).Scan(ctx, &results)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(results) != 1 {
+		t.Errorf("expected 1 result, got %d", len(results))
+	}
+	if results[0].Name != "Alice" {
+		t.Errorf("expected Alice, got %s", results[0].Name)
+	}
+
+	// Verify modification rejection
+	_, err = db.Insert().Table(Alices).Set(Alices.Name, "Eve").Exec(ctx)
+	if err == nil || !strings.Contains(err.Error(), "cannot insert into view") {
+		t.Errorf("expected error inserting into view, got %v", err)
+	}
+}
+
 func TestSQLiteIntegrationHasOneRelation(t *testing.T) {
 	t.Parallel()
 

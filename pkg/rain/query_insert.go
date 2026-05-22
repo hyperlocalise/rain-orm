@@ -284,6 +284,9 @@ func (q *InsertQuery) validateSources() error {
 	if q.table == nil {
 		return errors.New("rain: insert query requires a table")
 	}
+	if q.table.IsView {
+		return fmt.Errorf("rain: cannot insert into view %q", q.table.Name)
+	}
 
 	sources := 0
 	if q.model != nil || len(q.values) > 0 {

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	exampleregistry "github.com/hyperlocalise/rain-orm/examples/schema/registry"
+	"github.com/hyperlocalise/rain-orm/pkg/rain"
 	"github.com/hyperlocalise/rain-orm/pkg/schema"
 	_ "modernc.org/sqlite"
 )
@@ -184,6 +185,97 @@ func TestDiffSnapshotsRejectAddForeignKeyOnSQLite(t *testing.T) {
 
 	if _, err := DiffSnapshots(&before, after); err == nil || !strings.Contains(err.Error(), "adding constraint") {
 		t.Fatalf("expected sqlite add foreign key rejection, got %v", err)
+	}
+}
+
+func TestDiffSnapshotsAddView(t *testing.T) {
+	t.Parallel()
+
+	type usersTable struct {
+		schema.TableModel
+		ID   *schema.Column[int64]
+		Name *schema.Column[string]
+	}
+	Users := schema.Define("users", func(t *usersTable) {
+		t.ID = t.BigSerial("id").PrimaryKey()
+		t.Name = t.Text("name").NotNull()
+	})
+
+	db, _ := rain.OpenDialect("postgres")
+	query := db.Select().Table(Users).Column(Users.ID, Users.Name)
+
+	type UsersView struct {
+		schema.TableModel
+		ID   *schema.Column[int64]
+		Name *schema.Column[string]
+	}
+	View := schema.DefineView("active_users", query, func(t *UsersView) {
+		t.ID = t.BigInt("id")
+		t.Name = t.Text("name")
+	})
+
+	before := mustBuildSnapshot(t, "postgres", []schema.TableReference{Users})
+	after := mustBuildSnapshot(t, "postgres", []schema.TableReference{Users, View})
+
+	plan, err := DiffSnapshots(&before, after)
+	if err != nil {
+		t.Fatalf("DiffSnapshots returned error: %v", err)
+	}
+
+	if len(plan.Statements) != 1 {
+		t.Fatalf("expected 1 statement, got %d", len(plan.Statements))
+	}
+	if !strings.Contains(plan.Statements[0], `CREATE VIEW "active_users" AS SELECT "users"."id", "users"."name" FROM "users"`) {
+		t.Fatalf("expected CREATE VIEW statement, got %q", plan.Statements[0])
+	}
+}
+
+func TestDiffSnapshotsUpdateView(t *testing.T) {
+	t.Parallel()
+
+	type usersTable struct {
+		schema.TableModel
+		ID   *schema.Column[int64]
+		Name *schema.Column[string]
+	}
+	Users := schema.Define("users", func(t *usersTable) {
+		t.ID = t.BigSerial("id").PrimaryKey()
+		t.Name = t.Text("name").NotNull()
+	})
+
+	db, _ := rain.OpenDialect("postgres")
+	queryV1 := db.Select().Table(Users).Column(Users.ID)
+	queryV2 := db.Select().Table(Users).Column(Users.ID, Users.Name)
+
+	type UsersView struct {
+		schema.TableModel
+		ID   *schema.Column[int64]
+		Name *schema.Column[string]
+	}
+	ViewV1 := schema.DefineView("active_users", queryV1, func(t *UsersView) {
+		t.ID = t.BigInt("id")
+	})
+	ViewV2 := schema.DefineView("active_users", queryV2, func(t *UsersView) {
+		t.ID = t.BigInt("id")
+		t.Name = t.Text("name")
+	})
+
+	before := mustBuildSnapshot(t, "postgres", []schema.TableReference{Users, ViewV1})
+	after := mustBuildSnapshot(t, "postgres", []schema.TableReference{Users, ViewV2})
+
+	plan, err := DiffSnapshots(&before, after)
+	if err != nil {
+		t.Fatalf("DiffSnapshots returned error: %v", err)
+	}
+
+	if len(plan.Statements) != 2 {
+		t.Fatalf("expected 2 statements (DROP + CREATE), got %d: %v", len(plan.Statements), plan.Statements)
+	}
+	if !strings.HasPrefix(plan.Statements[0], "DROP VIEW") {
+		t.Errorf("expected DROP VIEW as first statement, got %q", plan.Statements[0])
+	}
+	if !strings.HasPrefix(plan.Statements[1], "CREATE VIEW") {
+		t.Errorf("expected CREATE VIEW as second statement, got %q", plan.Statements[1])
 	}
 }
 

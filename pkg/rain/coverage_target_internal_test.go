@@ -707,7 +707,7 @@ func TestCoverageDDLMethodsAndHelpers(t *testing.T) {
 	if _, err := columnDefinitionSQL(pg, users.TableDef(), &schema.ColumnDef{Name: "broken_default", Type: schema.ColumnType{DataType: schema.TypeText}, HasDefault: true, Default: struct{}{}}, false); err == nil {
 		t.Fatalf("expected columnDefinitionSQL default error")
 	}
-	if got := columnTypeSQL(sqlite, users.CreatedAt.ColumnDef()); got != "TEXT" {
+	if got := ddlColumnTypeSQL(sqlite, users.CreatedAt.ColumnDef()); got != "TEXT" {
 		t.Fatalf("unexpected sqlite timestamp type: %q", got)
 	}
 	if shouldEmitAutoIncrementKeyword(pg, &schema.ColumnDef{Name: "id", Type: schema.ColumnType{DataType: schema.TypeBigSerial}}, true) {

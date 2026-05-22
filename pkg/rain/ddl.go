@@ -20,6 +20,10 @@ func (db *DB) CreateTableSQL(table schema.TableReference) (string, error) {
 		return "", errors.New("rain: create table requires a non-nil table")
 	}
 
+	if table.TableDef().IsView {
+		return createViewSQL(db.dialect, table.TableDef())
+	}
+
 	return createTableSQL(db.dialect, table.TableDef())
 }
 
@@ -30,6 +34,10 @@ func (db *DB) CreateIndexesSQL(table schema.TableReference) ([]string, error) {
 	}
 	if table == nil || table.TableDef() == nil {
 		return nil, errors.New("rain: create indexes requires a non-nil table")
+	}
+
+	if table.TableDef().IsView {
+		return nil, nil
 	}
 
 	return createIndexesSQL(db.dialect, table.TableDef())
@@ -48,6 +56,10 @@ func (db *DB) ColumnDefinitionSQL(table schema.TableReference, columnName string
 	column, ok := tableDef.ColumnByName(columnName)
 	if !ok {
 		return "", fmt.Errorf("rain: table %q has no column %q", tableDef.Name, columnName)
+	}
+
+	if tableDef.IsView {
+		return db.dialect.QuoteIdentifier(column.Name) + " " + ddlColumnTypeSQL(db.dialect, column), nil
 	}
 
 	inlinePrimaryKey := false
@@ -73,6 +85,10 @@ func (db *DB) AddConstraintSQL(table schema.TableReference, constraintName strin
 	}
 
 	tableDef := table.TableDef()
+	if tableDef.IsView {
+		return "", fmt.Errorf("rain: view %q does not support constraints", tableDef.Name)
+	}
+
 	for _, constraint := range tableDef.Constraints {
 		if constraint.Name != constraintName {
 			continue
@@ -97,6 +113,10 @@ func (db *DB) AddForeignKeySQL(table schema.TableReference, foreignKeyName strin
 	}
 
 	tableDef := table.TableDef()
+	if tableDef.IsView {
+		return "", fmt.Errorf("rain: view %q does not support foreign keys", tableDef.Name)
+	}
+
 	for _, foreignKey := range tableDef.ForeignKeys {
 		if foreignKey.Name != foreignKeyName {
 			continue
@@ -130,6 +150,34 @@ func (db *DB) ColumnDefaultSQL(table schema.TableReference, columnName string) (
 	}
 
 	return columnDefaultSQL(db.dialect, column)
+}
+
+func createViewSQL(d dialect.Dialect, table *schema.TableDef) (string, error) {
+	if d == nil {
+		return "", errors.New("rain: create view requires a configured dialect")
+	}
+	if table == nil {
+		return "", errors.New("rain: create view requires a non-nil table")
+	}
+	if !table.IsView {
+		return "", fmt.Errorf("rain: table %q is not a view", table.Name)
+	}
+	if table.ViewQuery == nil {
+		return "", fmt.Errorf("rain: view %q requires a defining query", table.Name)
+	}
+
+	ctx := newCompileContext(d)
+	if err := ctx.writeExpressionInContext(table.ViewQuery, expressionContext{noParens: true}); err != nil {
+		return "", err
+	}
+
+	var builder strings.Builder
+	builder.WriteString("CREATE VIEW ")
+	builder.WriteString(d.QuoteIdentifier(table.Name))
+	builder.WriteString(" AS ")
+	builder.WriteString(ctx.String())
+
+	return builder.String(), nil
 }
 
 func createTableSQL(d dialect.Dialect, table *schema.TableDef) (string, error) {
@@ -297,7 +345,7 @@ func columnDefinitionSQL(d dialect.Dialect, table *schema.TableDef, column *sche
 	var parts []string
 	parts = append(parts, d.QuoteIdentifier(column.Name))
 
-	typeSQL := columnTypeSQL(d, column)
+	typeSQL := ddlColumnTypeSQL(d, column)
 	parts = append(parts, typeSQL)
 
 	if inlinePrimaryKey {
@@ -338,7 +386,7 @@ func columnDefinitionSQL(d dialect.Dialect, table *schema.TableDef, column *sche
 	return strings.Join(parts, " "), nil
 }
 
-func columnTypeSQL(d dialect.Dialect, column *schema.ColumnDef) string {
+func ddlColumnTypeSQL(d dialect.Dialect, column *schema.ColumnDef) string {
 	typeSQL := d.DataType(column.Type)
 
 	if column.Type.DataType == schema.TypeVarChar && column.Type.Size > 0 && strings.EqualFold(typeSQL, "VARCHAR") {
