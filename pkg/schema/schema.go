@@ -20,6 +20,8 @@ type TimestampKind string
 // Supported schema data types.
 const (
 	TypeBigSerial   DataType = "BIGSERIAL"
+	TypeSerial      DataType = "SERIAL"
+	TypeSmallSerial DataType = "SMALLSERIAL"
 	TypeSmallInt    DataType = "SMALLINT"
 	TypeInteger     DataType = "INTEGER"
 	TypeBigInt      DataType = "BIGINT"
@@ -112,6 +114,8 @@ type TableDef struct {
 	Name        string
 	Alias       string
 	Columns     []*ColumnDef
+	IsView      bool
+	ViewQuery   Expression
 	Indexes     []IndexDef
 	Constraints []ConstraintDef
 	ForeignKeys []ForeignKeyDef
@@ -261,6 +265,16 @@ func (t *TableModel) C(name string) *AnyColumn {
 // BigSerial adds a BIGSERIAL column.
 func (t *TableModel) BigSerial(name string) *Column[int64] {
 	return addColumn[int64](t.def, name, ColumnType{DataType: TypeBigSerial}, false, true)
+}
+
+// Serial adds a SERIAL column intended for 32-bit auto-incrementing integers.
+func (t *TableModel) Serial(name string) *Column[int32] {
+	return addColumn[int32](t.def, name, ColumnType{DataType: TypeSerial}, false, true)
+}
+
+// SmallSerial adds a SMALLSERIAL column intended for 16-bit auto-incrementing integers.
+func (t *TableModel) SmallSerial(name string) *Column[int16] {
+	return addColumn[int16](t.def, name, ColumnType{DataType: TypeSmallSerial}, false, true)
 }
 
 // BigInt adds a BIGINT column.
@@ -474,6 +488,27 @@ func Define[T any](name string, fn func(*T)) *T {
 		Constraints:     make([]ConstraintDef, 0, 4),
 		ForeignKeys:     make([]ForeignKeyDef, 0, 4),
 		Relations:       make([]RelationDef, 0, 4),
+		columnsByName:   make(map[string]*ColumnDef, 8),
+		relationsByName: make(map[string]RelationDef, 4),
+	}
+	bindTableModel(handle, def)
+	fn(handle)
+
+	return handle
+}
+
+// DefineView creates a typed view handle backed by schema metadata and a defining query.
+func DefineView[T any](name string, query Expression, fn func(*T)) *T {
+	if query == nil {
+		panic("schema: DefineView requires a non-nil query")
+	}
+
+	handle := new(T)
+	def := &TableDef{
+		Name:            name,
+		IsView:          true,
+		ViewQuery:       query,
+		Columns:         make([]*ColumnDef, 0, 8),
 		columnsByName:   make(map[string]*ColumnDef, 8),
 		relationsByName: make(map[string]RelationDef, 4),
 	}
@@ -1375,6 +1410,7 @@ func cloneTableDef(src *TableDef, alias string) *TableDef {
 	cloned := &TableDef{
 		Name:            src.Name,
 		Alias:           alias,
+		IsView:          src.IsView,
 		Columns:         make([]*ColumnDef, 0, len(src.Columns)),
 		Indexes:         make([]IndexDef, len(src.Indexes)),
 		Constraints:     make([]ConstraintDef, len(src.Constraints)),
@@ -1382,6 +1418,10 @@ func cloneTableDef(src *TableDef, alias string) *TableDef {
 		Relations:       make([]RelationDef, 0, len(src.Relations)),
 		columnsByName:   make(map[string]*ColumnDef, len(src.Columns)),
 		relationsByName: make(map[string]RelationDef, len(src.Relations)),
+	}
+
+	if src.ViewQuery != nil {
+		cloned.ViewQuery = cloneExpressionForTable(src.ViewQuery, cloned)
 	}
 
 	for _, column := range src.Columns {
