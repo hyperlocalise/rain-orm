@@ -265,7 +265,7 @@ func TestPreparedSelectQueryAllowsScanWhenPreparedCountIsUnsupported(t *testing.
 	if len(rows) != 1 || rows[0].UserCount != 2 {
 		t.Fatalf("unexpected grouped rows: %#v", rows)
 	}
-	if _, err := prepared.Count(ctx, PreparedArgs{"active": true}); err == nil || !strings.Contains(err.Error(), "aggregate helpers do not support DISTINCT, GROUP BY, or HAVING clauses") {
+	if _, err := prepared.Count(ctx, PreparedArgs{"active": true}); err == nil || !strings.Contains(err.Error(), "aggregate helpers do not support DISTINCT, DISTINCT ON, GROUP BY, or HAVING clauses") {
 		t.Fatalf("expected prepared count grouped-query error, got %v", err)
 	}
 }

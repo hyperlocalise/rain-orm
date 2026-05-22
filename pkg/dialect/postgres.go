@@ -29,7 +29,8 @@ func (d *PostgresDialect) Features() Feature {
 		FeatureDefaultPlaceholder |
 		FeatureSavepoint |
 		FeatureSelectLocking |
-		FeatureNullsOrder
+		FeatureNullsOrder |
+		FeatureSelectDistinctOn
 }
 
 // QuoteIdentifier quotes identifiers with double quotes.

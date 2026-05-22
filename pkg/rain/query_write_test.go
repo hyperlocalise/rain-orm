@@ -162,7 +162,8 @@ func TestDialectFeatures(t *testing.T) {
 				dialect.FeatureDefaultPlaceholder |
 				dialect.FeatureSavepoint |
 				dialect.FeatureSelectLocking |
-				dialect.FeatureNullsOrder,
+				dialect.FeatureNullsOrder |
+				dialect.FeatureSelectDistinctOn,
 		},
 		{
 			name:     "mysql",

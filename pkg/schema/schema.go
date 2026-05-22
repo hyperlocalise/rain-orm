@@ -1171,13 +1171,14 @@ func (c *Column[T]) NotBetween(start, end T) BetweenExpr {
 	return expr
 }
 
-// RawExpr is an escape hatch for raw SQL with bound args.
+// RawExpr is an escape hatch for raw SQL expressions or predicates with bound args.
 type RawExpr struct {
 	SQL  string
 	Args []any
 }
 
 func (RawExpr) isExpression() {}
+func (RawExpr) isPredicate()  {}
 
 // As aliases this raw expression in a SELECT list.
 func (r RawExpr) As(alias string) AliasExpr {

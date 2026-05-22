@@ -13,15 +13,17 @@ import (
 
 // InsertQuery builds typed INSERT statements.
 type InsertQuery struct {
-	runner    queryRunner
-	dialect   dialect.Dialect
-	table     *schema.TableDef
-	model     any
-	models    any
-	values    []assignment
-	rows      []map[schema.ColumnReference]any
-	returning []schema.Expression
-	conflict  *insertConflictClause
+	runner      queryRunner
+	dialect     dialect.Dialect
+	table       *schema.TableDef
+	model       any
+	models      any
+	values      []assignment
+	rows        []map[schema.ColumnReference]any
+	selectQuery *SelectQuery
+	columns     []schema.ColumnReference
+	returning   []schema.Expression
+	conflict    *insertConflictClause
 }
 
 type insertConflictAction uint8
@@ -64,6 +66,18 @@ func (q *InsertQuery) Models(models any) *InsertQuery {
 	return q
 }
 
+// Select sets a SELECT query as the data source for the insert.
+func (q *InsertQuery) Select(query *SelectQuery) *InsertQuery {
+	q.selectQuery = query
+	return q
+}
+
+// Columns sets the target columns for the insert.
+func (q *InsertQuery) Columns(cols ...schema.ColumnReference) *InsertQuery {
+	q.columns = append(q.columns, cols...)
+	return q
+}
+
 // Set adds an explicit column assignment.
 func (q *InsertQuery) Set(column schema.ColumnReference, value any) *InsertQuery {
 	var expr schema.Expression
@@ -95,7 +109,7 @@ func (b *InsertConflictBuilder) DoNothing() *InsertQuery {
 	return b.query
 }
 
-// DoUpdateSet configures ON CONFLICT ... DO UPDATE SET using EXCLUDED values (PostgreSQL/SQLite) or VALUES() references (MySQL).
+// DoUpdateSet configures ON CONFLICT ... DO UPDATE SET using EXCLUDED values (PostgreSQL/SQLite) or VALUES() references for MySQL VALUES inserts.
 func (b *InsertConflictBuilder) DoUpdateSet(columns ...schema.ColumnReference) *InsertQuery {
 	b.query.conflict.action = insertConflictActionDoUpdateSet
 	b.query.conflict.updates = columns
@@ -110,6 +124,10 @@ func (q *InsertQuery) Returning(exprs ...schema.Expression) *InsertQuery {
 
 // ToSQL compiles the insert into SQL and args.
 func (q *InsertQuery) ToSQL() (string, []any, error) {
+	if q.selectQuery != nil {
+		return q.toSelectSQL()
+	}
+
 	rows, err := q.insertAssignments()
 	if err != nil {
 		return "", nil, err
@@ -158,6 +176,65 @@ func (q *InsertQuery) ToSQL() (string, []any, error) {
 	return compiled.sql, args, ctx.err
 }
 
+func (q *InsertQuery) toSelectSQL() (string, []any, error) {
+	if err := q.validateSources(); err != nil {
+		return "", nil, err
+	}
+	if err := q.validateInsertSelectColumns(); err != nil {
+		return "", nil, err
+	}
+
+	selectQuery := q.selectQuery
+	if q.dialect.Name() == "sqlite" && q.conflict != nil {
+		selectQuery = selectQuery.withSQLiteInsertSelectConflictWhere()
+	}
+
+	ctx := newCompileContext(q.dialect)
+	ctx.writeString("INSERT INTO ")
+	ctx.writeTableName(q.table)
+
+	if len(q.columns) > 0 {
+		ctx.writeString(" (")
+		for idx, col := range q.columns {
+			if idx > 0 {
+				ctx.writeString(", ")
+			}
+			ctx.writeQuotedIdentifier(col.ColumnDef().Name)
+		}
+		ctx.writeByte(')')
+	}
+
+	ctx.writeByte(' ')
+	if err := selectQuery.writeSQL(ctx); err != nil {
+		return "", nil, err
+	}
+
+	if err := q.writeConflictClause(ctx); err != nil {
+		return "", nil, err
+	}
+
+	if err := ctx.writeReturning(q.returning, q.returningClause()); err != nil {
+		return "", nil, err
+	}
+
+	compiled := ctx.compiledQuery()
+	args, err := compiled.literalArgs()
+	if err != nil {
+		return "", nil, err
+	}
+	return compiled.sql, args, ctx.err
+}
+
+func (q *InsertQuery) validateInsertSelectColumns() error {
+	for _, col := range q.columns {
+		if err := validateAssignmentTarget(q.table, assignment{column: col}); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 func (q *InsertQuery) returningClause() returningClause {
 	return returningClause{
 		feature: dialect.FeatureInsertReturning,
@@ -203,9 +280,9 @@ func (q *InsertQuery) Scan(ctx context.Context, dest any) error {
 	return err
 }
 
-func (q *InsertQuery) insertAssignments() ([][]assignment, error) {
+func (q *InsertQuery) validateSources() error {
 	if q.table == nil {
-		return nil, errors.New("rain: insert query requires a table")
+		return errors.New("rain: insert query requires a table")
 	}
 
 	sources := 0
@@ -218,11 +295,23 @@ func (q *InsertQuery) insertAssignments() ([][]assignment, error) {
 	if len(q.rows) > 0 {
 		sources++
 	}
+	if q.selectQuery != nil {
+		sources++
+	}
+
 	if sources == 0 {
-		return nil, errors.New("rain: insert query requires either explicit values or a model")
+		return errors.New("rain: insert query requires a data source: Model/Set, Models, Values, or Select")
 	}
 	if sources > 1 {
-		return nil, errors.New("rain: insert query requires exactly one value source: Model/Set, Models, or Values")
+		return errors.New("rain: insert query requires exactly one data source: Model/Set, Models, Values, or Select")
+	}
+
+	return nil
+}
+
+func (q *InsertQuery) insertAssignments() ([][]assignment, error) {
+	if err := q.validateSources(); err != nil {
+		return nil, err
 	}
 
 	var rows [][]assignment
@@ -395,6 +484,9 @@ func (q *InsertQuery) writeConflictClause(ctx *compileContext) error {
 		if q.conflict.action == insertConflictActionDoUpdateSet {
 			if len(q.conflict.updates) == 0 {
 				return errors.New("rain: conflict DO UPDATE requires at least one update column")
+			}
+			if q.selectQuery != nil {
+				return errors.New("rain: MySQL conflict DO UPDATE is not supported for INSERT ... SELECT")
 			}
 			ctx.writeString(" ON DUPLICATE KEY UPDATE ")
 			for idx, col := range q.conflict.updates {
