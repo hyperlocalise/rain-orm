@@ -319,7 +319,11 @@ func newScanTargets(cols []string, plan *rowScanPlan, scanTargets, scanned []any
 		}
 
 		idx := p.scanIndex
-		switch p.fieldType.Kind() {
+		fieldType := p.fieldType
+		if fieldType.Kind() == reflect.Pointer {
+			fieldType = fieldType.Elem()
+		}
+		switch fieldType.Kind() {
 		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
 			reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
 			var v sql.NullInt64
@@ -338,7 +342,7 @@ func newScanTargets(cols []string, plan *rowScanPlan, scanTargets, scanned []any
 			scanned[idx] = &v
 			scanTargets[idx] = &v
 		case reflect.Struct:
-			if p.fieldType == reflect.TypeFor[time.Time]() {
+			if fieldType == reflect.TypeFor[time.Time]() {
 				var v sql.NullTime
 				scanned[idx] = &v
 				scanTargets[idx] = &v
@@ -870,7 +874,7 @@ func newRowScanPlanForColumns(cols []string, modelType reflect.Type, table *sche
 
 func isSimpleDirectType(t reflect.Type) bool {
 	if t.Kind() == reflect.Pointer {
-		return false
+		t = t.Elem()
 	}
 	scannerType := reflect.TypeFor[scannerInterface]()
 	if t.Implements(scannerType) || reflect.PointerTo(t).Implements(scannerType) {
