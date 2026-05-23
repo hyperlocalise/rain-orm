@@ -369,18 +369,23 @@ func scanDirectRow(target reflect.Value, plan *rowScanPlan, scanned []any) error
 		} else {
 			field = target.Field(col.index0)
 		}
-		switch field.Kind() {
-		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		kind := field.Kind()
+		// OPTIMIZATION: Fast-path Int64 (the most common DB int type) and use range
+		// checks for other integer types to minimize branch overhead and avoid
+		// redundant overflow checks for the common path.
+		if kind == reflect.Int64 {
+			field.SetInt(v.Int64)
+		} else if kind >= reflect.Int && kind <= reflect.Int32 {
 			if field.OverflowInt(v.Int64) {
 				return fmt.Errorf("rain: value %d overflows field %s", v.Int64, field.Type())
 			}
 			field.SetInt(v.Int64)
-		case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		} else if kind >= reflect.Uint && kind <= reflect.Uint64 {
 			if v.Int64 < 0 || field.OverflowUint(uint64(v.Int64)) {
 				return fmt.Errorf("rain: value %d overflows field %s", v.Int64, field.Type())
 			}
 			field.SetUint(uint64(v.Int64))
-		default:
+		} else {
 			if err := assignRawValueToField(field, v.Int64); err != nil {
 				return err
 			}
@@ -407,18 +412,21 @@ func scanDirectRow(target reflect.Value, plan *rowScanPlan, scanned []any) error
 			field.Set(reflect.New(field.Type().Elem()))
 		}
 		field = field.Elem()
-		switch field.Kind() {
-		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		kind := field.Kind()
+		// OPTIMIZATION: Fast-path Int64 and use range checks to reduce overhead in the hot loop.
+		if kind == reflect.Int64 {
+			field.SetInt(v.Int64)
+		} else if kind >= reflect.Int && kind <= reflect.Int32 {
 			if field.OverflowInt(v.Int64) {
 				return fmt.Errorf("rain: value %d overflows field %s", v.Int64, field.Type())
 			}
 			field.SetInt(v.Int64)
-		case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		} else if kind >= reflect.Uint && kind <= reflect.Uint64 {
 			if v.Int64 < 0 || field.OverflowUint(uint64(v.Int64)) {
 				return fmt.Errorf("rain: value %d overflows field %s", v.Int64, field.Type())
 			}
 			field.SetUint(uint64(v.Int64))
-		default:
+		} else {
 			if err := assignRawValueToField(field, v.Int64); err != nil {
 				return err
 			}
@@ -737,7 +745,17 @@ func sliceElementStructType(elemType reflect.Type) (reflect.Type, bool, error) {
 }
 
 func newRowScanPlanForColumns(cols []string, modelType reflect.Type, table *schema.TableDef) (*rowScanPlan, error) {
-	columnKey := strings.Join(cols, "\x00")
+	var columnKey string
+	// OPTIMIZATION: Avoid strings.Join for the common single-column scan (Count/point lookups).
+	switch len(cols) {
+	case 0:
+		columnKey = ""
+	case 1:
+		columnKey = cols[0]
+	default:
+		columnKey = strings.Join(cols, "\x00")
+	}
+
 	key := rowScanPlanKey{
 		modelType: modelType,
 		columns:   columnKey,
