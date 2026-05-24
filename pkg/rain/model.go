@@ -28,15 +28,27 @@ type modelMeta struct {
 }
 
 type scanColumnPlan struct {
-	columnName string
-	scanIndex  int
-	fieldIndex []int
-	index0     int
-	isComplex  bool
-	isJSON     bool
-	isDirect   bool
-	columnDef  *schema.ColumnDef
-	fieldType  reflect.Type
+	columnName   string
+	scanIndex    int
+	scratchIndex int
+	fieldIndex   []int
+	index0       int
+	isComplex    bool
+	isJSON       bool
+	isDirect     bool
+	columnDef    *schema.ColumnDef
+	fieldType    reflect.Type
+}
+
+type rowScanScratch struct {
+	scanTargets []any
+	scanned     []any
+
+	ints    []sql.NullInt64
+	strings []sql.NullString
+	bools   []sql.NullBool
+	floats  []sql.NullFloat64
+	times   []sql.NullTime
 }
 
 type rowScanPlan struct {
@@ -59,6 +71,8 @@ type rowScanPlan struct {
 	timePointerCols []scanColumnPlan
 
 	otherCols []scanColumnPlan
+
+	pool sync.Pool
 }
 
 type rowScanPlanKey struct {
@@ -219,6 +233,10 @@ func scanRowsAgainstTableDirect(rows *sql.Rows, dest any, table *schema.TableDef
 		if err != nil {
 			return err
 		}
+
+		scratch := plan.pool.Get().(*rowScanScratch)
+		defer plan.pool.Put(scratch)
+
 		if !rows.Next() {
 			if err := rows.Err(); err != nil {
 				return err
@@ -226,13 +244,11 @@ func scanRowsAgainstTableDirect(rows *sql.Rows, dest any, table *schema.TableDef
 			return sql.ErrNoRows
 		}
 
-		scanTargets, scanned := newScanTargets(cols, plan, nil, nil)
-
-		if err := rows.Scan(scanTargets...); err != nil {
+		if err := rows.Scan(scratch.scanTargets...); err != nil {
 			return err
 		}
 
-		return scanDirectRow(target, plan, scanned)
+		return scanDirectRow(target, plan, scratch)
 	case reflect.Slice:
 		elemType := target.Type().Elem()
 		structType, pointerElems, err := sliceElementStructType(elemType)
@@ -244,7 +260,9 @@ func scanRowsAgainstTableDirect(rows *sql.Rows, dest any, table *schema.TableDef
 			return err
 		}
 
-		scanTargets, scanned := newScanTargets(cols, plan, nil, nil)
+		scratch := plan.pool.Get().(*rowScanScratch)
+		defer plan.pool.Put(scratch)
+
 		zeroElem := reflect.Zero(elemType)
 
 		// Use a local slice header to grow the result set. If rows.Scan fails,
@@ -258,10 +276,10 @@ func scanRowsAgainstTableDirect(rows *sql.Rows, dest any, table *schema.TableDef
 			// for non-direct columns. Direct columns use pointers to scratch variables
 			// that are overwritten by rows.Scan.
 			for _, idx := range plan.clearIndices {
-				scanned[idx] = nil
+				scratch.scanned[idx] = nil
 			}
 
-			if err := rows.Scan(scanTargets...); err != nil {
+			if err := rows.Scan(scratch.scanTargets...); err != nil {
 				return err
 			}
 
@@ -285,7 +303,7 @@ func scanRowsAgainstTableDirect(rows *sql.Rows, dest any, table *schema.TableDef
 				scanTarget = item
 			}
 
-			if err := scanDirectRow(scanTarget, plan, scanned); err != nil {
+			if err := scanDirectRow(scanTarget, plan, scratch); err != nil {
 				return err
 			}
 		}
@@ -299,63 +317,22 @@ func scanRowsAgainstTableDirect(rows *sql.Rows, dest any, table *schema.TableDef
 	}
 }
 
-func newScanTargets(cols []string, plan *rowScanPlan, scanTargets, scanned []any) ([]any, []any) {
-	if scanTargets == nil {
-		scanTargets = make([]any, len(cols))
-	}
-	if scanned == nil {
-		scanned = make([]any, len(cols))
-	}
+func newScanTargets(cols []string) ([]any, []any) {
+	scanTargets := make([]any, len(cols))
+	scanned := make([]any, len(cols))
 
 	for idx := range cols {
 		scanned[idx] = nil
 		scanTargets[idx] = &scanned[idx]
 	}
 
-	for i := range plan.columns {
-		p := &plan.columns[i]
-		if !p.isDirect {
-			continue
-		}
-
-		idx := p.scanIndex
-		fieldType := p.fieldType
-		if fieldType.Kind() == reflect.Pointer {
-			fieldType = fieldType.Elem()
-		}
-		switch fieldType.Kind() {
-		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
-			reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-			var v sql.NullInt64
-			scanned[idx] = &v
-			scanTargets[idx] = &v
-		case reflect.String:
-			var v sql.NullString
-			scanned[idx] = &v
-			scanTargets[idx] = &v
-		case reflect.Bool:
-			var v sql.NullBool
-			scanned[idx] = &v
-			scanTargets[idx] = &v
-		case reflect.Float32, reflect.Float64:
-			var v sql.NullFloat64
-			scanned[idx] = &v
-			scanTargets[idx] = &v
-		case reflect.Struct:
-			if fieldType == reflect.TypeFor[time.Time]() {
-				var v sql.NullTime
-				scanned[idx] = &v
-				scanTargets[idx] = &v
-			}
-		}
-	}
 	return scanTargets, scanned
 }
 
-func scanDirectRow(target reflect.Value, plan *rowScanPlan, scanned []any) error {
+func scanDirectRow(target reflect.Value, plan *rowScanPlan, scratch *rowScanScratch) error {
 	for i := range plan.int64ValueCols {
 		col := &plan.int64ValueCols[i]
-		v := scanned[col.scanIndex].(*sql.NullInt64)
+		v := &scratch.ints[col.scratchIndex]
 		if !v.Valid {
 			return fmt.Errorf("rain: cannot assign NULL to non-pointer field %s", col.fieldType)
 		}
@@ -393,7 +370,7 @@ func scanDirectRow(target reflect.Value, plan *rowScanPlan, scanned []any) error
 	}
 	for i := range plan.int64PointerCols {
 		col := &plan.int64PointerCols[i]
-		v := scanned[col.scanIndex].(*sql.NullInt64)
+		v := &scratch.ints[col.scratchIndex]
 		var field reflect.Value
 		if col.isComplex {
 			var err error
@@ -434,7 +411,7 @@ func scanDirectRow(target reflect.Value, plan *rowScanPlan, scanned []any) error
 	}
 	for i := range plan.stringValueCols {
 		col := &plan.stringValueCols[i]
-		v := scanned[col.scanIndex].(*sql.NullString)
+		v := &scratch.strings[col.scratchIndex]
 		if !v.Valid {
 			return fmt.Errorf("rain: cannot assign NULL to non-pointer field %s", col.fieldType)
 		}
@@ -458,7 +435,7 @@ func scanDirectRow(target reflect.Value, plan *rowScanPlan, scanned []any) error
 	}
 	for i := range plan.stringPointerCols {
 		col := &plan.stringPointerCols[i]
-		v := scanned[col.scanIndex].(*sql.NullString)
+		v := &scratch.strings[col.scratchIndex]
 		var field reflect.Value
 		if col.isComplex {
 			var err error
@@ -487,7 +464,7 @@ func scanDirectRow(target reflect.Value, plan *rowScanPlan, scanned []any) error
 	}
 	for i := range plan.boolValueCols {
 		col := &plan.boolValueCols[i]
-		v := scanned[col.scanIndex].(*sql.NullBool)
+		v := &scratch.bools[col.scratchIndex]
 		if !v.Valid {
 			return fmt.Errorf("rain: cannot assign NULL to non-pointer field %s", col.fieldType)
 		}
@@ -511,7 +488,7 @@ func scanDirectRow(target reflect.Value, plan *rowScanPlan, scanned []any) error
 	}
 	for i := range plan.boolPointerCols {
 		col := &plan.boolPointerCols[i]
-		v := scanned[col.scanIndex].(*sql.NullBool)
+		v := &scratch.bools[col.scratchIndex]
 		var field reflect.Value
 		if col.isComplex {
 			var err error
@@ -540,7 +517,7 @@ func scanDirectRow(target reflect.Value, plan *rowScanPlan, scanned []any) error
 	}
 	for i := range plan.float64ValueCols {
 		col := &plan.float64ValueCols[i]
-		v := scanned[col.scanIndex].(*sql.NullFloat64)
+		v := &scratch.floats[col.scratchIndex]
 		if !v.Valid {
 			return fmt.Errorf("rain: cannot assign NULL to non-pointer field %s", col.fieldType)
 		}
@@ -567,7 +544,7 @@ func scanDirectRow(target reflect.Value, plan *rowScanPlan, scanned []any) error
 	}
 	for i := range plan.float64PointerCols {
 		col := &plan.float64PointerCols[i]
-		v := scanned[col.scanIndex].(*sql.NullFloat64)
+		v := &scratch.floats[col.scratchIndex]
 		var field reflect.Value
 		if col.isComplex {
 			var err error
@@ -599,7 +576,7 @@ func scanDirectRow(target reflect.Value, plan *rowScanPlan, scanned []any) error
 	}
 	for i := range plan.timeValueCols {
 		col := &plan.timeValueCols[i]
-		v := scanned[col.scanIndex].(*sql.NullTime)
+		v := &scratch.times[col.scratchIndex]
 		if !v.Valid {
 			return fmt.Errorf("rain: cannot assign NULL to non-pointer field %s", col.fieldType)
 		}
@@ -623,7 +600,7 @@ func scanDirectRow(target reflect.Value, plan *rowScanPlan, scanned []any) error
 	}
 	for i := range plan.timePointerCols {
 		col := &plan.timePointerCols[i]
-		v := scanned[col.scanIndex].(*sql.NullTime)
+		v := &scratch.times[col.scratchIndex]
 		var field reflect.Value
 		if col.isComplex {
 			var err error
@@ -662,7 +639,7 @@ func scanDirectRow(target reflect.Value, plan *rowScanPlan, scanned []any) error
 		} else {
 			field = target.Field(col.index0)
 		}
-		rowVal := scanned[col.scanIndex]
+		rowVal := scratch.scanned[col.scanIndex]
 		if !col.isDirect && col.isJSON {
 			if s, ok := rowVal.(string); ok {
 				rowVal = []byte(s)
@@ -782,6 +759,9 @@ func newRowScanPlanForColumns(cols []string, modelType reflect.Type, table *sche
 		columns:      make([]scanColumnPlan, 0, len(cols)),
 		clearIndices: make([]int, 0),
 	}
+
+	var numInts, numStrings, numBools, numFloats, numTimes int
+
 	for idx, name := range cols {
 		fieldInfo, ok := meta.byColumn[name]
 		if !ok {
@@ -833,7 +813,6 @@ func newRowScanPlanForColumns(cols []string, modelType reflect.Type, table *sche
 			columnDef:  columnDef,
 			fieldType:  fieldType,
 		}
-		plan.columns = append(plan.columns, colPlan)
 
 		if isDirect {
 			isPtr := fieldType.Kind() == reflect.Pointer
@@ -845,24 +824,32 @@ func newRowScanPlanForColumns(cols []string, modelType reflect.Type, table *sche
 			switch baseType.Kind() {
 			case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
 				reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+				colPlan.scratchIndex = numInts
+				numInts++
 				if isPtr {
 					plan.int64PointerCols = append(plan.int64PointerCols, colPlan)
 				} else {
 					plan.int64ValueCols = append(plan.int64ValueCols, colPlan)
 				}
 			case reflect.String:
+				colPlan.scratchIndex = numStrings
+				numStrings++
 				if isPtr {
 					plan.stringPointerCols = append(plan.stringPointerCols, colPlan)
 				} else {
 					plan.stringValueCols = append(plan.stringValueCols, colPlan)
 				}
 			case reflect.Bool:
+				colPlan.scratchIndex = numBools
+				numBools++
 				if isPtr {
 					plan.boolPointerCols = append(plan.boolPointerCols, colPlan)
 				} else {
 					plan.boolValueCols = append(plan.boolValueCols, colPlan)
 				}
 			case reflect.Float32, reflect.Float64:
+				colPlan.scratchIndex = numFloats
+				numFloats++
 				if isPtr {
 					plan.float64PointerCols = append(plan.float64PointerCols, colPlan)
 				} else {
@@ -870,6 +857,8 @@ func newRowScanPlanForColumns(cols []string, modelType reflect.Type, table *sche
 				}
 			case reflect.Struct:
 				if baseType == reflect.TypeFor[time.Time]() {
+					colPlan.scratchIndex = numTimes
+					numTimes++
 					if isPtr {
 						plan.timePointerCols = append(plan.timePointerCols, colPlan)
 					} else {
@@ -884,6 +873,73 @@ func newRowScanPlanForColumns(cols []string, modelType reflect.Type, table *sche
 		} else {
 			plan.otherCols = append(plan.otherCols, colPlan)
 		}
+		plan.columns = append(plan.columns, colPlan)
+	}
+
+	plan.pool.New = func() any {
+		s := &rowScanScratch{
+			scanTargets: make([]any, len(cols)),
+			scanned:     make([]any, len(cols)),
+			ints:        make([]sql.NullInt64, numInts),
+			strings:     make([]sql.NullString, numStrings),
+			bools:       make([]sql.NullBool, numBools),
+			floats:      make([]sql.NullFloat64, numFloats),
+			times:       make([]sql.NullTime, numTimes),
+		}
+		for i := range s.scanTargets {
+			s.scanTargets[i] = &s.scanned[i]
+		}
+		for i := range plan.int64ValueCols {
+			p := &plan.int64ValueCols[i]
+			s.scanned[p.scanIndex] = &s.ints[p.scratchIndex]
+			s.scanTargets[p.scanIndex] = &s.ints[p.scratchIndex]
+		}
+		for i := range plan.int64PointerCols {
+			p := &plan.int64PointerCols[i]
+			s.scanned[p.scanIndex] = &s.ints[p.scratchIndex]
+			s.scanTargets[p.scanIndex] = &s.ints[p.scratchIndex]
+		}
+		for i := range plan.stringValueCols {
+			p := &plan.stringValueCols[i]
+			s.scanned[p.scanIndex] = &s.strings[p.scratchIndex]
+			s.scanTargets[p.scanIndex] = &s.strings[p.scratchIndex]
+		}
+		for i := range plan.stringPointerCols {
+			p := &plan.stringPointerCols[i]
+			s.scanned[p.scanIndex] = &s.strings[p.scratchIndex]
+			s.scanTargets[p.scanIndex] = &s.strings[p.scratchIndex]
+		}
+		for i := range plan.boolValueCols {
+			p := &plan.boolValueCols[i]
+			s.scanned[p.scanIndex] = &s.bools[p.scratchIndex]
+			s.scanTargets[p.scanIndex] = &s.bools[p.scratchIndex]
+		}
+		for i := range plan.boolPointerCols {
+			p := &plan.boolPointerCols[i]
+			s.scanned[p.scanIndex] = &s.bools[p.scratchIndex]
+			s.scanTargets[p.scanIndex] = &s.bools[p.scratchIndex]
+		}
+		for i := range plan.float64ValueCols {
+			p := &plan.float64ValueCols[i]
+			s.scanned[p.scanIndex] = &s.floats[p.scratchIndex]
+			s.scanTargets[p.scanIndex] = &s.floats[p.scratchIndex]
+		}
+		for i := range plan.float64PointerCols {
+			p := &plan.float64PointerCols[i]
+			s.scanned[p.scanIndex] = &s.floats[p.scratchIndex]
+			s.scanTargets[p.scanIndex] = &s.floats[p.scratchIndex]
+		}
+		for i := range plan.timeValueCols {
+			p := &plan.timeValueCols[i]
+			s.scanned[p.scanIndex] = &s.times[p.scratchIndex]
+			s.scanTargets[p.scanIndex] = &s.times[p.scratchIndex]
+		}
+		for i := range plan.timePointerCols {
+			p := &plan.timePointerCols[i]
+			s.scanned[p.scanIndex] = &s.times[p.scratchIndex]
+			s.scanTargets[p.scanIndex] = &s.times[p.scratchIndex]
+		}
+		return s
 	}
 
 	actual, _ := rowScanPlanCache.LoadOrStore(key, plan)
@@ -919,11 +975,7 @@ func readCachedSelectRows(rows *sql.Rows) (*cachedSelectRows, error) {
 		Columns: append([]string(nil), cols...),
 		Rows:    make([][]cachedValue, 0),
 	}
-	scanTargets := make([]any, len(cols))
-	scanned := make([]any, len(cols))
-	for idx := range cols {
-		scanTargets[idx] = &scanned[idx]
-	}
+	scanTargets, scanned := newScanTargets(cols)
 	for rows.Next() {
 		for idx := range scanned {
 			scanned[idx] = nil
