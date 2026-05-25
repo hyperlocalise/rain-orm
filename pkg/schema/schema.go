@@ -187,15 +187,19 @@ const (
 	RelationTypeBelongsTo RelationType = "belongs_to"
 	RelationTypeHasOne    RelationType = "has_one"
 	RelationTypeHasMany   RelationType = "has_many"
+	RelationTypeManyToMany RelationType = "many_to_many"
 )
 
 // RelationDef stores table-level relation metadata used by relation loading.
 type RelationDef struct {
-	Name         string
-	Type         RelationType
-	SourceColumn *ColumnDef
-	TargetTable  *TableDef
-	TargetColumn *ColumnDef
+	Name             string
+	Type             RelationType
+	SourceColumn     *ColumnDef
+	TargetTable      *TableDef
+	TargetColumn     *ColumnDef
+	JoinTable        *TableDef
+	JoinSourceColumn *ColumnDef
+	JoinTargetColumn *ColumnDef
 }
 
 // IndexDef stores table-level index metadata.
@@ -672,6 +676,20 @@ func (t *TableModel) HasMany(name string, source ColumnReference, target ColumnR
 	})
 }
 
+// ManyToMany registers a many-to-many relation on the table.
+func (t *TableModel) ManyToMany(name string, source ColumnReference, target ColumnReference, joinTable TableReference, joinSource ColumnReference, joinTarget ColumnReference) {
+	t.addRelation(RelationDef{
+		Name:             name,
+		Type:             RelationTypeManyToMany,
+		SourceColumn:     source.ColumnDef(),
+		TargetTable:      target.ColumnDef().Table,
+		TargetColumn:     target.ColumnDef(),
+		JoinTable:        joinTable.TableDef(),
+		JoinSourceColumn: joinSource.ColumnDef(),
+		JoinTargetColumn: joinTarget.ColumnDef(),
+	})
+}
+
 func (t *TableModel) addRelation(relation RelationDef) {
 	if t.def == nil {
 		panic("schema: table model is not initialized")
@@ -681,6 +699,11 @@ func (t *TableModel) addRelation(relation RelationDef) {
 	}
 	if relation.SourceColumn == nil || relation.TargetTable == nil || relation.TargetColumn == nil {
 		panic(fmt.Sprintf("schema: relation %q requires source and target columns", relation.Name))
+	}
+	if relation.Type == RelationTypeManyToMany {
+		if relation.JoinTable == nil || relation.JoinSourceColumn == nil || relation.JoinTargetColumn == nil {
+			panic(fmt.Sprintf("schema: many-to-many relation %q requires join table and columns", relation.Name))
+		}
 	}
 	if relation.SourceColumn.Table != t.def {
 		panic(fmt.Sprintf("schema: relation %q source column must belong to table %q", relation.Name, t.def.Name))
@@ -1448,15 +1471,23 @@ func cloneTableDef(src *TableDef, alias string) *TableDef {
 
 	for _, relation := range src.Relations {
 		aliasedRelation := RelationDef{
-			Name:         relation.Name,
-			Type:         relation.Type,
-			SourceColumn: cloned.columnsByName[relation.SourceColumn.Name],
-			TargetTable:  relation.TargetTable,
-			TargetColumn: relation.TargetColumn,
+			Name:             relation.Name,
+			Type:             relation.Type,
+			SourceColumn:     cloned.columnsByName[relation.SourceColumn.Name],
+			TargetTable:      relation.TargetTable,
+			TargetColumn:     relation.TargetColumn,
+			JoinTable:        relation.JoinTable,
+			JoinSourceColumn: relation.JoinSourceColumn,
+			JoinTargetColumn: relation.JoinTargetColumn,
 		}
 		if relation.TargetTable == src {
 			aliasedRelation.TargetTable = cloned
 			aliasedRelation.TargetColumn = cloned.columnsByName[relation.TargetColumn.Name]
+		}
+		if relation.JoinTable == src {
+			aliasedRelation.JoinTable = cloned
+			aliasedRelation.JoinSourceColumn = cloned.columnsByName[relation.JoinSourceColumn.Name]
+			aliasedRelation.JoinTargetColumn = cloned.columnsByName[relation.JoinTargetColumn.Name]
 		}
 		cloned.Relations = append(cloned.Relations, aliasedRelation)
 		cloned.relationsByName[aliasedRelation.Name] = aliasedRelation
