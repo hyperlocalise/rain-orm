@@ -468,19 +468,8 @@ func (q *SelectQuery) writeSQL(ctx *compileContext) error {
 		return err
 	}
 
-	for _, join := range q.joins {
-		ctx.writeByte(' ')
-		ctx.writeString(join.kind)
-		ctx.writeByte(' ')
-		if err := join.table.writeSQL(ctx); err != nil {
-			return err
-		}
-		if join.kind != "CROSS JOIN" {
-			ctx.writeString(" ON ")
-			if err := ctx.writePredicate(join.on); err != nil {
-				return err
-			}
-		}
+	if err := q.writeJoins(ctx); err != nil {
+		return err
 	}
 
 	if len(q.where) > 0 {
@@ -584,6 +573,29 @@ func (q *SelectQuery) writeCompoundOperandSQL(ctx *compileContext) error {
 	}
 	if useParens {
 		ctx.writeByte(')')
+	}
+	return nil
+}
+
+func (q *SelectQuery) writeJoins(ctx *compileContext) error {
+	for _, join := range q.joins {
+		ctx.writeByte(' ')
+		ctx.writeString(join.kind)
+		ctx.writeByte(' ')
+		if err := join.table.writeSQL(ctx); err != nil {
+			return err
+		}
+		if join.kind != "CROSS JOIN" {
+			if join.on == nil {
+				return fmt.Errorf("rain: %s requires an ON clause", join.kind)
+			}
+			ctx.writeString(" ON ")
+			if err := ctx.writePredicate(join.on); err != nil {
+				return err
+			}
+		} else if join.on != nil {
+			return errors.New("rain: CROSS JOIN does not support an ON clause")
+		}
 	}
 	return nil
 }
@@ -929,19 +941,8 @@ func (q *SelectQuery) compileAggregate(selection string) (compiledQuery, error) 
 		return compiledQuery{}, err
 	}
 
-	for _, join := range q.joins {
-		ctx.writeByte(' ')
-		ctx.writeString(join.kind)
-		ctx.writeByte(' ')
-		if err := join.table.writeSQL(ctx); err != nil {
-			return compiledQuery{}, err
-		}
-		if join.kind != "CROSS JOIN" {
-			ctx.writeString(" ON ")
-			if err := ctx.writePredicate(join.on); err != nil {
-				return compiledQuery{}, err
-			}
-		}
+	if err := q.writeJoins(ctx); err != nil {
+		return compiledQuery{}, err
 	}
 
 	if len(q.where) > 0 {
