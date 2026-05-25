@@ -72,6 +72,24 @@ func (q *SelectQuery) LeftJoin(table schema.TableReference, on schema.Predicate)
 	return q
 }
 
+// RightJoin appends a RIGHT JOIN clause.
+func (q *SelectQuery) RightJoin(table schema.TableReference, on schema.Predicate) *SelectQuery {
+	q.joins = append(q.joins, joinClause{kind: "RIGHT JOIN", table: tableDefSource{table: table.TableDef()}, on: on})
+	return q
+}
+
+// FullJoin appends a FULL JOIN clause.
+func (q *SelectQuery) FullJoin(table schema.TableReference, on schema.Predicate) *SelectQuery {
+	q.joins = append(q.joins, joinClause{kind: "FULL JOIN", table: tableDefSource{table: table.TableDef()}, on: on})
+	return q
+}
+
+// CrossJoin appends a CROSS JOIN clause.
+func (q *SelectQuery) CrossJoin(table schema.TableReference) *SelectQuery {
+	q.joins = append(q.joins, joinClause{kind: "CROSS JOIN", table: tableDefSource{table: table.TableDef()}})
+	return q
+}
+
 // JoinSubquery appends an INNER JOIN against a subquery source.
 func (q *SelectQuery) JoinSubquery(query *SelectQuery, alias string, on schema.Predicate) *SelectQuery {
 	q.joins = append(q.joins, joinClause{kind: "INNER JOIN", table: subqueryTableSource{query: query, alias: alias}, on: on})
@@ -81,6 +99,24 @@ func (q *SelectQuery) JoinSubquery(query *SelectQuery, alias string, on schema.P
 // LeftJoinSubquery appends a LEFT JOIN against a subquery source.
 func (q *SelectQuery) LeftJoinSubquery(query *SelectQuery, alias string, on schema.Predicate) *SelectQuery {
 	q.joins = append(q.joins, joinClause{kind: "LEFT JOIN", table: subqueryTableSource{query: query, alias: alias}, on: on})
+	return q
+}
+
+// RightJoinSubquery appends a RIGHT JOIN against a subquery source.
+func (q *SelectQuery) RightJoinSubquery(query *SelectQuery, alias string, on schema.Predicate) *SelectQuery {
+	q.joins = append(q.joins, joinClause{kind: "RIGHT JOIN", table: subqueryTableSource{query: query, alias: alias}, on: on})
+	return q
+}
+
+// FullJoinSubquery appends a FULL JOIN against a subquery source.
+func (q *SelectQuery) FullJoinSubquery(query *SelectQuery, alias string, on schema.Predicate) *SelectQuery {
+	q.joins = append(q.joins, joinClause{kind: "FULL JOIN", table: subqueryTableSource{query: query, alias: alias}, on: on})
+	return q
+}
+
+// CrossJoinSubquery appends a CROSS JOIN against a subquery source.
+func (q *SelectQuery) CrossJoinSubquery(query *SelectQuery, alias string) *SelectQuery {
+	q.joins = append(q.joins, joinClause{kind: "CROSS JOIN", table: subqueryTableSource{query: query, alias: alias}})
 	return q
 }
 
@@ -432,17 +468,8 @@ func (q *SelectQuery) writeSQL(ctx *compileContext) error {
 		return err
 	}
 
-	for _, join := range q.joins {
-		ctx.writeByte(' ')
-		ctx.writeString(join.kind)
-		ctx.writeByte(' ')
-		if err := join.table.writeSQL(ctx); err != nil {
-			return err
-		}
-		ctx.writeString(" ON ")
-		if err := ctx.writePredicate(join.on); err != nil {
-			return err
-		}
+	if err := q.writeJoins(ctx); err != nil {
+		return err
 	}
 
 	if len(q.where) > 0 {
@@ -546,6 +573,29 @@ func (q *SelectQuery) writeCompoundOperandSQL(ctx *compileContext) error {
 	}
 	if useParens {
 		ctx.writeByte(')')
+	}
+	return nil
+}
+
+func (q *SelectQuery) writeJoins(ctx *compileContext) error {
+	for _, join := range q.joins {
+		ctx.writeByte(' ')
+		ctx.writeString(join.kind)
+		ctx.writeByte(' ')
+		if err := join.table.writeSQL(ctx); err != nil {
+			return err
+		}
+		if join.kind != "CROSS JOIN" {
+			if join.on == nil {
+				return fmt.Errorf("rain: %s requires an ON clause", join.kind)
+			}
+			ctx.writeString(" ON ")
+			if err := ctx.writePredicate(join.on); err != nil {
+				return err
+			}
+		} else if join.on != nil {
+			return errors.New("rain: CROSS JOIN does not support an ON clause")
+		}
 	}
 	return nil
 }
@@ -891,17 +941,8 @@ func (q *SelectQuery) compileAggregate(selection string) (compiledQuery, error) 
 		return compiledQuery{}, err
 	}
 
-	for _, join := range q.joins {
-		ctx.writeByte(' ')
-		ctx.writeString(join.kind)
-		ctx.writeByte(' ')
-		if err := join.table.writeSQL(ctx); err != nil {
-			return compiledQuery{}, err
-		}
-		ctx.writeString(" ON ")
-		if err := ctx.writePredicate(join.on); err != nil {
-			return compiledQuery{}, err
-		}
+	if err := q.writeJoins(ctx); err != nil {
+		return compiledQuery{}, err
 	}
 
 	if len(q.where) > 0 {

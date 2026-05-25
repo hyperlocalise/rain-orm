@@ -43,6 +43,111 @@ func TestSelectToSQL(t *testing.T) {
 	}
 }
 
+func TestSelectJoinsToSQL(t *testing.T) {
+	t.Parallel()
+
+	users, posts := defineTables()
+
+	type tc struct {
+		name     string
+		dialect  string
+		build    func(*rain.DB) *rain.SelectQuery
+		wantSQL  string
+		wantArgs []any
+		wantErr  string
+	}
+
+	cases := []tc{
+		{
+			name:    "right join postgres",
+			dialect: "postgres",
+			build: func(db *rain.DB) *rain.SelectQuery {
+				return db.Select().Table(users).RightJoin(posts, posts.UserID.EqCol(users.ID))
+			},
+			wantSQL: `SELECT * FROM "users" RIGHT JOIN "posts" ON "posts"."user_id" = "users"."id"`,
+		},
+		{
+			name:    "full join postgres",
+			dialect: "postgres",
+			build: func(db *rain.DB) *rain.SelectQuery {
+				return db.Select().Table(users).FullJoin(posts, posts.UserID.EqCol(users.ID))
+			},
+			wantSQL: `SELECT * FROM "users" FULL JOIN "posts" ON "posts"."user_id" = "users"."id"`,
+		},
+		{
+			name:    "cross join mysql",
+			dialect: "mysql",
+			build: func(db *rain.DB) *rain.SelectQuery {
+				return db.Select().Table(users).CrossJoin(posts)
+			},
+			wantSQL: "SELECT * FROM `users` CROSS JOIN `posts`",
+		},
+		{
+			name:    "right join subquery postgres",
+			dialect: "postgres",
+			build: func(db *rain.DB) *rain.SelectQuery {
+				subquery := db.Select().Table(posts).Where(posts.ID.Gt(int64(100)))
+				return db.Select().Table(users).RightJoinSubquery(subquery, "p", schema.Raw(`"p"."user_id" = "users"."id"`))
+			},
+			wantSQL:  `SELECT * FROM "users" RIGHT JOIN (SELECT * FROM "posts" WHERE "posts"."id" > $1) AS "p" ON "p"."user_id" = "users"."id"`,
+			wantArgs: []any{int64(100)},
+		},
+		{
+			name:    "full join subquery postgres",
+			dialect: "postgres",
+			build: func(db *rain.DB) *rain.SelectQuery {
+				subquery := db.Select().Table(posts).Where(posts.ID.Gt(int64(100)))
+				return db.Select().Table(users).FullJoinSubquery(subquery, "p", schema.Raw(`"p"."user_id" = "users"."id"`))
+			},
+			wantSQL:  `SELECT * FROM "users" FULL JOIN (SELECT * FROM "posts" WHERE "posts"."id" > $1) AS "p" ON "p"."user_id" = "users"."id"`,
+			wantArgs: []any{int64(100)},
+		},
+		{
+			name:    "cross join subquery sqlite",
+			dialect: "sqlite",
+			build: func(db *rain.DB) *rain.SelectQuery {
+				subquery := db.Select().Table(posts)
+				return db.Select().Table(users).CrossJoinSubquery(subquery, "p")
+			},
+			wantSQL: `SELECT * FROM "users" CROSS JOIN (SELECT * FROM "posts") AS "p"`,
+		},
+	}
+
+	for _, tt := range cases {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			db, err := rain.OpenDialect(tt.dialect)
+			if err != nil {
+				t.Fatalf("OpenDialect returned error: %v", err)
+			}
+
+			sqlText, args, err := tt.build(db).ToSQL()
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("expected error containing %q, got %v", tt.wantErr, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ToSQL returned error: %v", err)
+			}
+			if sqlText != tt.wantSQL {
+				t.Fatalf("unexpected SQL:\nwant: %s\ngot:  %s", tt.wantSQL, sqlText)
+			}
+			if len(args) != len(tt.wantArgs) {
+				t.Fatalf("unexpected arg count: want %d got %d (%#v)", len(tt.wantArgs), len(args), args)
+			}
+			for idx := range tt.wantArgs {
+				if args[idx] != tt.wantArgs[idx] {
+					t.Fatalf("unexpected arg[%d]: want %#v got %#v", idx, tt.wantArgs[idx], args[idx])
+				}
+			}
+		})
+	}
+}
+
 func TestSelectAdvancedPredicatesAndOrderToSQL(t *testing.T) {
 	t.Parallel()
 
