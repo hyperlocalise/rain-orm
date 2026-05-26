@@ -76,11 +76,12 @@ func (q compiledQuery) bind(args PreparedArgs) ([]any, error) {
 }
 
 type compileContext struct {
-	builder  strings.Builder
-	dialect  dialect.Dialect
-	argPlan  []compiledArg
-	err      error
-	skipCTEs bool
+	builder     strings.Builder
+	dialect     dialect.Dialect
+	argPlan     []compiledArg
+	err         error
+	skipCTEs    bool
+	useLiterals bool
 }
 
 func newCompileContext(d dialect.Dialect) *compileContext {
@@ -180,6 +181,14 @@ func (c *compileContext) writeExpressionInContext(expr schema.Expression, contex
 	case schema.ColumnReference:
 		c.writeColumn(value)
 	case schema.ValueExpr:
+		if c.useLiterals {
+			literal, err := literalDDLSQL(c.dialect, value.Value)
+			if err != nil {
+				return err
+			}
+			c.writeString(literal)
+			return nil
+		}
 		index := c.nextPlaceholderIndex()
 		c.argPlan = append(c.argPlan, compiledArg{kind: compiledArgLiteral, value: value.Value})
 		c.writeString(c.dialect.Placeholder(index))
@@ -385,6 +394,21 @@ func (c *compileContext) writeRaw(raw schema.RawExpr) error {
 		}
 		if argIndex >= len(raw.Args) {
 			return errors.New("rain: raw SQL placeholder count does not match args")
+		}
+		if c.useLiterals {
+			if expr, ok := raw.Args[argIndex].(schema.Expression); ok {
+				if err := c.writeExpression(expr); err != nil {
+					return err
+				}
+			} else {
+				literal, err := literalDDLSQL(c.dialect, raw.Args[argIndex])
+				if err != nil {
+					return err
+				}
+				c.writeString(literal)
+			}
+			argIndex++
+			continue
 		}
 		index := c.nextPlaceholderIndex()
 		c.argPlan = append(c.argPlan, compiledArg{kind: compiledArgLiteral, value: raw.Args[argIndex]})

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	exampleregistry "github.com/hyperlocalise/rain-orm/examples/schema/registry"
+	"github.com/hyperlocalise/rain-orm/pkg/rain"
 	"github.com/hyperlocalise/rain-orm/pkg/schema"
 	_ "modernc.org/sqlite"
 )
@@ -171,6 +172,81 @@ func TestDiffSnapshotsRejectAddConstraintOnSQLite(t *testing.T) {
 
 	if _, err := DiffSnapshots(&before, after); err == nil || !strings.Contains(err.Error(), "adding constraint") {
 		t.Fatalf("expected sqlite add constraint rejection, got %v", err)
+	}
+}
+
+func TestDiffSnapshotsRecreateChangedView(t *testing.T) {
+	t.Parallel()
+
+	ddl, err := rain.OpenDialect("postgres")
+	if err != nil {
+		t.Fatalf("OpenDialect(postgres): %v", err)
+	}
+	users := schema.Define("users", func(t *usersTable) {
+		t.ID = t.BigSerial("id").PrimaryKey()
+		t.Email = t.Text("email").NotNull()
+	})
+	baseQuery := ddl.Select().Table(users).Column(users.Email)
+	viewBefore := schema.DefineView("user_emails", baseQuery, func(v *userEmailsView) {
+		v.Email = v.VarChar("email", 255)
+	})
+	filteredQuery := ddl.Select().Table(users).Column(users.Email).Where(schema.Raw("? = ?", users.Email, "alice@example.com"))
+	viewAfter := schema.DefineView("user_emails", filteredQuery, func(v *userEmailsView) {
+		v.Email = v.VarChar("email", 255)
+	})
+
+	before := mustBuildSnapshot(t, "postgres", []schema.TableReference{users, viewBefore})
+	after := mustBuildSnapshot(t, "postgres", []schema.TableReference{users, viewAfter})
+	beforeView, ok := tableSnapshotByName(before, "user_emails")
+	if !ok || !beforeView.IsView {
+		t.Fatalf("expected view snapshot to set IsView, got %#v", beforeView)
+	}
+	afterView, ok := tableSnapshotByName(after, "user_emails")
+	if !ok || !afterView.IsView {
+		t.Fatalf("expected view snapshot to set IsView, got %#v", afterView)
+	}
+
+	plan, err := DiffSnapshots(&before, after)
+	if err != nil {
+		t.Fatalf("DiffSnapshots returned error: %v", err)
+	}
+	if len(plan.Statements) != 2 {
+		t.Fatalf("expected drop and create view statements, got %d: %v", len(plan.Statements), plan.Statements)
+	}
+	if plan.Statements[0] != `DROP VIEW "user_emails"` {
+		t.Fatalf("expected DROP VIEW statement, got %q", plan.Statements[0])
+	}
+	if !strings.HasPrefix(plan.Statements[1], `CREATE VIEW "user_emails" AS `) {
+		t.Fatalf("expected CREATE VIEW statement, got %q", plan.Statements[1])
+	}
+	if !strings.Contains(plan.Statements[1], `'alice@example.com'`) {
+		t.Fatalf("expected updated view definition, got %q", plan.Statements[1])
+	}
+}
+
+func TestDiffSnapshotsUnchangedView(t *testing.T) {
+	t.Parallel()
+
+	ddl, err := rain.OpenDialect("sqlite")
+	if err != nil {
+		t.Fatalf("OpenDialect(sqlite): %v", err)
+	}
+	users := schema.Define("users", func(t *usersTable) {
+		t.ID = t.BigSerial("id").PrimaryKey()
+		t.Email = t.Text("email").NotNull()
+	})
+	query := ddl.Select().Table(users).Column(users.Email)
+	view := schema.DefineView("user_emails", query, func(v *userEmailsView) {
+		v.Email = v.Text("email")
+	})
+
+	snapshot := mustBuildSnapshot(t, "sqlite", []schema.TableReference{users, view})
+	plan, err := DiffSnapshots(&snapshot, snapshot)
+	if err != nil {
+		t.Fatalf("DiffSnapshots returned error: %v", err)
+	}
+	if !plan.Empty() {
+		t.Fatalf("expected no statements for unchanged view, got %v", plan.Statements)
 	}
 }
 
@@ -597,6 +673,15 @@ func TestLockNameColumnDDL(t *testing.T) {
 	}
 }
 
+func tableSnapshotByName(snapshot Snapshot, name string) (TableSnapshot, bool) {
+	for _, table := range snapshot.Tables {
+		if table.Name == name {
+			return table, true
+		}
+	}
+	return TableSnapshot{}, false
+}
+
 func mustBuildSnapshot(t *testing.T, dialectName string, tables []schema.TableReference) Snapshot {
 	t.Helper()
 
@@ -620,6 +705,11 @@ type postsTable struct {
 	schema.TableModel
 	ID     *schema.Column[int64]
 	UserID *schema.Column[int64]
+}
+
+type userEmailsView struct {
+	schema.TableModel
+	Email *schema.Column[string]
 }
 
 func usersTableWithoutNickname() schema.TableReference {

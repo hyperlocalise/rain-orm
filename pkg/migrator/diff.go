@@ -82,6 +82,21 @@ func planCreateAll(snapshot Snapshot) Plan {
 }
 
 func diffTable(previous, current TableSnapshot, dialectName string) ([]string, error) {
+	previousView := isViewSnapshot(previous)
+	currentView := isViewSnapshot(current)
+	if previousView || currentView {
+		if previousView != currentView {
+			return nil, fmt.Errorf("migrator: changing %q between view and table is not supported", current.Name)
+		}
+		if normalizeSQL(previous.CreateTableSQL) == normalizeSQL(current.CreateTableSQL) {
+			return nil, nil
+		}
+		return []string{
+			dropViewSQL(dialectName, current.Name),
+			current.CreateTableSQL,
+		}, nil
+	}
+
 	var statements []string
 
 	previousColumns := make(map[string]ColumnSnapshot, len(previous.Columns))
@@ -241,6 +256,17 @@ func columnsEqual(left, right ColumnSnapshot) bool {
 
 func normalizeSQL(sql string) string {
 	return strings.Join(strings.Fields(sql), " ")
+}
+
+func isViewSnapshot(table TableSnapshot) bool {
+	if table.IsView {
+		return true
+	}
+	return strings.HasPrefix(strings.ToUpper(strings.TrimSpace(table.CreateTableSQL)), "CREATE VIEW ")
+}
+
+func dropViewSQL(dialectName, name string) string {
+	return "DROP VIEW " + quoteIdentifier(dialectName, name)
 }
 
 func constraintSupportError(dialectName, kind, tableName, name string) error {
