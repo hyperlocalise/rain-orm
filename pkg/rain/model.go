@@ -592,14 +592,6 @@ func scanDirectRowAddr(baseAddr unsafe.Pointer, target reflect.Value, plan *rowS
 					return fmt.Errorf("rain: value %f overflows float32", v.Float64)
 				}
 				*(*float32)(ptr) = float32(v.Float64)
-			default:
-				field, err := fieldByIndexAlloc(target, col.fieldIndex)
-				if err != nil {
-					return err
-				}
-				if err := assignRawValueToField(field, v.Float64); err != nil {
-					return err
-				}
 			}
 			continue
 		}
@@ -857,7 +849,9 @@ func newRowScanPlanForColumns(cols []string, modelType reflect.Type, table *sche
 					canUseOffset = false
 				}
 				f := fieldType.Field(i)
-				offset += f.Offset
+				if canUseOffset {
+					offset += f.Offset
+				}
 				fieldType = f.Type
 			}
 		} else {
