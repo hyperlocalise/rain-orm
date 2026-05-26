@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unsafe"
 
 	"github.com/hyperlocalise/rain-orm/pkg/schema"
 )
@@ -38,6 +39,11 @@ type scanColumnPlan struct {
 	isDirect     bool
 	columnDef    *schema.ColumnDef
 	fieldType    reflect.Type
+
+	// OPTIMIZATION: Bypassing reflection in the hot loop using unsafe offsets.
+	offset       uintptr
+	kind         reflect.Kind
+	canUseOffset bool
 }
 
 type rowScanScratch struct {
@@ -271,6 +277,12 @@ func scanRowsAgainstTableDirect(rows *sql.Rows, dest any, table *schema.TableDef
 		items := reflect.New(target.Type()).Elem()
 		items.Set(target.Slice(0, 0))
 
+		// OPTIMIZATION: Cache element size and base pointer for fast addressing.
+		elemSize := structType.Size()
+		if pointerElems {
+			elemSize = target.Type().Elem().Size()
+		}
+
 		for rows.Next() {
 			// Clear any previous generic scanned values to avoid carrying over data
 			// for non-direct columns. Direct columns use pointers to scratch variables
@@ -293,18 +305,18 @@ func scanRowsAgainstTableDirect(rows *sql.Rows, dest any, table *schema.TableDef
 			}
 			item := items.Index(n)
 
-			var scanTarget reflect.Value
 			if pointerElems {
 				item.Set(reflect.New(structType))
-				scanTarget = item.Elem()
+				if err := scanDirectRow(item.Elem(), plan, scratch); err != nil {
+					return err
+				}
 			} else {
 				// Reset existing element to its zero state before reuse to avoid data carry-over.
 				item.Set(zeroElem)
-				scanTarget = item
-			}
-
-			if err := scanDirectRow(scanTarget, plan, scratch); err != nil {
-				return err
+				addr := unsafe.Pointer(items.Pointer() + uintptr(n)*elemSize) // nolint:govet
+				if err := scanDirectRowAddr(addr, item, plan, scratch); err != nil {
+					return err
+				}
 			}
 		}
 		if err := rows.Err(); err != nil {
@@ -330,34 +342,106 @@ func newScanTargets(cols []string) ([]any, []any) {
 }
 
 func scanDirectRow(target reflect.Value, plan *rowScanPlan, scratch *rowScanScratch) error {
+	baseAddr := target.Addr().UnsafePointer()
+	return scanDirectRowAddr(baseAddr, target, plan, scratch)
+}
+
+func scanDirectRowAddr(baseAddr unsafe.Pointer, target reflect.Value, plan *rowScanPlan, scratch *rowScanScratch) error {
 	for i := range plan.int64ValueCols {
 		col := &plan.int64ValueCols[i]
 		v := &scratch.ints[col.scratchIndex]
 		if !v.Valid {
 			return fmt.Errorf("rain: cannot assign NULL to non-pointer field %s", col.fieldType)
 		}
-		var field reflect.Value
-		if col.isComplex {
-			var err error
-			field, err = fieldByIndexAlloc(target, col.fieldIndex)
-			if err != nil {
-				return err
+
+		if col.canUseOffset {
+			ptr := unsafe.Pointer(uintptr(baseAddr) + col.offset)
+			switch col.kind {
+			case reflect.Int64:
+				*(*int64)(ptr) = v.Int64
+			case reflect.Int32:
+				val := int32(v.Int64)
+				if int64(val) != v.Int64 {
+					return fmt.Errorf("rain: value %d overflows int32", v.Int64)
+				}
+				*(*int32)(ptr) = val
+			case reflect.Int16:
+				val := int16(v.Int64)
+				if int64(val) != v.Int64 {
+					return fmt.Errorf("rain: value %d overflows int16", v.Int64)
+				}
+				*(*int16)(ptr) = val
+			case reflect.Int8:
+				val := int8(v.Int64)
+				if int64(val) != v.Int64 {
+					return fmt.Errorf("rain: value %d overflows int8", v.Int64)
+				}
+				*(*int8)(ptr) = val
+			case reflect.Int:
+				val := int(v.Int64)
+				if int64(val) != v.Int64 {
+					return fmt.Errorf("rain: value %d overflows int", v.Int64)
+				}
+				*(*int)(ptr) = val
+			case reflect.Uint64:
+				if v.Int64 < 0 {
+					return fmt.Errorf("rain: negative value %d overflows uint64", v.Int64)
+				}
+				*(*uint64)(ptr) = uint64(v.Int64)
+			case reflect.Uint32:
+				if v.Int64 < 0 {
+					return fmt.Errorf("rain: negative value %d overflows uint32", v.Int64)
+				}
+				val := uint32(v.Int64)
+				if uint64(val) != uint64(v.Int64) {
+					return fmt.Errorf("rain: value %d overflows uint32", v.Int64)
+				}
+				*(*uint32)(ptr) = val
+			case reflect.Uint16:
+				if v.Int64 < 0 {
+					return fmt.Errorf("rain: negative value %d overflows uint16", v.Int64)
+				}
+				val := uint16(v.Int64)
+				if uint64(val) != uint64(v.Int64) {
+					return fmt.Errorf("rain: value %d overflows uint16", v.Int64)
+				}
+				*(*uint16)(ptr) = val
+			case reflect.Uint8:
+				if v.Int64 < 0 {
+					return fmt.Errorf("rain: negative value %d overflows uint8", v.Int64)
+				}
+				val := uint8(v.Int64)
+				if uint64(val) != uint64(v.Int64) {
+					return fmt.Errorf("rain: value %d overflows uint8", v.Int64)
+				}
+				*(*uint8)(ptr) = val
+			case reflect.Uint:
+				if v.Int64 < 0 {
+					return fmt.Errorf("rain: negative value %d overflows uint", v.Int64)
+				}
+				val := uint(v.Int64)
+				if uint64(val) != uint64(v.Int64) {
+					return fmt.Errorf("rain: value %d overflows uint", v.Int64)
+				}
+				*(*uint)(ptr) = val
+			default:
+				field, _ := fieldByIndexAlloc(target, col.fieldIndex)
+				if err := assignRawValueToField(field, v.Int64); err != nil {
+					return err
+				}
 			}
-		} else {
-			field = target.Field(col.index0)
+			continue
 		}
-		kind := field.Kind()
-		// OPTIMIZATION: Fast-path Int64 (the most common DB int type) and use range
-		// checks for other integer types to minimize branch overhead and avoid
-		// redundant overflow checks for the common path.
-		if kind == reflect.Int64 {
+
+		field, _ := fieldByIndexAlloc(target, col.fieldIndex)
+		if field.Kind() == reflect.Int64 {
 			field.SetInt(v.Int64)
-		} else if kind >= reflect.Int && kind <= reflect.Int32 {
+		} else if field.Kind() >= reflect.Int && field.Kind() <= reflect.Int32 {
 			if field.OverflowInt(v.Int64) {
 				return fmt.Errorf("rain: value %d overflows field %s", v.Int64, field.Type())
 			}
 			field.SetInt(v.Int64)
-		} else if kind >= reflect.Uint && kind <= reflect.Uint64 {
+		} else if field.Kind() >= reflect.Uint && field.Kind() <= reflect.Uint64 {
 			if v.Int64 < 0 || field.OverflowUint(uint64(v.Int64)) {
 				return fmt.Errorf("rain: value %d overflows field %s", v.Int64, field.Type())
 			}
@@ -371,16 +455,7 @@ func scanDirectRow(target reflect.Value, plan *rowScanPlan, scratch *rowScanScra
 	for i := range plan.int64PointerCols {
 		col := &plan.int64PointerCols[i]
 		v := &scratch.ints[col.scratchIndex]
-		var field reflect.Value
-		if col.isComplex {
-			var err error
-			field, err = fieldByIndexAlloc(target, col.fieldIndex)
-			if err != nil {
-				return err
-			}
-		} else {
-			field = target.Field(col.index0)
-		}
+		field, _ := fieldByIndexAlloc(target, col.fieldIndex)
 		if !v.Valid {
 			field.SetZero()
 			continue
@@ -389,16 +464,14 @@ func scanDirectRow(target reflect.Value, plan *rowScanPlan, scratch *rowScanScra
 			field.Set(reflect.New(field.Type().Elem()))
 		}
 		field = field.Elem()
-		kind := field.Kind()
-		// OPTIMIZATION: Fast-path Int64 and use range checks to reduce overhead in the hot loop.
-		if kind == reflect.Int64 {
+		if field.Kind() == reflect.Int64 {
 			field.SetInt(v.Int64)
-		} else if kind >= reflect.Int && kind <= reflect.Int32 {
+		} else if field.Kind() >= reflect.Int && field.Kind() <= reflect.Int32 {
 			if field.OverflowInt(v.Int64) {
 				return fmt.Errorf("rain: value %d overflows field %s", v.Int64, field.Type())
 			}
 			field.SetInt(v.Int64)
-		} else if kind >= reflect.Uint && kind <= reflect.Uint64 {
+		} else if field.Kind() >= reflect.Uint && field.Kind() <= reflect.Uint64 {
 			if v.Int64 < 0 || field.OverflowUint(uint64(v.Int64)) {
 				return fmt.Errorf("rain: value %d overflows field %s", v.Int64, field.Type())
 			}
@@ -415,16 +488,11 @@ func scanDirectRow(target reflect.Value, plan *rowScanPlan, scratch *rowScanScra
 		if !v.Valid {
 			return fmt.Errorf("rain: cannot assign NULL to non-pointer field %s", col.fieldType)
 		}
-		var field reflect.Value
-		if col.isComplex {
-			var err error
-			field, err = fieldByIndexAlloc(target, col.fieldIndex)
-			if err != nil {
-				return err
-			}
-		} else {
-			field = target.Field(col.index0)
+		if col.canUseOffset {
+			*(*string)(unsafe.Pointer(uintptr(baseAddr) + col.offset)) = v.String
+			continue
 		}
+		field, _ := fieldByIndexAlloc(target, col.fieldIndex)
 		if field.Kind() == reflect.String {
 			field.SetString(v.String)
 		} else {
@@ -436,16 +504,7 @@ func scanDirectRow(target reflect.Value, plan *rowScanPlan, scratch *rowScanScra
 	for i := range plan.stringPointerCols {
 		col := &plan.stringPointerCols[i]
 		v := &scratch.strings[col.scratchIndex]
-		var field reflect.Value
-		if col.isComplex {
-			var err error
-			field, err = fieldByIndexAlloc(target, col.fieldIndex)
-			if err != nil {
-				return err
-			}
-		} else {
-			field = target.Field(col.index0)
-		}
+		field, _ := fieldByIndexAlloc(target, col.fieldIndex)
 		if !v.Valid {
 			field.SetZero()
 			continue
@@ -468,16 +527,11 @@ func scanDirectRow(target reflect.Value, plan *rowScanPlan, scratch *rowScanScra
 		if !v.Valid {
 			return fmt.Errorf("rain: cannot assign NULL to non-pointer field %s", col.fieldType)
 		}
-		var field reflect.Value
-		if col.isComplex {
-			var err error
-			field, err = fieldByIndexAlloc(target, col.fieldIndex)
-			if err != nil {
-				return err
-			}
-		} else {
-			field = target.Field(col.index0)
+		if col.canUseOffset {
+			*(*bool)(unsafe.Pointer(uintptr(baseAddr) + col.offset)) = v.Bool
+			continue
 		}
+		field, _ := fieldByIndexAlloc(target, col.fieldIndex)
 		if field.Kind() == reflect.Bool {
 			field.SetBool(v.Bool)
 		} else {
@@ -489,16 +543,7 @@ func scanDirectRow(target reflect.Value, plan *rowScanPlan, scratch *rowScanScra
 	for i := range plan.boolPointerCols {
 		col := &plan.boolPointerCols[i]
 		v := &scratch.bools[col.scratchIndex]
-		var field reflect.Value
-		if col.isComplex {
-			var err error
-			field, err = fieldByIndexAlloc(target, col.fieldIndex)
-			if err != nil {
-				return err
-			}
-		} else {
-			field = target.Field(col.index0)
-		}
+		field, _ := fieldByIndexAlloc(target, col.fieldIndex)
 		if !v.Valid {
 			field.SetZero()
 			continue
@@ -521,16 +566,23 @@ func scanDirectRow(target reflect.Value, plan *rowScanPlan, scratch *rowScanScra
 		if !v.Valid {
 			return fmt.Errorf("rain: cannot assign NULL to non-pointer field %s", col.fieldType)
 		}
-		var field reflect.Value
-		if col.isComplex {
-			var err error
-			field, err = fieldByIndexAlloc(target, col.fieldIndex)
-			if err != nil {
-				return err
+		if col.canUseOffset {
+			ptr := unsafe.Pointer(uintptr(baseAddr) + col.offset)
+			switch col.kind {
+			case reflect.Float64:
+				*(*float64)(ptr) = v.Float64
+			case reflect.Float32:
+				val := float32(v.Float64)
+				*(*float32)(ptr) = val
+			default:
+				field, _ := fieldByIndexAlloc(target, col.fieldIndex)
+				if err := assignRawValueToField(field, v.Float64); err != nil {
+					return err
+				}
 			}
-		} else {
-			field = target.Field(col.index0)
+			continue
 		}
+		field, _ := fieldByIndexAlloc(target, col.fieldIndex)
 		if field.Kind() == reflect.Float32 || field.Kind() == reflect.Float64 {
 			if field.OverflowFloat(v.Float64) {
 				return fmt.Errorf("rain: value %f overflows field %s", v.Float64, field.Type())
@@ -545,16 +597,7 @@ func scanDirectRow(target reflect.Value, plan *rowScanPlan, scratch *rowScanScra
 	for i := range plan.float64PointerCols {
 		col := &plan.float64PointerCols[i]
 		v := &scratch.floats[col.scratchIndex]
-		var field reflect.Value
-		if col.isComplex {
-			var err error
-			field, err = fieldByIndexAlloc(target, col.fieldIndex)
-			if err != nil {
-				return err
-			}
-		} else {
-			field = target.Field(col.index0)
-		}
+		field, _ := fieldByIndexAlloc(target, col.fieldIndex)
 		if !v.Valid {
 			field.SetZero()
 			continue
@@ -580,16 +623,11 @@ func scanDirectRow(target reflect.Value, plan *rowScanPlan, scratch *rowScanScra
 		if !v.Valid {
 			return fmt.Errorf("rain: cannot assign NULL to non-pointer field %s", col.fieldType)
 		}
-		var field reflect.Value
-		if col.isComplex {
-			var err error
-			field, err = fieldByIndexAlloc(target, col.fieldIndex)
-			if err != nil {
-				return err
-			}
-		} else {
-			field = target.Field(col.index0)
+		if col.canUseOffset {
+			*(*time.Time)(unsafe.Pointer(uintptr(baseAddr) + col.offset)) = v.Time
+			continue
 		}
+		field, _ := fieldByIndexAlloc(target, col.fieldIndex)
 		if field.Type() == reflect.TypeFor[time.Time]() {
 			*field.Addr().Interface().(*time.Time) = v.Time
 		} else {
@@ -601,16 +639,7 @@ func scanDirectRow(target reflect.Value, plan *rowScanPlan, scratch *rowScanScra
 	for i := range plan.timePointerCols {
 		col := &plan.timePointerCols[i]
 		v := &scratch.times[col.scratchIndex]
-		var field reflect.Value
-		if col.isComplex {
-			var err error
-			field, err = fieldByIndexAlloc(target, col.fieldIndex)
-			if err != nil {
-				return err
-			}
-		} else {
-			field = target.Field(col.index0)
-		}
+		field, _ := fieldByIndexAlloc(target, col.fieldIndex)
 		if !v.Valid {
 			field.SetZero()
 			continue
@@ -785,16 +814,23 @@ func newRowScanPlanForColumns(cols []string, modelType reflect.Type, table *sche
 		}
 
 		var fieldType reflect.Type
+		var offset uintptr
+		canUseOffset := true
 		if isComplex {
 			fieldType = modelType
 			for _, i := range fieldInfo.index {
 				if fieldType.Kind() == reflect.Pointer {
 					fieldType = fieldType.Elem()
+					canUseOffset = false
 				}
-				fieldType = fieldType.Field(i).Type
+				f := fieldType.Field(i)
+				offset += f.Offset
+				fieldType = f.Type
 			}
 		} else {
-			fieldType = modelType.Field(index0).Type
+			f := modelType.Field(index0)
+			offset = f.Offset
+			fieldType = f.Type
 		}
 
 		isDirect := !isJSON && isSimpleDirectType(fieldType)
@@ -803,15 +839,18 @@ func newRowScanPlanForColumns(cols []string, modelType reflect.Type, table *sche
 		}
 
 		colPlan := scanColumnPlan{
-			columnName: name,
-			scanIndex:  idx,
-			fieldIndex: fieldInfo.index,
-			index0:     index0,
-			isComplex:  isComplex,
-			isJSON:     isJSON,
-			isDirect:   isDirect,
-			columnDef:  columnDef,
-			fieldType:  fieldType,
+			columnName:   name,
+			scanIndex:    idx,
+			fieldIndex:   fieldInfo.index,
+			index0:       index0,
+			isComplex:    isComplex,
+			isJSON:       isJSON,
+			isDirect:     isDirect,
+			columnDef:    columnDef,
+			fieldType:    fieldType,
+			offset:       offset,
+			kind:         fieldType.Kind(),
+			canUseOffset: canUseOffset,
 		}
 
 		if isDirect {
