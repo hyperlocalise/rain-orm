@@ -157,31 +157,43 @@ func (q *SelectQuery) loadRelationNode(ctx context.Context, parents reflect.Valu
 		return nil
 	}
 
-	relatedRows, err := q.loadRelatedRows(ctx, parents, node.relation, orderedSourceKeys)
-	if err != nil {
-		return err
+	var relatedRows reflect.Value
+	var relatedBySourceKey map[typedKey][]reflect.Value
+
+	if node.relation.Type == schema.RelationTypeManyToMany {
+		var err error
+		relatedRows, relatedBySourceKey, err = q.loadRelatedManyToManyRows(ctx, parents, node.relation, orderedSourceKeys)
+		if err != nil {
+			return err
+		}
+	} else {
+		var err error
+		relatedRows, err = q.loadRelatedRows(ctx, parents, node.relation, orderedSourceKeys)
+		if err != nil {
+			return err
+		}
+
+		relatedBySourceKey = make(map[typedKey][]reflect.Value, len(sourceKeys))
+		for rowIdx := 0; rowIdx < relatedRows.Len(); rowIdx++ {
+			related := dereferenceModelValue(relatedRows.Index(rowIdx))
+			if !related.IsValid() {
+				continue
+			}
+			targetValue, ok, err := relationColumnValue(related, node.relation.TargetColumn.Name)
+			if err != nil {
+				return err
+			}
+			if !ok {
+				continue
+			}
+			relatedBySourceKey[toTypedKey(targetValue)] = append(relatedBySourceKey[toTypedKey(targetValue)], related)
+		}
 	}
 
 	if len(node.children) > 0 {
 		if err := q.loadRelationsIntoSlice(ctx, relatedRows, node.children); err != nil {
 			return err
 		}
-	}
-
-	relatedByTargetKey := make(map[typedKey][]reflect.Value, len(sourceKeys))
-	for rowIdx := 0; rowIdx < relatedRows.Len(); rowIdx++ {
-		related := dereferenceModelValue(relatedRows.Index(rowIdx))
-		if !related.IsValid() {
-			continue
-		}
-		targetValue, ok, err := relationColumnValue(related, node.relation.TargetColumn.Name)
-		if err != nil {
-			return err
-		}
-		if !ok {
-			continue
-		}
-		relatedByTargetKey[toTypedKey(targetValue)] = append(relatedByTargetKey[toTypedKey(targetValue)], related)
 	}
 
 	for idx := 0; idx < parents.Len(); idx++ {
@@ -196,13 +208,115 @@ func (q *SelectQuery) loadRelationNode(ctx context.Context, parents reflect.Valu
 		if !ok {
 			continue
 		}
-		matches := relatedByTargetKey[toTypedKey(sourceValue)]
+		matches := relatedBySourceKey[toTypedKey(sourceValue)]
 		if err := setRelationValue(parent, node.name, node.relation.Type, matches); err != nil {
 			return err
 		}
 	}
 
 	return nil
+}
+
+func (q *SelectQuery) loadRelatedManyToManyRows(
+	ctx context.Context,
+	parents reflect.Value,
+	relation schema.RelationDef,
+	sourceKeys []any,
+) (reflect.Value, map[typedKey][]reflect.Value, error) {
+	parentStructType, err := sliceParentStructType(parents.Type())
+	if err != nil {
+		return reflect.Value{}, nil, err
+	}
+	relatedElemType, err := q.relationElementTypeFromType(parentStructType, relation)
+	if err != nil {
+		return reflect.Value{}, nil, err
+	}
+
+	type pair struct {
+		S any `db:"s"`
+		T any `db:"t"`
+	}
+	var allPairs []pair
+
+	// Step 1: Collect all (sourceKey, targetKey) pairs from join table
+	for start := 0; start < len(sourceKeys); start += relationBatchSize {
+		end := min(start+relationBatchSize, len(sourceKeys))
+		batchKeys := sourceKeys[start:end]
+
+		var batchPairs []pair
+		joinQuery := &SelectQuery{runner: q.runner, dialect: q.dialect, table: tableDefSource{table: relation.JoinTable}}
+		if err := joinQuery.
+			Column(schema.Ref(relation.JoinSourceColumn).As("s"), schema.Ref(relation.JoinTargetColumn).As("t")).
+			Where(schema.Ref(relation.JoinSourceColumn).In(batchKeys...)).
+			Scan(ctx, &batchPairs); err != nil {
+			if err == sql.ErrNoRows {
+				continue
+			}
+			return reflect.Value{}, nil, err
+		}
+		allPairs = append(allPairs, batchPairs...)
+	}
+
+	if len(allPairs) == 0 {
+		return reflect.MakeSlice(reflect.SliceOf(relatedElemType), 0, 0), make(map[typedKey][]reflect.Value), nil
+	}
+
+	// Step 2: Collect unique target keys
+	targetKeyMap := make(map[typedKey]any)
+	var uniqueTargetKeys []any
+	for _, p := range allPairs {
+		tKey := toTypedKey(p.T)
+		if _, ok := targetKeyMap[tKey]; !ok {
+			targetKeyMap[tKey] = p.T
+			uniqueTargetKeys = append(uniqueTargetKeys, p.T)
+		}
+	}
+
+	// Step 3: Fetch unique target rows
+	targetRowsMap := make(map[typedKey]reflect.Value)
+	relatedRows := reflect.MakeSlice(reflect.SliceOf(relatedElemType), 0, len(uniqueTargetKeys))
+
+	for start := 0; start < len(uniqueTargetKeys); start += relationBatchSize {
+		end := min(start+relationBatchSize, len(uniqueTargetKeys))
+		batchKeys := uniqueTargetKeys[start:end]
+
+		batchDest := reflect.New(reflect.SliceOf(relatedElemType))
+		targetQuery := &SelectQuery{runner: q.runner, dialect: q.dialect, table: tableDefSource{table: relation.TargetTable}}
+		if err := targetQuery.
+			Where(schema.Ref(relation.TargetColumn).In(batchKeys...)).
+			Scan(ctx, batchDest.Interface()); err != nil {
+			if err == sql.ErrNoRows {
+				continue
+			}
+			return reflect.Value{}, nil, err
+		}
+
+		batchDestElem := batchDest.Elem()
+		for i := 0; i < batchDestElem.Len(); i++ {
+			row := dereferenceModelValue(batchDestElem.Index(i))
+			tVal, ok, err := relationColumnValue(row, relation.TargetColumn.Name)
+			if err != nil {
+				return reflect.Value{}, nil, err
+			}
+			if ok {
+				tKey := toTypedKey(tVal)
+				targetRowsMap[tKey] = row
+			}
+		}
+		relatedRows = reflect.AppendSlice(relatedRows, batchDestElem)
+	}
+
+	// Step 4: Map source keys to target rows
+	relatedBySourceKey := make(map[typedKey][]reflect.Value)
+	for _, p := range allPairs {
+		sKey := toTypedKey(p.S)
+		tKey := toTypedKey(p.T)
+		if row, ok := targetRowsMap[tKey]; ok {
+			relatedBySourceKey[sKey] = append(relatedBySourceKey[sKey], row)
+		}
+	}
+
+	return relatedRows, relatedBySourceKey, nil
 }
 
 func (q *SelectQuery) loadRelatedRows(
@@ -256,7 +370,7 @@ func (q *SelectQuery) validateRelationField(parent reflect.Value, relation schem
 		if field.Kind() != reflect.Struct && field.Kind() != reflect.Pointer {
 			return fmt.Errorf("rain: relation %q must target a struct or pointer-to-struct field", relation.Name)
 		}
-	case schema.RelationTypeHasMany:
+	case schema.RelationTypeHasMany, schema.RelationTypeManyToMany:
 		if field.Kind() != reflect.Slice {
 			return fmt.Errorf("rain: relation %q must target a slice field", relation.Name)
 		}
@@ -303,7 +417,7 @@ func (q *SelectQuery) relationElementTypeFromType(parentType reflect.Type, relat
 			return fieldType.Elem(), nil
 		}
 		return fieldType, nil
-	case schema.RelationTypeHasMany:
+	case schema.RelationTypeHasMany, schema.RelationTypeManyToMany:
 		elemType := fieldType.Elem()
 		if elemType.Kind() == reflect.Pointer {
 			return elemType.Elem(), nil
@@ -364,7 +478,7 @@ func setRelationValue(parent reflect.Value, relationName string, relationType sc
 		}
 		field.Set(item)
 		return nil
-	case schema.RelationTypeHasMany:
+	case schema.RelationTypeHasMany, schema.RelationTypeManyToMany:
 		slice := reflect.MakeSlice(field.Type(), 0, len(matches))
 		pointerElems := field.Type().Elem().Kind() == reflect.Pointer
 		for _, match := range matches {

@@ -103,6 +103,18 @@ type sqliteRichPostsTable struct {
 	CreatedAt  *schema.Column[time.Time]
 }
 
+type sqliteRichGroupsTable struct {
+	schema.TableModel
+	ID   *schema.Column[int64]
+	Name *schema.Column[string]
+}
+
+type sqliteRichUserGroupsTable struct {
+	schema.TableModel
+	UserID  *schema.Column[int64]
+	GroupID *schema.Column[int64]
+}
+
 type sqliteRichUserMutationRow struct {
 	ID         int64
 	Email      string
@@ -189,16 +201,35 @@ type sqliteUserWithProfileRow struct {
 	ProfilePtr *sqliteProfileRow `rain:"relation:profile_ptr"`
 }
 
+type sqliteRichGroupRow struct {
+	ID   int64
+	Name string
+}
+
 type sqliteRichUserWithPostPointersRow struct {
 	ID    int64
 	Email string
 	Posts []*sqliteRichPostWithRelationPointersRow `rain:"relation:posts"`
 }
 
+type sqliteRichUserWithGroupsRow struct {
+	ID     int64
+	Email  string
+	Groups []sqliteRichGroupRow `rain:"relation:groups"`
+}
+
+type sqliteRichGroupWithUsersRow struct {
+	ID    int64
+	Name  string
+	Users []sqliteRichAuthorRow `rain:"relation:users"`
+}
+
 type sqliteRichFixture struct {
 	users      *sqliteRichUsersTable
 	categories *sqliteRichCategoriesTable
 	posts      *sqliteRichPostsTable
+	groups     *sqliteRichGroupsTable
+	userGroups *sqliteRichUserGroupsTable
 }
 
 type sqliteRichSeedData struct {
@@ -241,6 +272,11 @@ func defineSQLiteTables() (*sqliteUsersTable, *sqlitePostsTable, *sqliteProfiles
 }
 
 func defineSQLiteRichTables() sqliteRichFixture {
+	groups := schema.Define("rich_groups", func(t *sqliteRichGroupsTable) {
+		t.ID = t.BigSerial("id").PrimaryKey()
+		t.Name = t.Text("name").NotNull()
+	})
+
 	users := schema.Define("rich_users", func(t *sqliteRichUsersTable) {
 		t.ID = t.BigSerial("id").PrimaryKey()
 		t.Email = t.VarChar("email", 255).NotNull()
@@ -278,10 +314,24 @@ func defineSQLiteRichTables() sqliteRichFixture {
 		t.BelongsTo("category", t.CategoryID, categories.ID)
 	})
 
+	userGroups := schema.Define("rich_user_groups", func(t *sqliteRichUserGroupsTable) {
+		t.UserID = t.BigInt("user_id").NotNull().References(users.ID)
+		t.GroupID = t.BigInt("group_id").NotNull().References(groups.ID)
+		t.PrimaryKey("pk").On(t.UserID, t.GroupID)
+	})
+
 	users.HasMany("posts", users.ID, posts.UserID)
+	users.ManyToMany("groups", users.ID, groups.ID, userGroups, userGroups.UserID, userGroups.GroupID)
+	groups.ManyToMany("users", groups.ID, users.ID, userGroups, userGroups.GroupID, userGroups.UserID)
 	categories.HasMany("posts", categories.ID, posts.CategoryID)
 
-	return sqliteRichFixture{users: users, categories: categories, posts: posts}
+	return sqliteRichFixture{
+		users:      users,
+		categories: categories,
+		posts:      posts,
+		groups:     groups,
+		userGroups: userGroups,
+	}
 }
 
 func TestOpenUnknownDriverReturnsError(t *testing.T) {
@@ -933,6 +983,92 @@ func TestSQLiteIntegrationRichRelationsAndTransactions(t *testing.T) {
 	createSQLiteRichSchema(t, ctx, db, fixture)
 	seeded := seedSQLiteRichFixture(t, ctx, db, fixture)
 
+	t.Run("ManyToMany", func(t *testing.T) {
+		// Create some groups
+		res, _ := db.Insert().Table(fixture.groups).Set(fixture.groups.Name, "Admins").Exec(ctx)
+		adminID, _ := res.LastInsertId()
+		res, _ = db.Insert().Table(fixture.groups).Set(fixture.groups.Name, "Editors").Exec(ctx)
+		editorID, _ := res.LastInsertId()
+
+		// Assign Alice to both
+		_, _ = db.Insert().Table(fixture.userGroups).
+			Values(
+				map[schema.ColumnReference]any{fixture.userGroups.UserID: seeded.AliceID, fixture.userGroups.GroupID: adminID},
+				map[schema.ColumnReference]any{fixture.userGroups.UserID: seeded.AliceID, fixture.userGroups.GroupID: editorID},
+			).Exec(ctx)
+
+		// Assign Bob to Editors
+		_, _ = db.Insert().Table(fixture.userGroups).
+			Set(fixture.userGroups.UserID, seeded.BobID).
+			Set(fixture.userGroups.GroupID, editorID).
+			Exec(ctx)
+
+		var usersWithGroups []sqliteRichUserWithGroupsRow
+		if err := db.Select().
+			Table(fixture.users).
+			Where(fixture.users.ID.In(seeded.AliceID, seeded.BobID)).
+			WithRelations("groups").
+			OrderBy(fixture.users.ID.Asc()).
+			Scan(ctx, &usersWithGroups); err != nil {
+			t.Fatalf("scan many-to-many failed: %v", err)
+		}
+
+		if len(usersWithGroups) != 2 {
+			t.Fatalf("expected 2 users, got %d", len(usersWithGroups))
+		}
+
+		// Alice (index 0) should have 2 groups
+		if usersWithGroups[0].ID != seeded.AliceID {
+			t.Fatalf("expected Alice at index 0, got ID %d", usersWithGroups[0].ID)
+		}
+		if len(usersWithGroups[0].Groups) != 2 {
+			t.Fatalf("expected Alice to have 2 groups, got %d", len(usersWithGroups[0].Groups))
+		}
+
+		// Bob (index 1) should have 1 group
+		if usersWithGroups[1].ID != seeded.BobID {
+			t.Fatalf("expected Bob at index 1, got ID %d", usersWithGroups[1].ID)
+		}
+		if len(usersWithGroups[1].Groups) != 1 {
+			t.Fatalf("expected Bob to have 1 group, got %d", len(usersWithGroups[1].Groups))
+		}
+		if usersWithGroups[1].Groups[0].Name != "Editors" {
+			t.Fatalf("expected Bob to be in Editors, got %q", usersWithGroups[1].Groups[0].Name)
+		}
+
+		var groupsWithUsers []sqliteRichGroupWithUsersRow
+		if err := db.Select().
+			Table(fixture.groups).
+			WithRelations("users").
+			OrderBy(fixture.groups.ID.Asc()).
+			Scan(ctx, &groupsWithUsers); err != nil {
+			t.Fatalf("scan inverse many-to-many failed: %v", err)
+		}
+
+		if len(groupsWithUsers) != 2 {
+			t.Fatalf("expected 2 groups, got %d", len(groupsWithUsers))
+		}
+
+		// Admins (index 0) should have 1 user (Alice)
+		if groupsWithUsers[0].Name != "Admins" {
+			t.Fatalf("expected Admins at index 0, got %q", groupsWithUsers[0].Name)
+		}
+		if len(groupsWithUsers[0].Users) != 1 {
+			t.Fatalf("expected Admins to have 1 user, got %d", len(groupsWithUsers[0].Users))
+		}
+		if groupsWithUsers[0].Users[0].Email != "alice@example.com" {
+			t.Fatalf("expected Alice in Admins, got %q", groupsWithUsers[0].Users[0].Email)
+		}
+
+		// Editors (index 1) should have 2 users (Alice, Bob)
+		if groupsWithUsers[1].Name != "Editors" {
+			t.Fatalf("expected Editors at index 1, got %q", groupsWithUsers[1].Name)
+		}
+		if len(groupsWithUsers[1].Users) != 2 {
+			t.Fatalf("expected Editors to have 2 users, got %d", len(groupsWithUsers[1].Users))
+		}
+	})
+
 	var usersWithPosts []sqliteRichUserWithPostsRow
 	if err := db.Select().
 		Table(fixture.users).
@@ -1241,8 +1377,8 @@ func createSQLiteSchema(tb testing.TB, ctx context.Context, db *rain.DB) {
 func createSQLiteRichSchema(tb testing.TB, ctx context.Context, db *rain.DB, fixture sqliteRichFixture) {
 	tb.Helper()
 
-	createSQLiteTablesOnly(tb, ctx, db, fixture.users, fixture.categories, fixture.posts)
-	for _, table := range []schema.TableReference{fixture.users, fixture.categories, fixture.posts} {
+	createSQLiteTablesOnly(tb, ctx, db, fixture.groups, fixture.users, fixture.categories, fixture.posts, fixture.userGroups)
+	for _, table := range []schema.TableReference{fixture.groups, fixture.users, fixture.categories, fixture.posts, fixture.userGroups} {
 		statements, err := db.CreateIndexesSQL(table)
 		if err != nil {
 			tb.Fatalf("CreateIndexesSQL(%q): %v", table.TableDef().Name, err)
