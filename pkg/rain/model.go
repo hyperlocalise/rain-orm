@@ -278,9 +278,6 @@ func scanRowsAgainstTableDirect(rows *sql.Rows, dest any, table *schema.TableDef
 		items := reflect.New(target.Type()).Elem()
 		items.Set(target.Slice(0, 0))
 
-		// OPTIMIZATION: Cache element size and base pointer for fast addressing.
-		elemSize := structType.Size()
-
 		for rows.Next() {
 			// Clear any previous generic scanned values to avoid carrying over data
 			// for non-direct columns. Direct columns use pointers to scratch variables
@@ -311,8 +308,7 @@ func scanRowsAgainstTableDirect(rows *sql.Rows, dest any, table *schema.TableDef
 			} else {
 				// Reset existing element to its zero state before reuse to avoid data carry-over.
 				item.Set(zeroElem)
-				addr := unsafe.Pointer(items.Pointer() + uintptr(n)*elemSize) // nolint:govet
-				if err := scanDirectRowAddr(addr, item, plan, scratch); err != nil {
+				if err := scanDirectRowAddr(item.Addr().UnsafePointer(), item, plan, scratch); err != nil {
 					return err
 				}
 			}
@@ -353,7 +349,7 @@ func scanDirectRowAddr(baseAddr unsafe.Pointer, target reflect.Value, plan *rowS
 		}
 
 		if col.canUseOffset {
-			ptr := unsafe.Pointer(uintptr(baseAddr) + col.offset)
+			ptr := unsafe.Add(baseAddr, col.offset)
 			switch col.kind {
 			case reflect.Int64:
 				*(*int64)(ptr) = v.Int64
@@ -496,7 +492,7 @@ func scanDirectRowAddr(baseAddr unsafe.Pointer, target reflect.Value, plan *rowS
 			return fmt.Errorf("rain: cannot assign NULL to non-pointer field %s", col.fieldType)
 		}
 		if col.canUseOffset {
-			*(*string)(unsafe.Pointer(uintptr(baseAddr) + col.offset)) = v.String
+			*(*string)(unsafe.Add(baseAddr, col.offset)) = v.String
 			continue
 		}
 		field, err := fieldByIndexAlloc(target, col.fieldIndex)
@@ -541,7 +537,7 @@ func scanDirectRowAddr(baseAddr unsafe.Pointer, target reflect.Value, plan *rowS
 			return fmt.Errorf("rain: cannot assign NULL to non-pointer field %s", col.fieldType)
 		}
 		if col.canUseOffset {
-			*(*bool)(unsafe.Pointer(uintptr(baseAddr) + col.offset)) = v.Bool
+			*(*bool)(unsafe.Add(baseAddr, col.offset)) = v.Bool
 			continue
 		}
 		field, err := fieldByIndexAlloc(target, col.fieldIndex)
@@ -586,16 +582,13 @@ func scanDirectRowAddr(baseAddr unsafe.Pointer, target reflect.Value, plan *rowS
 			return fmt.Errorf("rain: cannot assign NULL to non-pointer field %s", col.fieldType)
 		}
 		if col.canUseOffset {
-			ptr := unsafe.Pointer(uintptr(baseAddr) + col.offset)
+			ptr := unsafe.Add(baseAddr, col.offset)
 			switch col.kind {
 			case reflect.Float64:
 				*(*float64)(ptr) = v.Float64
 			case reflect.Float32:
 				f64 := v.Float64
-				if f64 < 0 {
-					f64 = -f64
-				}
-				if f64 > math.MaxFloat32 {
+				if f64 < -math.MaxFloat32 || f64 > math.MaxFloat32 {
 					return fmt.Errorf("rain: value %f overflows float32", v.Float64)
 				}
 				*(*float32)(ptr) = float32(v.Float64)
@@ -658,7 +651,7 @@ func scanDirectRowAddr(baseAddr unsafe.Pointer, target reflect.Value, plan *rowS
 			return fmt.Errorf("rain: cannot assign NULL to non-pointer field %s", col.fieldType)
 		}
 		if col.canUseOffset {
-			*(*time.Time)(unsafe.Pointer(uintptr(baseAddr) + col.offset)) = v.Time
+			*(*time.Time)(unsafe.Add(baseAddr, col.offset)) = v.Time
 			continue
 		}
 		field, err := fieldByIndexAlloc(target, col.fieldIndex)
