@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"math"
 	"reflect"
 	"strings"
 	"sync"
@@ -279,9 +280,6 @@ func scanRowsAgainstTableDirect(rows *sql.Rows, dest any, table *schema.TableDef
 
 		// OPTIMIZATION: Cache element size and base pointer for fast addressing.
 		elemSize := structType.Size()
-		if pointerElems {
-			elemSize = target.Type().Elem().Size()
-		}
 
 		for rows.Next() {
 			// Clear any previous generic scanned values to avoid carrying over data
@@ -425,7 +423,10 @@ func scanDirectRowAddr(baseAddr unsafe.Pointer, target reflect.Value, plan *rowS
 				}
 				*(*uint)(ptr) = val
 			default:
-				field, _ := fieldByIndexAlloc(target, col.fieldIndex)
+				field, err := fieldByIndexAlloc(target, col.fieldIndex)
+				if err != nil {
+					return err
+				}
 				if err := assignRawValueToField(field, v.Int64); err != nil {
 					return err
 				}
@@ -433,7 +434,10 @@ func scanDirectRowAddr(baseAddr unsafe.Pointer, target reflect.Value, plan *rowS
 			continue
 		}
 
-		field, _ := fieldByIndexAlloc(target, col.fieldIndex)
+		field, err := fieldByIndexAlloc(target, col.fieldIndex)
+		if err != nil {
+			return err
+		}
 		if field.Kind() == reflect.Int64 {
 			field.SetInt(v.Int64)
 		} else if field.Kind() >= reflect.Int && field.Kind() <= reflect.Int32 {
@@ -455,7 +459,10 @@ func scanDirectRowAddr(baseAddr unsafe.Pointer, target reflect.Value, plan *rowS
 	for i := range plan.int64PointerCols {
 		col := &plan.int64PointerCols[i]
 		v := &scratch.ints[col.scratchIndex]
-		field, _ := fieldByIndexAlloc(target, col.fieldIndex)
+		field, err := fieldByIndexAlloc(target, col.fieldIndex)
+		if err != nil {
+			return err
+		}
 		if !v.Valid {
 			field.SetZero()
 			continue
@@ -492,7 +499,10 @@ func scanDirectRowAddr(baseAddr unsafe.Pointer, target reflect.Value, plan *rowS
 			*(*string)(unsafe.Pointer(uintptr(baseAddr) + col.offset)) = v.String
 			continue
 		}
-		field, _ := fieldByIndexAlloc(target, col.fieldIndex)
+		field, err := fieldByIndexAlloc(target, col.fieldIndex)
+		if err != nil {
+			return err
+		}
 		if field.Kind() == reflect.String {
 			field.SetString(v.String)
 		} else {
@@ -504,7 +514,10 @@ func scanDirectRowAddr(baseAddr unsafe.Pointer, target reflect.Value, plan *rowS
 	for i := range plan.stringPointerCols {
 		col := &plan.stringPointerCols[i]
 		v := &scratch.strings[col.scratchIndex]
-		field, _ := fieldByIndexAlloc(target, col.fieldIndex)
+		field, err := fieldByIndexAlloc(target, col.fieldIndex)
+		if err != nil {
+			return err
+		}
 		if !v.Valid {
 			field.SetZero()
 			continue
@@ -531,7 +544,10 @@ func scanDirectRowAddr(baseAddr unsafe.Pointer, target reflect.Value, plan *rowS
 			*(*bool)(unsafe.Pointer(uintptr(baseAddr) + col.offset)) = v.Bool
 			continue
 		}
-		field, _ := fieldByIndexAlloc(target, col.fieldIndex)
+		field, err := fieldByIndexAlloc(target, col.fieldIndex)
+		if err != nil {
+			return err
+		}
 		if field.Kind() == reflect.Bool {
 			field.SetBool(v.Bool)
 		} else {
@@ -543,7 +559,10 @@ func scanDirectRowAddr(baseAddr unsafe.Pointer, target reflect.Value, plan *rowS
 	for i := range plan.boolPointerCols {
 		col := &plan.boolPointerCols[i]
 		v := &scratch.bools[col.scratchIndex]
-		field, _ := fieldByIndexAlloc(target, col.fieldIndex)
+		field, err := fieldByIndexAlloc(target, col.fieldIndex)
+		if err != nil {
+			return err
+		}
 		if !v.Valid {
 			field.SetZero()
 			continue
@@ -572,17 +591,29 @@ func scanDirectRowAddr(baseAddr unsafe.Pointer, target reflect.Value, plan *rowS
 			case reflect.Float64:
 				*(*float64)(ptr) = v.Float64
 			case reflect.Float32:
-				val := float32(v.Float64)
-				*(*float32)(ptr) = val
+				f64 := v.Float64
+				if f64 < 0 {
+					f64 = -f64
+				}
+				if f64 > math.MaxFloat32 {
+					return fmt.Errorf("rain: value %f overflows float32", v.Float64)
+				}
+				*(*float32)(ptr) = float32(v.Float64)
 			default:
-				field, _ := fieldByIndexAlloc(target, col.fieldIndex)
+				field, err := fieldByIndexAlloc(target, col.fieldIndex)
+				if err != nil {
+					return err
+				}
 				if err := assignRawValueToField(field, v.Float64); err != nil {
 					return err
 				}
 			}
 			continue
 		}
-		field, _ := fieldByIndexAlloc(target, col.fieldIndex)
+		field, err := fieldByIndexAlloc(target, col.fieldIndex)
+		if err != nil {
+			return err
+		}
 		if field.Kind() == reflect.Float32 || field.Kind() == reflect.Float64 {
 			if field.OverflowFloat(v.Float64) {
 				return fmt.Errorf("rain: value %f overflows field %s", v.Float64, field.Type())
@@ -597,7 +628,10 @@ func scanDirectRowAddr(baseAddr unsafe.Pointer, target reflect.Value, plan *rowS
 	for i := range plan.float64PointerCols {
 		col := &plan.float64PointerCols[i]
 		v := &scratch.floats[col.scratchIndex]
-		field, _ := fieldByIndexAlloc(target, col.fieldIndex)
+		field, err := fieldByIndexAlloc(target, col.fieldIndex)
+		if err != nil {
+			return err
+		}
 		if !v.Valid {
 			field.SetZero()
 			continue
@@ -627,7 +661,10 @@ func scanDirectRowAddr(baseAddr unsafe.Pointer, target reflect.Value, plan *rowS
 			*(*time.Time)(unsafe.Pointer(uintptr(baseAddr) + col.offset)) = v.Time
 			continue
 		}
-		field, _ := fieldByIndexAlloc(target, col.fieldIndex)
+		field, err := fieldByIndexAlloc(target, col.fieldIndex)
+		if err != nil {
+			return err
+		}
 		if field.Type() == reflect.TypeFor[time.Time]() {
 			*field.Addr().Interface().(*time.Time) = v.Time
 		} else {
@@ -639,7 +676,10 @@ func scanDirectRowAddr(baseAddr unsafe.Pointer, target reflect.Value, plan *rowS
 	for i := range plan.timePointerCols {
 		col := &plan.timePointerCols[i]
 		v := &scratch.times[col.scratchIndex]
-		field, _ := fieldByIndexAlloc(target, col.fieldIndex)
+		field, err := fieldByIndexAlloc(target, col.fieldIndex)
+		if err != nil {
+			return err
+		}
 		if !v.Valid {
 			field.SetZero()
 			continue
