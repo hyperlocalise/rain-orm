@@ -356,66 +356,66 @@ func scanDirectRowAddr(baseAddr unsafe.Pointer, target reflect.Value, plan *rowS
 			case reflect.Int32:
 				val := int32(v.Int64)
 				if int64(val) != v.Int64 {
-					return fmt.Errorf("rain: value %d overflows int32", v.Int64)
+					return fmt.Errorf("rain: value %d overflows field %s", v.Int64, col.fieldType)
 				}
 				*(*int32)(ptr) = val
 			case reflect.Int16:
 				val := int16(v.Int64)
 				if int64(val) != v.Int64 {
-					return fmt.Errorf("rain: value %d overflows int16", v.Int64)
+					return fmt.Errorf("rain: value %d overflows field %s", v.Int64, col.fieldType)
 				}
 				*(*int16)(ptr) = val
 			case reflect.Int8:
 				val := int8(v.Int64)
 				if int64(val) != v.Int64 {
-					return fmt.Errorf("rain: value %d overflows int8", v.Int64)
+					return fmt.Errorf("rain: value %d overflows field %s", v.Int64, col.fieldType)
 				}
 				*(*int8)(ptr) = val
 			case reflect.Int:
 				val := int(v.Int64)
 				if int64(val) != v.Int64 {
-					return fmt.Errorf("rain: value %d overflows int", v.Int64)
+					return fmt.Errorf("rain: value %d overflows field %s", v.Int64, col.fieldType)
 				}
 				*(*int)(ptr) = val
 			case reflect.Uint64:
 				if v.Int64 < 0 {
-					return fmt.Errorf("rain: negative value %d overflows uint64", v.Int64)
+					return fmt.Errorf("rain: value %d overflows field %s", v.Int64, col.fieldType)
 				}
 				*(*uint64)(ptr) = uint64(v.Int64)
 			case reflect.Uint32:
 				if v.Int64 < 0 {
-					return fmt.Errorf("rain: negative value %d overflows uint32", v.Int64)
+					return fmt.Errorf("rain: value %d overflows field %s", v.Int64, col.fieldType)
 				}
 				val := uint32(v.Int64)
 				if uint64(val) != uint64(v.Int64) {
-					return fmt.Errorf("rain: value %d overflows uint32", v.Int64)
+					return fmt.Errorf("rain: value %d overflows field %s", v.Int64, col.fieldType)
 				}
 				*(*uint32)(ptr) = val
 			case reflect.Uint16:
 				if v.Int64 < 0 {
-					return fmt.Errorf("rain: negative value %d overflows uint16", v.Int64)
+					return fmt.Errorf("rain: value %d overflows field %s", v.Int64, col.fieldType)
 				}
 				val := uint16(v.Int64)
 				if uint64(val) != uint64(v.Int64) {
-					return fmt.Errorf("rain: value %d overflows uint16", v.Int64)
+					return fmt.Errorf("rain: value %d overflows field %s", v.Int64, col.fieldType)
 				}
 				*(*uint16)(ptr) = val
 			case reflect.Uint8:
 				if v.Int64 < 0 {
-					return fmt.Errorf("rain: negative value %d overflows uint8", v.Int64)
+					return fmt.Errorf("rain: value %d overflows field %s", v.Int64, col.fieldType)
 				}
 				val := uint8(v.Int64)
 				if uint64(val) != uint64(v.Int64) {
-					return fmt.Errorf("rain: value %d overflows uint8", v.Int64)
+					return fmt.Errorf("rain: value %d overflows field %s", v.Int64, col.fieldType)
 				}
 				*(*uint8)(ptr) = val
 			case reflect.Uint:
 				if v.Int64 < 0 {
-					return fmt.Errorf("rain: negative value %d overflows uint", v.Int64)
+					return fmt.Errorf("rain: value %d overflows field %s", v.Int64, col.fieldType)
 				}
 				val := uint(v.Int64)
 				if uint64(val) != uint64(v.Int64) {
-					return fmt.Errorf("rain: value %d overflows uint", v.Int64)
+					return fmt.Errorf("rain: value %d overflows field %s", v.Int64, col.fieldType)
 				}
 				*(*uint)(ptr) = val
 			default:
@@ -588,8 +588,11 @@ func scanDirectRowAddr(baseAddr unsafe.Pointer, target reflect.Value, plan *rowS
 				*(*float64)(ptr) = v.Float64
 			case reflect.Float32:
 				f64 := v.Float64
-				if f64 < -math.MaxFloat32 || f64 > math.MaxFloat32 {
-					return fmt.Errorf("rain: value %f overflows float32", v.Float64)
+				if f64 < 0 {
+					f64 = -f64
+				}
+				if math.MaxFloat32 < f64 && f64 <= math.MaxFloat64 {
+					return fmt.Errorf("rain: value %f overflows field %s", v.Float64, col.fieldType)
 				}
 				*(*float32)(ptr) = float32(v.Float64)
 			}
