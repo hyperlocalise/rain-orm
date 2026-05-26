@@ -232,48 +232,58 @@ func (q *SelectQuery) loadRelatedManyToManyRows(
 		return reflect.Value{}, nil, err
 	}
 
-	relatedRows := reflect.New(reflect.SliceOf(relatedElemType))
-	relatedBySourceKey := make(map[typedKey][]reflect.Value)
+	type pair struct {
+		S any `db:"s"`
+		T any `db:"t"`
+	}
+	var allPairs []pair
 
+	// Step 1: Collect all (sourceKey, targetKey) pairs from join table
 	for start := 0; start < len(sourceKeys); start += relationBatchSize {
 		end := min(start+relationBatchSize, len(sourceKeys))
 		batchKeys := sourceKeys[start:end]
 
-		// Step 1: Query join table to get (joinSource, joinTarget) pairs
-		joinResults := make([]struct {
-			S any `db:"s"`
-			T any `db:"t"`
-		}, 0)
+		var batchPairs []pair
 		joinQuery := &SelectQuery{runner: q.runner, dialect: q.dialect, table: tableDefSource{table: relation.JoinTable}}
 		if err := joinQuery.
 			Column(schema.Ref(relation.JoinSourceColumn).As("s"), schema.Ref(relation.JoinTargetColumn).As("t")).
 			Where(schema.Ref(relation.JoinSourceColumn).In(batchKeys...)).
-			Scan(ctx, &joinResults); err != nil {
+			Scan(ctx, &batchPairs); err != nil {
 			if err == sql.ErrNoRows {
 				continue
 			}
 			return reflect.Value{}, nil, err
 		}
+		allPairs = append(allPairs, batchPairs...)
+	}
 
-		if len(joinResults) == 0 {
-			continue
+	if len(allPairs) == 0 {
+		return reflect.MakeSlice(reflect.SliceOf(relatedElemType), 0, 0), make(map[typedKey][]reflect.Value), nil
+	}
+
+	// Step 2: Collect unique target keys
+	targetKeyMap := make(map[typedKey]any)
+	var uniqueTargetKeys []any
+	for _, p := range allPairs {
+		tKey := toTypedKey(p.T)
+		if _, ok := targetKeyMap[tKey]; !ok {
+			targetKeyMap[tKey] = p.T
+			uniqueTargetKeys = append(uniqueTargetKeys, p.T)
 		}
+	}
 
-		targetKeys := make([]any, 0, len(joinResults))
-		sourceToTarget := make(map[typedKey][]any)
-		for _, res := range joinResults {
-			sourceVal := res.S
-			targetVal := res.T
-			targetKeys = append(targetKeys, targetVal)
-			sKey := toTypedKey(sourceVal)
-			sourceToTarget[sKey] = append(sourceToTarget[sKey], targetVal)
-		}
+	// Step 3: Fetch unique target rows
+	targetRowsMap := make(map[typedKey]reflect.Value)
+	relatedRows := reflect.MakeSlice(reflect.SliceOf(relatedElemType), 0, len(uniqueTargetKeys))
 
-		// Step 2: Query target table for related rows
+	for start := 0; start < len(uniqueTargetKeys); start += relationBatchSize {
+		end := min(start+relationBatchSize, len(uniqueTargetKeys))
+		batchKeys := uniqueTargetKeys[start:end]
+
 		batchDest := reflect.New(reflect.SliceOf(relatedElemType))
 		targetQuery := &SelectQuery{runner: q.runner, dialect: q.dialect, table: tableDefSource{table: relation.TargetTable}}
 		if err := targetQuery.
-			Where(schema.Ref(relation.TargetColumn).In(targetKeys...)).
+			Where(schema.Ref(relation.TargetColumn).In(batchKeys...)).
 			Scan(ctx, batchDest.Interface()); err != nil {
 			if err == sql.ErrNoRows {
 				continue
@@ -281,8 +291,6 @@ func (q *SelectQuery) loadRelatedManyToManyRows(
 			return reflect.Value{}, nil, err
 		}
 
-		// Step 3: Map target rows back to sources
-		targetRowsMap := make(map[typedKey]reflect.Value)
 		batchDestElem := batchDest.Elem()
 		for i := 0; i < batchDestElem.Len(); i++ {
 			row := dereferenceModelValue(batchDestElem.Index(i))
@@ -291,22 +299,24 @@ func (q *SelectQuery) loadRelatedManyToManyRows(
 				return reflect.Value{}, nil, err
 			}
 			if ok {
-				targetRowsMap[toTypedKey(tVal)] = row
+				tKey := toTypedKey(tVal)
+				targetRowsMap[tKey] = row
 			}
 		}
-
-		for sKey, tKeys := range sourceToTarget {
-			for _, tKey := range tKeys {
-				if row, ok := targetRowsMap[toTypedKey(tKey)]; ok {
-					relatedBySourceKey[sKey] = append(relatedBySourceKey[sKey], row)
-				}
-			}
-		}
-
-		relatedRows.Elem().Set(reflect.AppendSlice(relatedRows.Elem(), batchDestElem))
+		relatedRows = reflect.AppendSlice(relatedRows, batchDestElem)
 	}
 
-	return relatedRows.Elem(), relatedBySourceKey, nil
+	// Step 4: Map source keys to target rows
+	relatedBySourceKey := make(map[typedKey][]reflect.Value)
+	for _, p := range allPairs {
+		sKey := toTypedKey(p.S)
+		tKey := toTypedKey(p.T)
+		if row, ok := targetRowsMap[tKey]; ok {
+			relatedBySourceKey[sKey] = append(relatedBySourceKey[sKey], row)
+		}
+	}
+
+	return relatedRows, relatedBySourceKey, nil
 }
 
 func (q *SelectQuery) loadRelatedRows(

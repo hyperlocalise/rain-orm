@@ -184,9 +184,9 @@ type ConstraintDef struct {
 type RelationType string
 
 const (
-	RelationTypeBelongsTo RelationType = "belongs_to"
-	RelationTypeHasOne    RelationType = "has_one"
-	RelationTypeHasMany   RelationType = "has_many"
+	RelationTypeBelongsTo  RelationType = "belongs_to"
+	RelationTypeHasOne     RelationType = "has_one"
+	RelationTypeHasMany    RelationType = "has_many"
 	RelationTypeManyToMany RelationType = "many_to_many"
 )
 

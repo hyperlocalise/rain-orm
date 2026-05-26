@@ -213,8 +213,8 @@ type sqliteRichUserWithPostPointersRow struct {
 }
 
 type sqliteRichUserWithGroupsRow struct {
-	ID    int64
-	Email string
+	ID     int64
+	Email  string
 	Groups []sqliteRichGroupRow `rain:"relation:groups"`
 }
 
