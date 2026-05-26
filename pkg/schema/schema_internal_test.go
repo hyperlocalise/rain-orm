@@ -134,12 +134,12 @@ func TestSchemaInternalPanicsAndCloners(t *testing.T) {
 
 	aliasedDef := cloneTableDef(users.TableDef(), "u")
 
-	anyClone := Ref(users.ID.ColumnDef()).cloneForTable(aliasedDef).(*AnyColumn)
+	anyClone := Ref(users.ID.ColumnDef()).CloneForTable(aliasedDef).(*AnyColumn)
 	if anyClone.ColumnDef().Table.Alias != "u" {
 		t.Fatalf("expected AnyColumn clone to target aliased table")
 	}
 
-	typedClone := users.ID.cloneForTable(aliasedDef).(*Column[int64])
+	typedClone := users.ID.CloneForTable(aliasedDef).(*Column[int64])
 	if typedClone.ColumnDef().Table.Alias != "u" {
 		t.Fatalf("expected typed column clone to target aliased table")
 	}
@@ -195,11 +195,11 @@ func TestSchemaInternalPanicsAndCloners(t *testing.T) {
 	})
 	assertPanics(t, func() {
 		missing := &Column[int64]{def: &ColumnDef{Name: "missing"}}
-		_ = missing.cloneForTable(aliasedDef)
+		_ = missing.CloneForTable(aliasedDef)
 	})
 	assertPanics(t, func() {
 		missing := Ref(&ColumnDef{Name: "missing"})
-		_ = missing.cloneForTable(aliasedDef)
+		_ = missing.CloneForTable(aliasedDef)
 	})
 	assertPanics(t, func() { _ = addColumn[int64](nil, "id", ColumnType{DataType: TypeBigInt}, true, false) })
 	assertPanics(t, func() {

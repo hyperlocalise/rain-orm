@@ -268,6 +268,12 @@ func (q *SelectQuery) ExceptAll(other *SelectQuery) *SelectQuery {
 	return q.wrapSetOp(setOpExceptAll, other)
 }
 
+// CloneForTable clones the SELECT query while binding it to a specific table definition.
+// Satisfies schema.TableCloner.
+func (q *SelectQuery) CloneForTable(table *schema.TableDef) any {
+	return q.clone()
+}
+
 func (q *SelectQuery) clone() *SelectQuery {
 	newQ := *q
 	newQ.cols = append([]schema.Expression(nil), q.cols...)

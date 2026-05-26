@@ -71,6 +71,15 @@ func Open(driver, dsn string) (*DB, error) {
 	}, nil
 }
 
+// OpenDialectSelect is a helper that panics on error, intended for use in schema definitions.
+func OpenDialectSelect(driver string) *DB {
+	db, err := OpenDialect(driver)
+	if err != nil {
+		panic(err)
+	}
+	return db
+}
+
 // OpenDialect creates a dialect-only handle that can compile SQL without a live database connection.
 func OpenDialect(driver string) (*DB, error) {
 	d, err := dialect.GetDialect(driver)
