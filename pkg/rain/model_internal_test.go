@@ -239,7 +239,8 @@ func TestBoundDirectFallbackReadsCurrentScannedValue(t *testing.T) {
 	scratch.strings[0].String = "fresh"
 
 	var got row
-	if err := scanDirectRow(reflect.ValueOf(&got).Elem(), plan, scratch); err != nil {
+	v := reflect.ValueOf(&got).Elem()
+	if err := scanDirectRowAddr(v.Addr().UnsafePointer(), v, plan, scratch); err != nil {
 		t.Fatalf("scan direct fallback: %v", err)
 	}
 	if got.Name != "fresh" {

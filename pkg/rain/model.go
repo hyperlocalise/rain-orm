@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unsafe"
 
 	"github.com/hyperlocalise/rain-orm/pkg/schema"
 )
@@ -36,6 +37,7 @@ type scanColumnPlan struct {
 	isComplex    bool
 	isJSON       bool
 	isDirect     bool
+	fieldOffset  uintptr
 	columnDef    *schema.ColumnDef
 	fieldType    reflect.Type
 }
@@ -248,7 +250,7 @@ func scanRowsAgainstTableDirect(rows *sql.Rows, dest any, table *schema.TableDef
 			return err
 		}
 
-		return scanDirectRow(target, plan, scratch)
+		return scanDirectRowAddr(target.Addr().UnsafePointer(), target, plan, scratch)
 	case reflect.Slice:
 		elemType := target.Type().Elem()
 		structType, pointerElems, err := sliceElementStructType(elemType)
@@ -294,16 +296,19 @@ func scanRowsAgainstTableDirect(rows *sql.Rows, dest any, table *schema.TableDef
 			item := items.Index(n)
 
 			var scanTarget reflect.Value
+			var base unsafe.Pointer
 			if pointerElems {
 				item.Set(reflect.New(structType))
 				scanTarget = item.Elem()
+				base = item.UnsafePointer()
 			} else {
 				// Reset existing element to its zero state before reuse to avoid data carry-over.
 				item.Set(zeroElem)
 				scanTarget = item
+				base = item.Addr().UnsafePointer()
 			}
 
-			if err := scanDirectRow(scanTarget, plan, scratch); err != nil {
+			if err := scanDirectRowAddr(base, scanTarget, plan, scratch); err != nil {
 				return err
 			}
 		}
@@ -329,13 +334,38 @@ func newScanTargets(cols []string) ([]any, []any) {
 	return scanTargets, scanned
 }
 
-func scanDirectRow(target reflect.Value, plan *rowScanPlan, scratch *rowScanScratch) error {
+func scanDirectRowAddr(base unsafe.Pointer, target reflect.Value, plan *rowScanPlan, scratch *rowScanScratch) error {
 	for i := range plan.int64ValueCols {
 		col := &plan.int64ValueCols[i]
 		v := &scratch.ints[col.scratchIndex]
 		if !v.Valid {
 			return fmt.Errorf("rain: cannot assign NULL to non-pointer field %s", col.fieldType)
 		}
+
+		if !col.isComplex {
+			ptr := unsafe.Pointer(uintptr(base) + col.fieldOffset)
+			kind := col.fieldType.Kind()
+			if kind == reflect.Int64 {
+				*(*int64)(ptr) = v.Int64
+				continue
+			} else if kind >= reflect.Int && kind <= reflect.Int32 {
+				// We still need overflow checks for smaller types
+				field := target.Field(col.index0)
+				if field.OverflowInt(v.Int64) {
+					return fmt.Errorf("rain: value %d overflows field %s", v.Int64, field.Type())
+				}
+				field.SetInt(v.Int64)
+				continue
+			} else if kind >= reflect.Uint && kind <= reflect.Uint64 {
+				field := target.Field(col.index0)
+				if v.Int64 < 0 || field.OverflowUint(uint64(v.Int64)) {
+					return fmt.Errorf("rain: value %d overflows field %s", v.Int64, field.Type())
+				}
+				field.SetUint(uint64(v.Int64))
+				continue
+			}
+		}
+
 		var field reflect.Value
 		if col.isComplex {
 			var err error
@@ -347,9 +377,6 @@ func scanDirectRow(target reflect.Value, plan *rowScanPlan, scratch *rowScanScra
 			field = target.Field(col.index0)
 		}
 		kind := field.Kind()
-		// OPTIMIZATION: Fast-path Int64 (the most common DB int type) and use range
-		// checks for other integer types to minimize branch overhead and avoid
-		// redundant overflow checks for the common path.
 		if kind == reflect.Int64 {
 			field.SetInt(v.Int64)
 		} else if kind >= reflect.Int && kind <= reflect.Int32 {
@@ -385,12 +412,28 @@ func scanDirectRow(target reflect.Value, plan *rowScanPlan, scratch *rowScanScra
 			field.SetZero()
 			continue
 		}
+
+		if !col.isComplex {
+			ptr := (*unsafe.Pointer)(unsafe.Pointer(uintptr(base) + col.fieldOffset))
+			kind := col.fieldType.Elem().Kind()
+			if kind == reflect.Int64 {
+				if *ptr == nil {
+					// Use reflect to allocate to ensure it's tracked correctly by GC
+					// and we don't have to worry about the exact type for new().
+					field.Set(reflect.New(field.Type().Elem()))
+					*(*int64)(*ptr) = v.Int64
+				} else {
+					*(*int64)(*ptr) = v.Int64
+				}
+				continue
+			}
+		}
+
 		if field.IsNil() {
 			field.Set(reflect.New(field.Type().Elem()))
 		}
 		field = field.Elem()
 		kind := field.Kind()
-		// OPTIMIZATION: Fast-path Int64 and use range checks to reduce overhead in the hot loop.
 		if kind == reflect.Int64 {
 			field.SetInt(v.Int64)
 		} else if kind >= reflect.Int && kind <= reflect.Int32 {
@@ -414,6 +457,10 @@ func scanDirectRow(target reflect.Value, plan *rowScanPlan, scratch *rowScanScra
 		v := &scratch.strings[col.scratchIndex]
 		if !v.Valid {
 			return fmt.Errorf("rain: cannot assign NULL to non-pointer field %s", col.fieldType)
+		}
+		if !col.isComplex && col.fieldType.Kind() == reflect.String {
+			*(*string)(unsafe.Pointer(uintptr(base) + col.fieldOffset)) = v.String
+			continue
 		}
 		var field reflect.Value
 		if col.isComplex {
@@ -450,6 +497,18 @@ func scanDirectRow(target reflect.Value, plan *rowScanPlan, scratch *rowScanScra
 			field.SetZero()
 			continue
 		}
+
+		if !col.isComplex && col.fieldType.Elem().Kind() == reflect.String {
+			ptr := (*unsafe.Pointer)(unsafe.Pointer(uintptr(base) + col.fieldOffset))
+			if *ptr == nil {
+				field.Set(reflect.New(field.Type().Elem()))
+				*(*string)(*ptr) = v.String
+			} else {
+				*(*string)(*ptr) = v.String
+			}
+			continue
+		}
+
 		if field.IsNil() {
 			field.Set(reflect.New(field.Type().Elem()))
 		}
@@ -467,6 +526,10 @@ func scanDirectRow(target reflect.Value, plan *rowScanPlan, scratch *rowScanScra
 		v := &scratch.bools[col.scratchIndex]
 		if !v.Valid {
 			return fmt.Errorf("rain: cannot assign NULL to non-pointer field %s", col.fieldType)
+		}
+		if !col.isComplex && col.fieldType.Kind() == reflect.Bool {
+			*(*bool)(unsafe.Pointer(uintptr(base) + col.fieldOffset)) = v.Bool
+			continue
 		}
 		var field reflect.Value
 		if col.isComplex {
@@ -503,6 +566,18 @@ func scanDirectRow(target reflect.Value, plan *rowScanPlan, scratch *rowScanScra
 			field.SetZero()
 			continue
 		}
+
+		if !col.isComplex && col.fieldType.Elem().Kind() == reflect.Bool {
+			ptr := (*unsafe.Pointer)(unsafe.Pointer(uintptr(base) + col.fieldOffset))
+			if *ptr == nil {
+				field.Set(reflect.New(field.Type().Elem()))
+				*(*bool)(*ptr) = v.Bool
+			} else {
+				*(*bool)(*ptr) = v.Bool
+			}
+			continue
+		}
+
 		if field.IsNil() {
 			field.Set(reflect.New(field.Type().Elem()))
 		}
@@ -520,6 +595,10 @@ func scanDirectRow(target reflect.Value, plan *rowScanPlan, scratch *rowScanScra
 		v := &scratch.floats[col.scratchIndex]
 		if !v.Valid {
 			return fmt.Errorf("rain: cannot assign NULL to non-pointer field %s", col.fieldType)
+		}
+		if !col.isComplex && col.fieldType.Kind() == reflect.Float64 {
+			*(*float64)(unsafe.Pointer(uintptr(base) + col.fieldOffset)) = v.Float64
+			continue
 		}
 		var field reflect.Value
 		if col.isComplex {
@@ -559,6 +638,18 @@ func scanDirectRow(target reflect.Value, plan *rowScanPlan, scratch *rowScanScra
 			field.SetZero()
 			continue
 		}
+
+		if !col.isComplex && col.fieldType.Elem().Kind() == reflect.Float64 {
+			ptr := (*unsafe.Pointer)(unsafe.Pointer(uintptr(base) + col.fieldOffset))
+			if *ptr == nil {
+				field.Set(reflect.New(field.Type().Elem()))
+				*(*float64)(*ptr) = v.Float64
+			} else {
+				*(*float64)(*ptr) = v.Float64
+			}
+			continue
+		}
+
 		if field.IsNil() {
 			field.Set(reflect.New(field.Type().Elem()))
 		}
@@ -579,6 +670,10 @@ func scanDirectRow(target reflect.Value, plan *rowScanPlan, scratch *rowScanScra
 		v := &scratch.times[col.scratchIndex]
 		if !v.Valid {
 			return fmt.Errorf("rain: cannot assign NULL to non-pointer field %s", col.fieldType)
+		}
+		if !col.isComplex && col.fieldType == reflect.TypeFor[time.Time]() {
+			*(*time.Time)(unsafe.Pointer(uintptr(base) + col.fieldOffset)) = v.Time
+			continue
 		}
 		var field reflect.Value
 		if col.isComplex {
@@ -615,6 +710,18 @@ func scanDirectRow(target reflect.Value, plan *rowScanPlan, scratch *rowScanScra
 			field.SetZero()
 			continue
 		}
+
+		if !col.isComplex && col.fieldType.Elem() == reflect.TypeFor[time.Time]() {
+			ptr := (*unsafe.Pointer)(unsafe.Pointer(uintptr(base) + col.fieldOffset))
+			if *ptr == nil {
+				field.Set(reflect.New(field.Type().Elem()))
+				*(*time.Time)(*ptr) = v.Time
+			} else {
+				*(*time.Time)(*ptr) = v.Time
+			}
+			continue
+		}
+
 		if field.IsNil() {
 			field.Set(reflect.New(field.Type().Elem()))
 		}
@@ -812,6 +919,9 @@ func newRowScanPlanForColumns(cols []string, modelType reflect.Type, table *sche
 			isDirect:   isDirect,
 			columnDef:  columnDef,
 			fieldType:  fieldType,
+		}
+		if !isComplex {
+			colPlan.fieldOffset = modelType.Field(index0).Offset
 		}
 
 		if isDirect {
