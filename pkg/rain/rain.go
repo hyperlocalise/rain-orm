@@ -71,8 +71,8 @@ func Open(driver, dsn string) (*DB, error) {
 	}, nil
 }
 
-// OpenDialectSelect is a helper that panics on error, intended for use in schema definitions.
-func OpenDialectSelect(driver string) *DB {
+// MustOpenDialect is a helper that panics on error, intended for use in schema definitions.
+func MustOpenDialect(driver string) *DB {
 	db, err := OpenDialect(driver)
 	if err != nil {
 		panic(err)

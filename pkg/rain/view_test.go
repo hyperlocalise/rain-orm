@@ -29,7 +29,7 @@ func TestCreateViewSQL(t *testing.T) {
 	) {
 		t.ID = t.BigInt("id")
 		t.Email = t.VarChar("email", 255)
-	}, rain.OpenDialectSelect("sqlite").Select().Table(users).Column(users.ID, users.Email).Where(users.ID.Gt(int64(0))))
+	}, rain.MustOpenDialect("sqlite").Select().Table(users).Column(users.ID, users.Email).Where(users.ID.Gt(int64(0))))
 
 	cases := []struct {
 		name    string
