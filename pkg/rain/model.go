@@ -62,6 +62,9 @@ type rowScanPlan struct {
 	columns      []scanColumnPlan
 	clearIndices []int
 
+	// OPTIMIZATION: Track if we need a reflect.Value for any column.
+	needsTargetValue bool
+
 	int64ValueCols   []scanColumnPlan
 	int64PointerCols []scanColumnPlan
 
@@ -255,7 +258,11 @@ func scanRowsAgainstTableDirect(rows *sql.Rows, dest any, table *schema.TableDef
 			return err
 		}
 
-		return scanDirectRow(target, plan, scratch)
+		var targetVal reflect.Value
+		if plan.needsTargetValue {
+			targetVal = target
+		}
+		return scanDirectRowAddr(target.Addr().UnsafePointer(), targetVal, plan, scratch)
 	case reflect.Slice:
 		elemType := target.Type().Elem()
 		structType, pointerElems, err := sliceElementStructType(elemType)
@@ -278,6 +285,8 @@ func scanRowsAgainstTableDirect(rows *sql.Rows, dest any, table *schema.TableDef
 		items := reflect.New(target.Type()).Elem()
 		items.Set(target.Slice(0, 0))
 
+		elemSize := elemType.Size()
+
 		for rows.Next() {
 			// Clear any previous generic scanned values to avoid carrying over data
 			// for non-direct columns. Direct columns use pointers to scratch variables
@@ -298,17 +307,33 @@ func scanRowsAgainstTableDirect(rows *sql.Rows, dest any, table *schema.TableDef
 			} else {
 				items.Set(reflect.Append(items, zeroElem))
 			}
-			item := items.Index(n)
+
+			// OPTIMIZATION: Derive element address directly from slice base pointer
+			// to avoid Index(n) and Addr() overhead.
+			ptr := unsafe.Add(unsafe.Pointer(items.Pointer()), uintptr(n)*elemSize)
 
 			if pointerElems {
-				item.Set(reflect.New(structType))
-				if err := scanDirectRow(item.Elem(), plan, scratch); err != nil {
+				newStruct := reflect.New(structType)
+				reflect.NewAt(elemType, ptr).Elem().Set(newStruct)
+
+				var targetVal reflect.Value
+				if plan.needsTargetValue {
+					targetVal = newStruct.Elem()
+				}
+				if err := scanDirectRowAddr(newStruct.UnsafePointer(), targetVal, plan, scratch); err != nil {
 					return err
 				}
 			} else {
+				// Re-derive a reflect.Value for the element to reset it and handle non-offset columns.
+				item := reflect.NewAt(elemType, ptr).Elem()
 				// Reset existing element to its zero state before reuse to avoid data carry-over.
 				item.Set(zeroElem)
-				if err := scanDirectRowAddr(item.Addr().UnsafePointer(), item, plan, scratch); err != nil {
+
+				var targetVal reflect.Value
+				if plan.needsTargetValue {
+					targetVal = item
+				}
+				if err := scanDirectRowAddr(ptr, targetVal, plan, scratch); err != nil {
 					return err
 				}
 			}
@@ -419,6 +444,9 @@ func scanDirectRowAddr(baseAddr unsafe.Pointer, target reflect.Value, plan *rowS
 				}
 				*(*uint)(ptr) = val
 			default:
+				if !target.IsValid() {
+					return fmt.Errorf("rain: internal error: target is invalid for non-offset column %s", col.columnName)
+				}
 				field, err := fieldByIndexAlloc(target, col.fieldIndex)
 				if err != nil {
 					return err
@@ -430,6 +458,9 @@ func scanDirectRowAddr(baseAddr unsafe.Pointer, target reflect.Value, plan *rowS
 			continue
 		}
 
+		if !target.IsValid() {
+			return fmt.Errorf("rain: internal error: target is invalid for non-offset column %s", col.columnName)
+		}
 		field, err := fieldByIndexAlloc(target, col.fieldIndex)
 		if err != nil {
 			return err
@@ -455,6 +486,143 @@ func scanDirectRowAddr(baseAddr unsafe.Pointer, target reflect.Value, plan *rowS
 	for i := range plan.int64PointerCols {
 		col := &plan.int64PointerCols[i]
 		v := &scratch.ints[col.scratchIndex]
+
+		if col.canUseOffset {
+			ptr := (**int64)(unsafe.Add(baseAddr, col.offset))
+			if !v.Valid {
+				*ptr = nil
+				continue
+			}
+
+			switch col.kind {
+			case reflect.Pointer:
+				elemKind := col.fieldType.Elem().Kind()
+				switch elemKind {
+				case reflect.Int64:
+					if *ptr == nil {
+						*ptr = new(int64)
+					}
+					**ptr = v.Int64
+				case reflect.Int32:
+					val := int32(v.Int64)
+					if int64(val) != v.Int64 {
+						return fmt.Errorf("rain: value %d overflows field %s", v.Int64, col.fieldType)
+					}
+					p := (**int32)(unsafe.Pointer(ptr))
+					if *p == nil {
+						*p = new(int32)
+					}
+					**p = val
+				case reflect.Int16:
+					val := int16(v.Int64)
+					if int64(val) != v.Int64 {
+						return fmt.Errorf("rain: value %d overflows field %s", v.Int64, col.fieldType)
+					}
+					p := (**int16)(unsafe.Pointer(ptr))
+					if *p == nil {
+						*p = new(int16)
+					}
+					**p = val
+				case reflect.Int8:
+					val := int8(v.Int64)
+					if int64(val) != v.Int64 {
+						return fmt.Errorf("rain: value %d overflows field %s", v.Int64, col.fieldType)
+					}
+					p := (**int8)(unsafe.Pointer(ptr))
+					if *p == nil {
+						*p = new(int8)
+					}
+					**p = val
+				case reflect.Int:
+					val := int(v.Int64)
+					if int64(val) != v.Int64 {
+						return fmt.Errorf("rain: value %d overflows field %s", v.Int64, col.fieldType)
+					}
+					p := (**int)(unsafe.Pointer(ptr))
+					if *p == nil {
+						*p = new(int)
+					}
+					**p = val
+				case reflect.Uint64:
+					if v.Int64 < 0 {
+						return fmt.Errorf("rain: value %d overflows field %s", v.Int64, col.fieldType)
+					}
+					p := (**uint64)(unsafe.Pointer(ptr))
+					if *p == nil {
+						*p = new(uint64)
+					}
+					**p = uint64(v.Int64)
+				case reflect.Uint32:
+					if v.Int64 < 0 {
+						return fmt.Errorf("rain: value %d overflows field %s", v.Int64, col.fieldType)
+					}
+					val := uint32(v.Int64)
+					if uint64(val) != uint64(v.Int64) {
+						return fmt.Errorf("rain: value %d overflows field %s", v.Int64, col.fieldType)
+					}
+					p := (**uint32)(unsafe.Pointer(ptr))
+					if *p == nil {
+						*p = new(uint32)
+					}
+					**p = val
+				case reflect.Uint16:
+					if v.Int64 < 0 {
+						return fmt.Errorf("rain: value %d overflows field %s", v.Int64, col.fieldType)
+					}
+					val := uint16(v.Int64)
+					if uint64(val) != uint64(v.Int64) {
+						return fmt.Errorf("rain: value %d overflows field %s", v.Int64, col.fieldType)
+					}
+					p := (**uint16)(unsafe.Pointer(ptr))
+					if *p == nil {
+						*p = new(uint16)
+					}
+					**p = val
+				case reflect.Uint8:
+					if v.Int64 < 0 {
+						return fmt.Errorf("rain: value %d overflows field %s", v.Int64, col.fieldType)
+					}
+					val := uint8(v.Int64)
+					if uint64(val) != uint64(v.Int64) {
+						return fmt.Errorf("rain: value %d overflows field %s", v.Int64, col.fieldType)
+					}
+					p := (**uint8)(unsafe.Pointer(ptr))
+					if *p == nil {
+						*p = new(uint8)
+					}
+					**p = val
+				case reflect.Uint:
+					if v.Int64 < 0 {
+						return fmt.Errorf("rain: value %d overflows field %s", v.Int64, col.fieldType)
+					}
+					val := uint(v.Int64)
+					if uint64(val) != uint64(v.Int64) {
+						return fmt.Errorf("rain: value %d overflows field %s", v.Int64, col.fieldType)
+					}
+					p := (**uint)(unsafe.Pointer(ptr))
+					if *p == nil {
+						*p = new(uint)
+					}
+					**p = val
+				default:
+					if !target.IsValid() {
+						return fmt.Errorf("rain: internal error: target is invalid for non-offset column %s", col.columnName)
+					}
+					field, err := fieldByIndexAlloc(target, col.fieldIndex)
+					if err != nil {
+						return err
+					}
+					if err := assignRawValueToField(field, v.Int64); err != nil {
+						return err
+					}
+				}
+			}
+			continue
+		}
+
+		if !target.IsValid() {
+			return fmt.Errorf("rain: internal error: target is invalid for non-offset column %s", col.columnName)
+		}
 		field, err := fieldByIndexAlloc(target, col.fieldIndex)
 		if err != nil {
 			return err
@@ -495,6 +663,9 @@ func scanDirectRowAddr(baseAddr unsafe.Pointer, target reflect.Value, plan *rowS
 			*(*string)(unsafe.Add(baseAddr, col.offset)) = v.String
 			continue
 		}
+		if !target.IsValid() {
+			return fmt.Errorf("rain: internal error: target is invalid for non-offset column %s", col.columnName)
+		}
 		field, err := fieldByIndexAlloc(target, col.fieldIndex)
 		if err != nil {
 			return err
@@ -510,6 +681,23 @@ func scanDirectRowAddr(baseAddr unsafe.Pointer, target reflect.Value, plan *rowS
 	for i := range plan.stringPointerCols {
 		col := &plan.stringPointerCols[i]
 		v := &scratch.strings[col.scratchIndex]
+
+		if col.canUseOffset {
+			ptr := (**string)(unsafe.Add(baseAddr, col.offset))
+			if !v.Valid {
+				*ptr = nil
+				continue
+			}
+			if *ptr == nil {
+				*ptr = new(string)
+			}
+			**ptr = v.String
+			continue
+		}
+
+		if !target.IsValid() {
+			return fmt.Errorf("rain: internal error: target is invalid for non-offset column %s", col.columnName)
+		}
 		field, err := fieldByIndexAlloc(target, col.fieldIndex)
 		if err != nil {
 			return err
@@ -540,6 +728,9 @@ func scanDirectRowAddr(baseAddr unsafe.Pointer, target reflect.Value, plan *rowS
 			*(*bool)(unsafe.Add(baseAddr, col.offset)) = v.Bool
 			continue
 		}
+		if !target.IsValid() {
+			return fmt.Errorf("rain: internal error: target is invalid for non-offset column %s", col.columnName)
+		}
 		field, err := fieldByIndexAlloc(target, col.fieldIndex)
 		if err != nil {
 			return err
@@ -555,6 +746,23 @@ func scanDirectRowAddr(baseAddr unsafe.Pointer, target reflect.Value, plan *rowS
 	for i := range plan.boolPointerCols {
 		col := &plan.boolPointerCols[i]
 		v := &scratch.bools[col.scratchIndex]
+
+		if col.canUseOffset {
+			ptr := (**bool)(unsafe.Add(baseAddr, col.offset))
+			if !v.Valid {
+				*ptr = nil
+				continue
+			}
+			if *ptr == nil {
+				*ptr = new(bool)
+			}
+			**ptr = v.Bool
+			continue
+		}
+
+		if !target.IsValid() {
+			return fmt.Errorf("rain: internal error: target is invalid for non-offset column %s", col.columnName)
+		}
 		field, err := fieldByIndexAlloc(target, col.fieldIndex)
 		if err != nil {
 			return err
@@ -598,6 +806,9 @@ func scanDirectRowAddr(baseAddr unsafe.Pointer, target reflect.Value, plan *rowS
 			}
 			continue
 		}
+		if !target.IsValid() {
+			return fmt.Errorf("rain: internal error: target is invalid for non-offset column %s", col.columnName)
+		}
 		field, err := fieldByIndexAlloc(target, col.fieldIndex)
 		if err != nil {
 			return err
@@ -616,6 +827,43 @@ func scanDirectRowAddr(baseAddr unsafe.Pointer, target reflect.Value, plan *rowS
 	for i := range plan.float64PointerCols {
 		col := &plan.float64PointerCols[i]
 		v := &scratch.floats[col.scratchIndex]
+
+		if col.canUseOffset {
+			ptr := (**float64)(unsafe.Add(baseAddr, col.offset))
+			if !v.Valid {
+				*ptr = nil
+				continue
+			}
+			switch col.kind {
+			case reflect.Pointer:
+				elemKind := col.fieldType.Elem().Kind()
+				switch elemKind {
+				case reflect.Float64:
+					if *ptr == nil {
+						*ptr = new(float64)
+					}
+					**ptr = v.Float64
+				case reflect.Float32:
+					f64 := v.Float64
+					if f64 < 0 {
+						f64 = -f64
+					}
+					if math.MaxFloat32 < f64 && f64 <= math.MaxFloat64 {
+						return fmt.Errorf("rain: value %f overflows field %s", v.Float64, col.fieldType)
+					}
+					p := (**float32)(unsafe.Pointer(ptr))
+					if *p == nil {
+						*p = new(float32)
+					}
+					**p = float32(v.Float64)
+				}
+			}
+			continue
+		}
+
+		if !target.IsValid() {
+			return fmt.Errorf("rain: internal error: target is invalid for non-offset column %s", col.columnName)
+		}
 		field, err := fieldByIndexAlloc(target, col.fieldIndex)
 		if err != nil {
 			return err
@@ -649,6 +897,9 @@ func scanDirectRowAddr(baseAddr unsafe.Pointer, target reflect.Value, plan *rowS
 			*(*time.Time)(unsafe.Add(baseAddr, col.offset)) = v.Time
 			continue
 		}
+		if !target.IsValid() {
+			return fmt.Errorf("rain: internal error: target is invalid for non-offset column %s", col.columnName)
+		}
 		field, err := fieldByIndexAlloc(target, col.fieldIndex)
 		if err != nil {
 			return err
@@ -664,6 +915,23 @@ func scanDirectRowAddr(baseAddr unsafe.Pointer, target reflect.Value, plan *rowS
 	for i := range plan.timePointerCols {
 		col := &plan.timePointerCols[i]
 		v := &scratch.times[col.scratchIndex]
+
+		if col.canUseOffset {
+			ptr := (**time.Time)(unsafe.Add(baseAddr, col.offset))
+			if !v.Valid {
+				*ptr = nil
+				continue
+			}
+			if *ptr == nil {
+				*ptr = new(time.Time)
+			}
+			**ptr = v.Time
+			continue
+		}
+
+		if !target.IsValid() {
+			return fmt.Errorf("rain: internal error: target is invalid for non-offset column %s", col.columnName)
+		}
 		field, err := fieldByIndexAlloc(target, col.fieldIndex)
 		if err != nil {
 			return err
@@ -686,6 +954,9 @@ func scanDirectRowAddr(baseAddr unsafe.Pointer, target reflect.Value, plan *rowS
 	}
 	for i := range plan.otherCols {
 		col := &plan.otherCols[i]
+		if !target.IsValid() {
+			return fmt.Errorf("rain: internal error: target is invalid for other column %s", col.columnName)
+		}
 		var field reflect.Value
 		if col.isComplex {
 			var err error
@@ -883,6 +1154,10 @@ func newRowScanPlanForColumns(cols []string, modelType reflect.Type, table *sche
 			canUseOffset: canUseOffset,
 		}
 
+		if !colPlan.canUseOffset {
+			plan.needsTargetValue = true
+		}
+
 		if isDirect {
 			isPtr := fieldType.Kind() == reflect.Pointer
 			baseType := fieldType
@@ -940,6 +1215,7 @@ func newRowScanPlanForColumns(cols []string, modelType reflect.Type, table *sche
 				plan.otherCols = append(plan.otherCols, colPlan)
 			}
 		} else {
+			plan.needsTargetValue = true
 			plan.otherCols = append(plan.otherCols, colPlan)
 		}
 		plan.columns = append(plan.columns, colPlan)
@@ -960,52 +1236,42 @@ func newRowScanPlanForColumns(cols []string, modelType reflect.Type, table *sche
 		}
 		for i := range plan.int64ValueCols {
 			p := &plan.int64ValueCols[i]
-			s.scanned[p.scanIndex] = &s.ints[p.scratchIndex]
 			s.scanTargets[p.scanIndex] = &s.ints[p.scratchIndex]
 		}
 		for i := range plan.int64PointerCols {
 			p := &plan.int64PointerCols[i]
-			s.scanned[p.scanIndex] = &s.ints[p.scratchIndex]
 			s.scanTargets[p.scanIndex] = &s.ints[p.scratchIndex]
 		}
 		for i := range plan.stringValueCols {
 			p := &plan.stringValueCols[i]
-			s.scanned[p.scanIndex] = &s.strings[p.scratchIndex]
 			s.scanTargets[p.scanIndex] = &s.strings[p.scratchIndex]
 		}
 		for i := range plan.stringPointerCols {
 			p := &plan.stringPointerCols[i]
-			s.scanned[p.scanIndex] = &s.strings[p.scratchIndex]
 			s.scanTargets[p.scanIndex] = &s.strings[p.scratchIndex]
 		}
 		for i := range plan.boolValueCols {
 			p := &plan.boolValueCols[i]
-			s.scanned[p.scanIndex] = &s.bools[p.scratchIndex]
 			s.scanTargets[p.scanIndex] = &s.bools[p.scratchIndex]
 		}
 		for i := range plan.boolPointerCols {
 			p := &plan.boolPointerCols[i]
-			s.scanned[p.scanIndex] = &s.bools[p.scratchIndex]
 			s.scanTargets[p.scanIndex] = &s.bools[p.scratchIndex]
 		}
 		for i := range plan.float64ValueCols {
 			p := &plan.float64ValueCols[i]
-			s.scanned[p.scanIndex] = &s.floats[p.scratchIndex]
 			s.scanTargets[p.scanIndex] = &s.floats[p.scratchIndex]
 		}
 		for i := range plan.float64PointerCols {
 			p := &plan.float64PointerCols[i]
-			s.scanned[p.scanIndex] = &s.floats[p.scratchIndex]
 			s.scanTargets[p.scanIndex] = &s.floats[p.scratchIndex]
 		}
 		for i := range plan.timeValueCols {
 			p := &plan.timeValueCols[i]
-			s.scanned[p.scanIndex] = &s.times[p.scratchIndex]
 			s.scanTargets[p.scanIndex] = &s.times[p.scratchIndex]
 		}
 		for i := range plan.timePointerCols {
 			p := &plan.timePointerCols[i]
-			s.scanned[p.scanIndex] = &s.times[p.scratchIndex]
 			s.scanTargets[p.scanIndex] = &s.times[p.scratchIndex]
 		}
 		return s
