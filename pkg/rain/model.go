@@ -313,22 +313,25 @@ func scanRowsAgainstTableDirect(rows *sql.Rows, dest any, table *schema.TableDef
 			ptr := unsafe.Add(unsafe.Pointer(items.Pointer()), uintptr(n)*elemSize)
 
 			if pointerElems {
-				item := reflect.NewAt(elemType, ptr).Elem()
-				item.Set(reflect.New(structType))
+				newStruct := reflect.New(structType)
+				reflect.NewAt(elemType, ptr).Elem().Set(newStruct)
 
 				var targetVal reflect.Value
 				if plan.needsTargetValue {
-					targetVal = item.Elem()
+					targetVal = newStruct.Elem()
 				}
-				if err := scanDirectRowAddr(item.Elem().Addr().UnsafePointer(), targetVal, plan, scratch); err != nil {
+				if err := scanDirectRowAddr(newStruct.UnsafePointer(), targetVal, plan, scratch); err != nil {
 					return err
 				}
 			} else {
+				// Re-derive a reflect.Value for the element to reset it and handle non-offset columns.
+				item := reflect.NewAt(elemType, ptr).Elem()
+				// Reset existing element to its zero state before reuse to avoid data carry-over.
+				item.Set(zeroElem)
+
 				var targetVal reflect.Value
 				if plan.needsTargetValue {
-					targetVal = reflect.NewAt(elemType, ptr).Elem()
-					// Reset existing element to its zero state before reuse to avoid data carry-over.
-					targetVal.Set(zeroElem)
+					targetVal = item
 				}
 				if err := scanDirectRowAddr(ptr, targetVal, plan, scratch); err != nil {
 					return err
