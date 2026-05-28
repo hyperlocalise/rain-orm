@@ -96,64 +96,73 @@ func BuildSnapshot(dialectName string, tables []schema.TableReference) (Snapshot
 			return Snapshot{}, indexErr
 		}
 
-		columnSnapshots := make([]ColumnSnapshot, 0, len(tableDef.Columns))
-		for _, column := range tableDef.Columns {
-			definitionSQL, definitionErr := ddl.ColumnDefinitionSQL(table, column.Name)
-			if definitionErr != nil {
-				return Snapshot{}, definitionErr
+		var columnSnapshots []ColumnSnapshot
+		if !tableDef.IsView {
+			columnSnapshots = make([]ColumnSnapshot, 0, len(tableDef.Columns))
+			for _, column := range tableDef.Columns {
+				definitionSQL, definitionErr := ddl.ColumnDefinitionSQL(table, column.Name)
+				if definitionErr != nil {
+					return Snapshot{}, definitionErr
+				}
+				defaultSQL, defaultErr := ddl.ColumnDefaultSQL(table, column.Name)
+				if defaultErr != nil {
+					return Snapshot{}, defaultErr
+				}
+				columnSnapshots = append(columnSnapshots, ColumnSnapshot{
+					Name:            column.Name,
+					Type:            column.Type,
+					Nullable:        column.Nullable,
+					DefaultSQL:      defaultSQL,
+					HasDefault:      column.HasDefault || column.DefaultSQL != "",
+					PrimaryKey:      column.PrimaryKey,
+					AutoIncrement:   column.AutoIncrement,
+					Unique:          column.Unique,
+					GeneratedStored: column.GeneratedStored,
+					DefinitionSQL:   definitionSQL,
+				})
 			}
-			defaultSQL, defaultErr := ddl.ColumnDefaultSQL(table, column.Name)
-			if defaultErr != nil {
-				return Snapshot{}, defaultErr
+		}
+
+		var constraintSnapshots []ConstraintSnapshot
+		if !tableDef.IsView {
+			constraintSnapshots = make([]ConstraintSnapshot, 0, len(tableDef.Constraints))
+			for _, constraint := range tableDef.Constraints {
+				constraintSQL, constraintErr := ddl.AddConstraintSQL(table, constraint.Name)
+				if constraintErr != nil {
+					return Snapshot{}, constraintErr
+				}
+				constraintSnapshots = append(constraintSnapshots, ConstraintSnapshot{
+					Name: constraint.Name,
+					Type: string(constraint.Type),
+					SQL:  constraintSQL,
+				})
 			}
-			columnSnapshots = append(columnSnapshots, ColumnSnapshot{
-				Name:            column.Name,
-				Type:            column.Type,
-				Nullable:        column.Nullable,
-				DefaultSQL:      defaultSQL,
-				HasDefault:      column.HasDefault || column.DefaultSQL != "",
-				PrimaryKey:      column.PrimaryKey,
-				AutoIncrement:   column.AutoIncrement,
-				Unique:          column.Unique,
-				GeneratedStored: column.GeneratedStored,
-				DefinitionSQL:   definitionSQL,
+			slices.SortFunc(constraintSnapshots, func(a, b ConstraintSnapshot) int {
+				return compareStrings(a.Name, b.Name)
 			})
 		}
 
-		constraintSnapshots := make([]ConstraintSnapshot, 0, len(tableDef.Constraints))
-		for _, constraint := range tableDef.Constraints {
-			constraintSQL, constraintErr := ddl.AddConstraintSQL(table, constraint.Name)
-			if constraintErr != nil {
-				return Snapshot{}, constraintErr
+		var foreignKeySnapshots []ForeignKeySnapshot
+		if !tableDef.IsView {
+			foreignKeySnapshots = make([]ForeignKeySnapshot, 0, len(tableDef.ForeignKeys))
+			for _, foreignKey := range tableDef.ForeignKeys {
+				if foreignKey.Name == "" {
+					continue
+				}
+				foreignKeySQL, foreignKeyErr := ddl.AddForeignKeySQL(table, foreignKey.Name)
+				if foreignKeyErr != nil {
+					return Snapshot{}, foreignKeyErr
+				}
+				foreignKeySnapshots = append(foreignKeySnapshots, ForeignKeySnapshot{
+					Name:            foreignKey.Name,
+					ReferencedTable: foreignKey.ReferencedTable.Name,
+					SQL:             foreignKeySQL,
+				})
 			}
-			constraintSnapshots = append(constraintSnapshots, ConstraintSnapshot{
-				Name: constraint.Name,
-				Type: string(constraint.Type),
-				SQL:  constraintSQL,
+			slices.SortFunc(foreignKeySnapshots, func(a, b ForeignKeySnapshot) int {
+				return compareStrings(a.Name, b.Name)
 			})
 		}
-		slices.SortFunc(constraintSnapshots, func(a, b ConstraintSnapshot) int {
-			return compareStrings(a.Name, b.Name)
-		})
-
-		foreignKeySnapshots := make([]ForeignKeySnapshot, 0, len(tableDef.ForeignKeys))
-		for _, foreignKey := range tableDef.ForeignKeys {
-			if foreignKey.Name == "" {
-				continue
-			}
-			foreignKeySQL, foreignKeyErr := ddl.AddForeignKeySQL(table, foreignKey.Name)
-			if foreignKeyErr != nil {
-				return Snapshot{}, foreignKeyErr
-			}
-			foreignKeySnapshots = append(foreignKeySnapshots, ForeignKeySnapshot{
-				Name:            foreignKey.Name,
-				ReferencedTable: foreignKey.ReferencedTable.Name,
-				SQL:             foreignKeySQL,
-			})
-		}
-		slices.SortFunc(foreignKeySnapshots, func(a, b ForeignKeySnapshot) int {
-			return compareStrings(a.Name, b.Name)
-		})
 
 		indexSnapshots := make([]IndexSnapshot, 0, len(indexSQL))
 		for idx, statement := range indexSQL {
