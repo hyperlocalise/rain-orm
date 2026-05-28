@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 
 	"github.com/hyperlocalise/rain-orm/pkg/dialect"
 	"github.com/hyperlocalise/rain-orm/pkg/schema"
@@ -61,6 +62,9 @@ func (q *UpdateQuery) Unbounded() *UpdateQuery {
 func (q *UpdateQuery) ToSQL() (string, []any, error) {
 	if q.table == nil {
 		return "", nil, errors.New("rain: update query requires a table")
+	}
+	if q.table.IsView {
+		return "", nil, fmt.Errorf("rain: cannot update view %q", q.table.Name)
 	}
 	if len(q.values) == 0 {
 		return "", nil, errors.New("rain: update query requires at least one assignment")

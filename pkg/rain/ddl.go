@@ -31,6 +31,9 @@ func (db *DB) CreateIndexesSQL(table schema.TableReference) ([]string, error) {
 	if table == nil || table.TableDef() == nil {
 		return nil, errors.New("rain: create indexes requires a non-nil table")
 	}
+	if table.TableDef().IsView {
+		return nil, nil
+	}
 
 	return createIndexesSQL(db.dialect, table.TableDef())
 }
@@ -42,6 +45,9 @@ func (db *DB) ColumnDefinitionSQL(table schema.TableReference, columnName string
 	}
 	if table == nil || table.TableDef() == nil {
 		return "", errors.New("rain: column definition requires a non-nil table")
+	}
+	if table.TableDef().IsView {
+		return "", fmt.Errorf("rain: view %q does not support column definition SQL", table.TableDef().Name)
 	}
 
 	tableDef := table.TableDef()
@@ -71,6 +77,9 @@ func (db *DB) AddConstraintSQL(table schema.TableReference, constraintName strin
 	if table == nil || table.TableDef() == nil {
 		return "", errors.New("rain: add constraint requires a non-nil table")
 	}
+	if table.TableDef().IsView {
+		return "", fmt.Errorf("rain: view %q does not support constraints", table.TableDef().Name)
+	}
 
 	tableDef := table.TableDef()
 	for _, constraint := range tableDef.Constraints {
@@ -94,6 +103,9 @@ func (db *DB) AddForeignKeySQL(table schema.TableReference, foreignKeyName strin
 	}
 	if table == nil || table.TableDef() == nil {
 		return "", errors.New("rain: add foreign key requires a non-nil table")
+	}
+	if table.TableDef().IsView {
+		return "", fmt.Errorf("rain: view %q does not support foreign keys", table.TableDef().Name)
 	}
 
 	tableDef := table.TableDef()
@@ -119,6 +131,9 @@ func (db *DB) ColumnDefaultSQL(table schema.TableReference, columnName string) (
 	if table == nil || table.TableDef() == nil {
 		return "", errors.New("rain: column default requires a non-nil table")
 	}
+	if table.TableDef().IsView {
+		return "", nil
+	}
 
 	tableDef := table.TableDef()
 	column, ok := tableDef.ColumnByName(columnName)
@@ -138,6 +153,9 @@ func createTableSQL(d dialect.Dialect, table *schema.TableDef) (string, error) {
 	}
 	if table == nil {
 		return "", errors.New("rain: create table requires a non-nil table")
+	}
+	if table.IsView {
+		return createViewSQL(d, table)
 	}
 
 	var definitions []string
@@ -521,6 +539,36 @@ func validateForeignKeyAction(action schema.ForeignKeyAction) error {
 	default:
 		return fmt.Errorf("unsupported foreign key action %q", action)
 	}
+}
+
+func createViewSQL(d dialect.Dialect, table *schema.TableDef) (string, error) {
+	if table.ViewQuery == nil {
+		return "", fmt.Errorf("rain: view %q requires a defining query", table.Name)
+	}
+
+	ctx := newCompileContext(d)
+	ctx.useLiterals = true
+	ctx.writeString("CREATE VIEW ")
+	ctx.writeQuotedIdentifier(table.Name)
+	ctx.writeString(" AS ")
+
+	// SQLite doesn't support parentheses around the SELECT statement in a VIEW definition.
+	// SelectQuery.writeSQL (via writeExpression) also handles its own parentheses if it's
+	// rendered as a sub-expression, so we pass noParens = true to it.
+	exprCtx := expressionContext{noParens: true}
+	if d.Name() != "sqlite" {
+		ctx.writeByte('(')
+		if err := ctx.writeExpressionInContext(table.ViewQuery, exprCtx); err != nil {
+			return "", err
+		}
+		ctx.writeByte(')')
+	} else {
+		if err := ctx.writeExpressionInContext(table.ViewQuery, exprCtx); err != nil {
+			return "", err
+		}
+	}
+
+	return ctx.String(), ctx.err
 }
 
 func tablePrimaryKeyConstraint(table *schema.TableDef) (*schema.ConstraintDef, error) {

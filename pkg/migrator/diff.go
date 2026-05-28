@@ -54,6 +54,10 @@ func DiffSnapshots(previous *Snapshot, current Snapshot) (Plan, error) {
 			continue
 		}
 
+		if previousTable.IsView != currentTable.IsView {
+			return Plan{}, fmt.Errorf("migrator: changing table %q to view (or vice versa) is not supported", name)
+		}
+
 		tableStatements, err := diffTable(previousTable, currentTable, current.Dialect)
 		if err != nil {
 			return Plan{}, err
@@ -83,6 +87,13 @@ func planCreateAll(snapshot Snapshot) Plan {
 
 func diffTable(previous, current TableSnapshot, dialectName string) ([]string, error) {
 	var statements []string
+
+	if current.IsView {
+		if normalizeSQL(previous.CreateTableSQL) != normalizeSQL(current.CreateTableSQL) {
+			return nil, fmt.Errorf("migrator: changing view %q definition is not supported", current.Name)
+		}
+		return nil, nil
+	}
 
 	previousColumns := make(map[string]ColumnSnapshot, len(previous.Columns))
 	for _, column := range previous.Columns {

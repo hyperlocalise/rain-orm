@@ -111,6 +111,8 @@ type ColumnType struct {
 type TableDef struct {
 	Name        string
 	Alias       string
+	IsView      bool
+	ViewQuery   Expression
 	Columns     []*ColumnDef
 	Indexes     []IndexDef
 	Constraints []ConstraintDef
@@ -484,6 +486,15 @@ func Define[T any](name string, fn func(*T)) *T {
 	bindTableModel(handle, def)
 	fn(handle)
 
+	return handle
+}
+
+// DefineView creates a typed table handle for a database view.
+func DefineView[T any](name string, fn func(*T), query Expression) *T {
+	handle := Define(name, fn)
+	def := tableDefOf(handle)
+	def.IsView = true
+	def.ViewQuery = query
 	return handle
 }
 
@@ -1332,11 +1343,12 @@ type SoftDelete struct {
 	DeletedAt *time.Time `db:"deleted_at"`
 }
 
-type tableCloner interface {
-	cloneForTable(*TableDef) any
+// TableCloner is implemented by expressions that need to be rebound when a table is aliased.
+type TableCloner interface {
+	CloneForTable(*TableDef) any
 }
 
-func (c *AnyColumn) cloneForTable(table *TableDef) any {
+func (c *AnyColumn) CloneForTable(table *TableDef) any {
 	clonedMeta, ok := table.columnsByName[c.def.Name]
 	if !ok {
 		panic(fmt.Sprintf("schema: alias missing column %q", c.def.Name))
@@ -1345,7 +1357,7 @@ func (c *AnyColumn) cloneForTable(table *TableDef) any {
 	return &AnyColumn{def: clonedMeta}
 }
 
-func (c *Column[T]) cloneForTable(table *TableDef) any {
+func (c *Column[T]) CloneForTable(table *TableDef) any {
 	clonedMeta, ok := table.columnsByName[c.def.Name]
 	if !ok {
 		panic(fmt.Sprintf("schema: alias missing column %q", c.def.Name))
@@ -1398,6 +1410,7 @@ func cloneTableDef(src *TableDef, alias string) *TableDef {
 	cloned := &TableDef{
 		Name:            src.Name,
 		Alias:           alias,
+		IsView:          src.IsView,
 		Columns:         make([]*ColumnDef, 0, len(src.Columns)),
 		Indexes:         make([]IndexDef, len(src.Indexes)),
 		Constraints:     make([]ConstraintDef, len(src.Constraints)),
@@ -1405,6 +1418,10 @@ func cloneTableDef(src *TableDef, alias string) *TableDef {
 		Relations:       make([]RelationDef, 0, len(src.Relations)),
 		columnsByName:   make(map[string]*ColumnDef, len(src.Columns)),
 		relationsByName: make(map[string]RelationDef, len(src.Relations)),
+	}
+
+	if src.ViewQuery != nil {
+		cloned.ViewQuery = cloneExpressionForTable(src.ViewQuery, cloned)
 	}
 
 	for _, column := range src.Columns {
@@ -1498,12 +1515,8 @@ func cloneTableDef(src *TableDef, alias string) *TableDef {
 
 func cloneExpressionForTable(expr Expression, table *TableDef) Expression {
 	switch value := expr.(type) {
-	case ColumnReference:
-		cloner, ok := any(value).(tableCloner)
-		if !ok {
-			panic(fmt.Sprintf("schema: expression column %T cannot be cloned", value))
-		}
-		cloned, ok := cloner.cloneForTable(table).(Expression)
+	case TableCloner:
+		cloned, ok := value.CloneForTable(table).(Expression)
 		if !ok {
 			panic(fmt.Sprintf("schema: cloned expression %T is not an expression", value))
 		}
@@ -1579,8 +1592,8 @@ func cloneExpressionForTable(expr Expression, table *TableDef) Expression {
 	case RawExpr:
 		cloned := RawExpr{SQL: value.SQL, Args: make([]any, 0, len(value.Args))}
 		for _, arg := range value.Args {
-			if cloner, ok := arg.(tableCloner); ok {
-				cloned.Args = append(cloned.Args, cloner.cloneForTable(table))
+			if cloner, ok := arg.(TableCloner); ok {
+				cloned.Args = append(cloned.Args, cloner.CloneForTable(table))
 				continue
 			}
 			cloned.Args = append(cloned.Args, arg)
@@ -1642,8 +1655,8 @@ func rebindAliasedColumns(value reflect.Value, table *TableDef) {
 		if value.IsNil() || !value.CanSet() {
 			return
 		}
-		if cloner, ok := value.Interface().(tableCloner); ok {
-			value.Set(reflect.ValueOf(cloner.cloneForTable(table)))
+		if cloner, ok := value.Interface().(TableCloner); ok {
+			value.Set(reflect.ValueOf(cloner.CloneForTable(table)))
 			return
 		}
 		rebindAliasedColumns(value.Elem(), table)
