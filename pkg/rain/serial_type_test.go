@@ -25,8 +25,8 @@ func TestCreateTableSQLSerialTypesReal(t *testing.T) {
 	dbMysql := MustOpenDialect("mysql")
 
 	t.Run("PostgresSmallSerial", func(t *testing.T) {
-		tbl := schema.Define("test", func(t *SmallSerialTable) {
-			t.ID = t.SmallSerial("id").PrimaryKey()
+		tbl := schema.Define("test", func(table *SmallSerialTable) {
+			table.ID = table.SmallSerial("id").PrimaryKey()
 		})
 		got, _ := dbPg.CreateTableSQL(tbl)
 		want := "CREATE TABLE \"test\" (\n\t\"id\" SMALLSERIAL PRIMARY KEY\n)"
@@ -36,8 +36,8 @@ func TestCreateTableSQLSerialTypesReal(t *testing.T) {
 	})
 
 	t.Run("PostgresSerial", func(t *testing.T) {
-		tbl := schema.Define("test", func(t *SerialTable) {
-			t.ID = t.Serial("id").PrimaryKey()
+		tbl := schema.Define("test", func(table *SerialTable) {
+			table.ID = table.Serial("id").PrimaryKey()
 		})
 		got, _ := dbPg.CreateTableSQL(tbl)
 		want := "CREATE TABLE \"test\" (\n\t\"id\" SERIAL PRIMARY KEY\n)"
@@ -47,8 +47,8 @@ func TestCreateTableSQLSerialTypesReal(t *testing.T) {
 	})
 
 	t.Run("PostgresBigSerial", func(t *testing.T) {
-		tbl := schema.Define("test", func(t *BigSerialTable) {
-			t.ID = t.BigSerial("id").PrimaryKey()
+		tbl := schema.Define("test", func(table *BigSerialTable) {
+			table.ID = table.BigSerial("id").PrimaryKey()
 		})
 		got, _ := dbPg.CreateTableSQL(tbl)
 		want := "CREATE TABLE \"test\" (\n\t\"id\" BIGSERIAL PRIMARY KEY\n)"
@@ -58,8 +58,8 @@ func TestCreateTableSQLSerialTypesReal(t *testing.T) {
 	})
 
 	t.Run("SQLiteSmallSerial", func(t *testing.T) {
-		tbl := schema.Define("test", func(t *SmallSerialTable) {
-			t.ID = t.SmallSerial("id").PrimaryKey()
+		tbl := schema.Define("test", func(table *SmallSerialTable) {
+			table.ID = table.SmallSerial("id").PrimaryKey()
 		})
 		got, _ := dbSqlite.CreateTableSQL(tbl)
 		want := "CREATE TABLE \"test\" (\n\t\"id\" INTEGER PRIMARY KEY AUTOINCREMENT\n)"
@@ -69,8 +69,8 @@ func TestCreateTableSQLSerialTypesReal(t *testing.T) {
 	})
 
 	t.Run("SQLiteSerial", func(t *testing.T) {
-		tbl := schema.Define("test", func(t *SerialTable) {
-			t.ID = t.Serial("id").PrimaryKey()
+		tbl := schema.Define("test", func(table *SerialTable) {
+			table.ID = table.Serial("id").PrimaryKey()
 		})
 		got, _ := dbSqlite.CreateTableSQL(tbl)
 		want := "CREATE TABLE \"test\" (\n\t\"id\" INTEGER PRIMARY KEY AUTOINCREMENT\n)"
@@ -80,8 +80,8 @@ func TestCreateTableSQLSerialTypesReal(t *testing.T) {
 	})
 
 	t.Run("MySQLSmallSerial", func(t *testing.T) {
-		tbl := schema.Define("test", func(t *SmallSerialTable) {
-			t.ID = t.SmallSerial("id").PrimaryKey()
+		tbl := schema.Define("test", func(table *SmallSerialTable) {
+			table.ID = table.SmallSerial("id").PrimaryKey()
 		})
 		got, _ := dbMysql.CreateTableSQL(tbl)
 		want := "CREATE TABLE `test` (\n\t`id` SMALLINT PRIMARY KEY AUTO_INCREMENT\n)"
@@ -91,8 +91,8 @@ func TestCreateTableSQLSerialTypesReal(t *testing.T) {
 	})
 
 	t.Run("MySQLSerial", func(t *testing.T) {
-		tbl := schema.Define("test", func(t *SerialTable) {
-			t.ID = t.Serial("id").PrimaryKey()
+		tbl := schema.Define("test", func(table *SerialTable) {
+			table.ID = table.Serial("id").PrimaryKey()
 		})
 		got, _ := dbMysql.CreateTableSQL(tbl)
 		want := "CREATE TABLE `test` (\n\t`id` INT PRIMARY KEY AUTO_INCREMENT\n)"
