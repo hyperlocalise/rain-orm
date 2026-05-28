@@ -19,6 +19,8 @@ type TimestampKind string
 
 // Supported schema data types.
 const (
+	TypeSmallSerial DataType = "SMALLSERIAL"
+	TypeSerial      DataType = "SERIAL"
 	TypeBigSerial   DataType = "BIGSERIAL"
 	TypeSmallInt    DataType = "SMALLINT"
 	TypeInteger     DataType = "INTEGER"
@@ -262,6 +264,16 @@ func (t *TableModel) C(name string) *AnyColumn {
 	}
 
 	return &AnyColumn{def: col}
+}
+
+// SmallSerial adds a SMALLSERIAL column.
+func (t *TableModel) SmallSerial(name string) *Column[int16] {
+	return addColumn[int16](t.def, name, ColumnType{DataType: TypeSmallSerial}, false, true)
+}
+
+// Serial adds a SERIAL column.
+func (t *TableModel) Serial(name string) *Column[int32] {
+	return addColumn[int32](t.def, name, ColumnType{DataType: TypeSerial}, false, true)
 }
 
 // BigSerial adds a BIGSERIAL column.
@@ -593,7 +605,7 @@ func (c *Column[T]) ColumnDef() *ColumnDef {
 func (c *Column[T]) PrimaryKey() *Column[T] {
 	c.def.PrimaryKey = true
 	c.def.Nullable = false
-	if c.def.Type.DataType == TypeBigSerial {
+	if c.def.Type.DataType == TypeSmallSerial || c.def.Type.DataType == TypeSerial || c.def.Type.DataType == TypeBigSerial {
 		c.def.AutoIncrement = true
 	}
 
