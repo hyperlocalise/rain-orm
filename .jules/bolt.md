@@ -21,3 +21,7 @@
 ## 2026-05-24 - [Scratch Buffer Pooling for Zero-Allocation Column Scanning]
 **Learning:** Even with direct scanning, the ORM was allocating `[]any` scan targets and `sql.Null*` wrappers for every query (and sometimes every row). By attaching a `sync.Pool` of `rowScanScratch` objects to the cached `rowScanPlan`, we can reuse these buffers. Furthermore, by passing the scratch object directly to the assignment loop, we eliminate interface type assertions in the hot path. This reduced point-lookup allocations by ~14%.
 **Action:** For hot paths involving `rows.Scan`, use `sync.Pool` to reuse scan targets and typed scratch variables. Pre-calculate indices to these pooled buffers during a 'plan' phase to avoid runtime lookups or type assertions.
+
+## 2026-05-25 - [Bypassing Reflection via Unsafe Pointers for Row Scanning]
+**Learning:** Even with pre-compiled scan plans, `reflect.Value.Field()` and `reflect.Value.Set()` operations in the hot scanning loop (per column, per row) add significant overhead. By pre-calculating field offsets and using `unsafe.Pointer` for direct memory assignment of basic types and their pointers, we reduced bulk scanning execution time by ~6% for large datasets. Additionally, deriving slice element addresses via pointer arithmetic avoids the overhead of `Index(n)` calls.
+**Action:** Identify fields that can be assigned via `unsafe.Pointer` offsets (top-level fields of basic types). Track if a `reflect.Value` is actually needed via a `needsTargetValue` flag to skip its creation entirely when possible.
