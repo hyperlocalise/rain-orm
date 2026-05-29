@@ -90,8 +90,8 @@ func TestCreateTableSQLWithDefaultRaw(t *testing.T) {
 
 	table := schema.Define("default_raw_test", func(t *ddlDefaultRawTable) {
 		t.ID = t.BigSerial("id").PrimaryKey()
-		t.CreatedAt = t.TimestampTZ("created_at").NotNull().DefaultRaw("now()")
-		t.Random = t.Double("random").NotNull().DefaultRaw("random()")
+		t.CreatedAt = t.TimestampTZ("created_at").NotNull().DefaultRaw(schema.Raw("now()"))
+		t.Random = t.Double("random").NotNull().DefaultRaw(schema.Raw("random()"))
 	})
 
 	cases := []struct {

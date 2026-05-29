@@ -134,6 +134,7 @@ type ColumnDef struct {
 	Default         any
 	HasDefault      bool
 	DefaultSQL      string
+	DefaultExpr     Expression
 	PrimaryKey      bool
 	AutoIncrement   bool
 	Unique          bool
@@ -628,6 +629,8 @@ func (c *Column[T]) Nullable() *Column[T] {
 func (c *Column[T]) Default(value T) *Column[T] {
 	c.def.HasDefault = true
 	c.def.Default = value
+	c.def.DefaultSQL = ""
+	c.def.DefaultExpr = nil
 	return c
 }
 
@@ -635,13 +638,20 @@ func (c *Column[T]) Default(value T) *Column[T] {
 func (c *Column[T]) DefaultNow() *Column[T] {
 	c.def.HasDefault = true
 	c.def.DefaultSQL = "CURRENT_TIMESTAMP"
+	c.def.Default = nil
+	c.def.DefaultExpr = nil
 	return c
 }
 
-// DefaultRaw sets a raw SQL string as the default value.
-func (c *Column[T]) DefaultRaw(sql string) *Column[T] {
+// DefaultRaw sets a raw SQL expression as the default value.
+func (c *Column[T]) DefaultRaw(expr Expression) *Column[T] {
+	if expr == nil {
+		panic("schema: DefaultRaw requires a non-nil expression")
+	}
 	c.def.HasDefault = true
-	c.def.DefaultSQL = sql
+	c.def.DefaultExpr = expr
+	c.def.Default = nil
+	c.def.DefaultSQL = ""
 	return c
 }
 
