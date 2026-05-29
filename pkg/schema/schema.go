@@ -638,6 +638,13 @@ func (c *Column[T]) DefaultNow() *Column[T] {
 	return c
 }
 
+// DefaultRaw sets a raw SQL string as the default value.
+func (c *Column[T]) DefaultRaw(sql string) *Column[T] {
+	c.def.HasDefault = true
+	c.def.DefaultSQL = sql
+	return c
+}
+
 // Unique marks the column as unique.
 func (c *Column[T]) Unique() *Column[T] {
 	c.def.Unique = true

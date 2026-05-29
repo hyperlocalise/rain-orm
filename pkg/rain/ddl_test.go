@@ -78,6 +78,77 @@ func defineDDLTables() (*ddlUsersTable, *ddlPostsTable, *ddlMembershipsTable) {
 	return users, posts, memberships
 }
 
+type ddlDefaultRawTable struct {
+	schema.TableModel
+	ID        *schema.Column[int64]
+	CreatedAt *schema.Column[time.Time]
+	Random    *schema.Column[float64]
+}
+
+func TestCreateTableSQLWithDefaultRaw(t *testing.T) {
+	t.Parallel()
+
+	table := schema.Define("default_raw_test", func(t *ddlDefaultRawTable) {
+		t.ID = t.BigSerial("id").PrimaryKey()
+		t.CreatedAt = t.TimestampTZ("created_at").NotNull().DefaultRaw("now()")
+		t.Random = t.Double("random").NotNull().DefaultRaw("random()")
+	})
+
+	cases := []struct {
+		name      string
+		dialect   string
+		fragments []string
+	}{
+		{
+			name:    "postgres default raw",
+			dialect: "postgres",
+			fragments: []string{
+				`"created_at" TIMESTAMPTZ NOT NULL DEFAULT now()`,
+				`"random" DOUBLE PRECISION NOT NULL DEFAULT random()`,
+			},
+		},
+		{
+			name:    "mysql default raw",
+			dialect: "mysql",
+			fragments: []string{
+				"`created_at` DATETIME NOT NULL DEFAULT now()",
+				"`random` DOUBLE NOT NULL DEFAULT random()",
+			},
+		},
+		{
+			name:    "sqlite default raw",
+			dialect: "sqlite",
+			fragments: []string{
+				`"created_at" TEXT NOT NULL DEFAULT now()`,
+				`"random" REAL NOT NULL DEFAULT random()`,
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			db, err := rain.OpenDialect(tc.dialect)
+			if err != nil {
+				t.Fatalf("OpenDialect(%q): %v", tc.dialect, err)
+			}
+
+			sql, err := db.CreateTableSQL(table)
+			if err != nil {
+				t.Fatalf("CreateTableSQL: %v", err)
+			}
+
+			for _, fragment := range tc.fragments {
+				if !strings.Contains(sql, fragment) {
+					t.Fatalf("expected SQL to contain %q, got:\n%s", fragment, sql)
+				}
+			}
+		})
+	}
+}
+
 func TestCreateTableSQLAcrossDialects(t *testing.T) {
 	t.Parallel()
 
