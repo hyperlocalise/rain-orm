@@ -1105,12 +1105,14 @@ func newRowScanPlanForColumns(cols []string, modelType reflect.Type, table *sche
 
 	var numInts, numStrings, numBools, numFloats, numTimes int
 
+	matchedFields := make(map[string]struct{}, len(cols))
 	for idx, name := range cols {
 		fieldInfo, ok := meta.byColumn[name]
 		if !ok {
 			plan.clearIndices = append(plan.clearIndices, idx)
 			continue
 		}
+		matchedFields[name] = struct{}{}
 
 		var columnDef *schema.ColumnDef
 		isJSON := false
@@ -1236,7 +1238,7 @@ func newRowScanPlanForColumns(cols []string, modelType reflect.Type, table *sche
 		plan.columns = append(plan.columns, colPlan)
 	}
 
-	if meta.allFieldsManaged && len(plan.columns) == meta.numManagedFields {
+	if meta.allFieldsManaged && len(matchedFields) == meta.numManagedFields {
 		plan.isFullScan = true
 	}
 
