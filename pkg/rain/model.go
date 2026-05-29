@@ -24,9 +24,11 @@ type modelField struct {
 }
 
 type modelMeta struct {
-	byColumn   map[string]modelField
-	byRelation map[string]modelField
-	err        error
+	byColumn         map[string]modelField
+	byRelation       map[string]modelField
+	allFieldsManaged bool
+	numManagedFields int
+	err              error
 }
 
 type scanColumnPlan struct {
@@ -64,6 +66,9 @@ type rowScanPlan struct {
 
 	// OPTIMIZATION: Track if we need a reflect.Value for any column.
 	needsTargetValue bool
+
+	// OPTIMIZATION: Track if this plan covers all fields of the target struct.
+	isFullScan bool
 
 	int64ValueCols   []scanColumnPlan
 	int64PointerCols []scanColumnPlan
@@ -125,8 +130,9 @@ func lookupModelMetaForType(typ reflect.Type) (*modelMeta, error) {
 	}
 
 	meta := &modelMeta{
-		byColumn:   make(map[string]modelField, typ.NumField()),
-		byRelation: make(map[string]modelField, typ.NumField()),
+		byColumn:         make(map[string]modelField, typ.NumField()),
+		byRelation:       make(map[string]modelField, typ.NumField()),
+		allFieldsManaged: true,
 	}
 	buildModelMeta(meta, typ, nil)
 	actual, _ := modelMetaCache.LoadOrStore(typ, meta)
@@ -138,9 +144,6 @@ func lookupModelMetaForType(typ reflect.Type) (*modelMeta, error) {
 func buildModelMeta(meta *modelMeta, typ reflect.Type, prefix []int) {
 	for fieldIndex := range typ.NumField() {
 		field := typ.Field(fieldIndex)
-		if field.PkgPath != "" && !field.Anonymous {
-			continue
-		}
 
 		current := append(append([]int{}, prefix...), fieldIndex)
 		if embedded := embeddedStructType(field); embedded != nil {
@@ -148,14 +151,21 @@ func buildModelMeta(meta *modelMeta, typ reflect.Type, prefix []int) {
 			continue
 		}
 
+		if field.PkgPath != "" {
+			meta.allFieldsManaged = false
+			continue
+		}
+
 		columnName, includeColumn, explicitColumn := columnNameForField(field)
 		if includeColumn {
 			addModelFieldMapping(meta.byColumn, &meta.err, columnName, current, "column", explicitColumn)
-		}
-
-		relationName := relationTagName(field.Tag.Get("rain"))
-		if relationName != "" {
-			addModelFieldMapping(meta.byRelation, &meta.err, relationName, current, "relation", true)
+			meta.numManagedFields++
+		} else {
+			meta.allFieldsManaged = false
+			relationName := relationTagName(field.Tag.Get("rain"))
+			if relationName != "" {
+				addModelFieldMapping(meta.byRelation, &meta.err, relationName, current, "relation", true)
+			}
 		}
 	}
 }
@@ -326,8 +336,13 @@ func scanRowsAgainstTableDirect(rows *sql.Rows, dest any, table *schema.TableDef
 			} else {
 				// Re-derive a reflect.Value for the element to reset it and handle non-offset columns.
 				item := reflect.NewAt(elemType, ptr).Elem()
-				// Reset existing element to its zero state before reuse to avoid data carry-over.
-				item.Set(zeroElem)
+
+				// OPTIMIZATION: Skip zeroing existing elements if the plan is a full scan.
+				// This allows us to reuse existing pointer allocations in the struct fields.
+				if !plan.isFullScan {
+					// Reset existing element to its zero state before reuse to avoid data carry-over.
+					item.Set(zeroElem)
+				}
 
 				var targetVal reflect.Value
 				if plan.needsTargetValue {
@@ -1090,12 +1105,14 @@ func newRowScanPlanForColumns(cols []string, modelType reflect.Type, table *sche
 
 	var numInts, numStrings, numBools, numFloats, numTimes int
 
+	matchedFields := make(map[string]struct{}, len(cols))
 	for idx, name := range cols {
 		fieldInfo, ok := meta.byColumn[name]
 		if !ok {
 			plan.clearIndices = append(plan.clearIndices, idx)
 			continue
 		}
+		matchedFields[name] = struct{}{}
 
 		var columnDef *schema.ColumnDef
 		isJSON := false
@@ -1219,6 +1236,10 @@ func newRowScanPlanForColumns(cols []string, modelType reflect.Type, table *sche
 			plan.otherCols = append(plan.otherCols, colPlan)
 		}
 		plan.columns = append(plan.columns, colPlan)
+	}
+
+	if meta.allFieldsManaged && len(matchedFields) == meta.numManagedFields {
+		plan.isFullScan = true
 	}
 
 	plan.pool.New = func() any {
