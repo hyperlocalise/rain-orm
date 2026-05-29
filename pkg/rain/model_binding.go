@@ -207,7 +207,7 @@ func supportsScanForColumn(column *schema.ColumnDef, fieldType reflect.Type) boo
 	baseType, _ := unwrapFieldType(fieldType)
 
 	switch column.Type.DataType {
-	case schema.TypeBigSerial, schema.TypeSmallInt, schema.TypeInteger, schema.TypeBigInt:
+	case schema.TypeSmallSerial, schema.TypeSerial, schema.TypeBigSerial, schema.TypeSmallInt, schema.TypeInteger, schema.TypeBigInt:
 		return isIntegerKind(baseType.Kind())
 	case schema.TypeReal, schema.TypeDouble:
 		return baseType.Kind() == reflect.Float32 || baseType.Kind() == reflect.Float64
@@ -242,7 +242,7 @@ func supportsWriteForColumn(column *schema.ColumnDef, fieldType reflect.Type) bo
 	baseType, _ := unwrapFieldType(fieldType)
 
 	switch column.Type.DataType {
-	case schema.TypeBigSerial, schema.TypeSmallInt, schema.TypeInteger, schema.TypeBigInt:
+	case schema.TypeSmallSerial, schema.TypeSerial, schema.TypeBigSerial, schema.TypeSmallInt, schema.TypeInteger, schema.TypeBigInt:
 		return isIntegerKind(baseType.Kind())
 	case schema.TypeReal, schema.TypeDouble:
 		return baseType.Kind() == reflect.Float32 || baseType.Kind() == reflect.Float64

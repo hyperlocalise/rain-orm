@@ -44,7 +44,7 @@ func (d *SQLiteDialect) DataType(columnType schema.ColumnType) string {
 	typ := normalizeType(columnType.DataType)
 
 	switch typ {
-	case "bigserial":
+	case "smallserial", "serial", "bigserial":
 		return "INTEGER"
 	case "string", "varchar", "text":
 		return "TEXT"

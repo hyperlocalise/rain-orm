@@ -367,7 +367,8 @@ func columnTypeSQL(d dialect.Dialect, column *schema.ColumnDef) string {
 		typeSQL = fmt.Sprintf("%s(%d)", typeSQL, column.Type.TimePrecision)
 	}
 
-	if column.AutoIncrement && d.Name() == "sqlite" && column.Type.DataType == schema.TypeBigSerial {
+	if column.AutoIncrement && d.Name() == "sqlite" &&
+		(column.Type.DataType == schema.TypeSmallSerial || column.Type.DataType == schema.TypeSerial || column.Type.DataType == schema.TypeBigSerial) {
 		return "INTEGER"
 	}
 
@@ -381,7 +382,7 @@ func shouldEmitAutoIncrementKeyword(d dialect.Dialect, column *schema.ColumnDef,
 	if !inlinePrimaryKey {
 		return false
 	}
-	if column.Type.DataType != schema.TypeBigSerial {
+	if column.Type.DataType != schema.TypeSmallSerial && column.Type.DataType != schema.TypeSerial && column.Type.DataType != schema.TypeBigSerial {
 		return true
 	}
 
