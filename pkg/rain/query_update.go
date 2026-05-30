@@ -74,6 +74,7 @@ func (q *UpdateQuery) ToSQL() (string, []any, error) {
 	}
 
 	ctx := newCompileContext(q.dialect)
+	defer releaseCompileContext(ctx)
 	ctx.writeString("UPDATE ")
 	ctx.writeTableName(q.table)
 	ctx.writeString(" SET ")

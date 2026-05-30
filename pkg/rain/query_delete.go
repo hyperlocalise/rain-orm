@@ -57,6 +57,7 @@ func (q *DeleteQuery) ToSQL() (string, []any, error) {
 	}
 
 	ctx := newCompileContext(q.dialect)
+	defer releaseCompileContext(ctx)
 	ctx.writeString("DELETE FROM ")
 	ctx.writeTableName(q.table)
 	if len(q.where) > 0 {

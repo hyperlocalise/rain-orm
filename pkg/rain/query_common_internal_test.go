@@ -26,39 +26,51 @@ func TestQueryCommonHelpers(t *testing.T) {
 		t.Fatalf("expected non-table select source to return nil, got %#v", got)
 	}
 
-	ctx := newCompileContext(dialectForTest(t, "postgres"))
-	if err := (subqueryTableSource{alias: "   ", query: &SelectQuery{dialect: ctx.dialect, table: tableDefSource{table: users.TableDef()}}}).writeSQL(ctx); err == nil || !strings.Contains(err.Error(), "non-empty alias") {
-		t.Fatalf("expected empty alias error, got %v", err)
-	}
+	t.Run("SubqueryAliasValidation", func(t *testing.T) {
+		ctx := newCompileContext(dialectForTest(t, "postgres"))
+		defer releaseCompileContext(ctx)
+		if err := (subqueryTableSource{alias: "   ", query: &SelectQuery{dialect: ctx.dialect, table: tableDefSource{table: users.TableDef()}}}).writeSQL(ctx); err == nil || !strings.Contains(err.Error(), "non-empty alias") {
+			t.Fatalf("expected empty alias error, got %v", err)
+		}
+	})
 
-	ctx = newCompileContext(dialectForTest(t, "postgres"))
-	if err := (subqueryTableSource{alias: "u", query: nil}).writeSQL(ctx); err == nil || !strings.Contains(err.Error(), "non-nil query") {
-		t.Fatalf("expected nil query error, got %v", err)
-	}
+	t.Run("SubqueryNilQueryValidation", func(t *testing.T) {
+		ctx := newCompileContext(dialectForTest(t, "postgres"))
+		defer releaseCompileContext(ctx)
+		if err := (subqueryTableSource{alias: "u", query: nil}).writeSQL(ctx); err == nil || !strings.Contains(err.Error(), "non-nil query") {
+			t.Fatalf("expected nil query error, got %v", err)
+		}
+	})
 
-	ctx = newCompileContext(dialectForTest(t, "postgres"))
-	err := (subqueryTableSource{
-		alias: "u",
-		query: &SelectQuery{
-			dialect: ctx.dialect,
-			table:   tableDefSource{table: users.TableDef()},
-			cols:    []schema.Expression{users.ID},
-		},
-	}).writeSQL(ctx)
-	if err != nil {
-		t.Fatalf("subqueryTableSource.writeSQL returned error: %v", err)
-	}
-	if !strings.Contains(ctx.String(), `AS "u"`) {
-		t.Fatalf("expected compiled subquery alias, got %q", ctx.String())
-	}
+	t.Run("SubqueryWriteSQL", func(t *testing.T) {
+		ctx := newCompileContext(dialectForTest(t, "postgres"))
+		defer releaseCompileContext(ctx)
+		err := (subqueryTableSource{
+			alias: "u",
+			query: &SelectQuery{
+				dialect: ctx.dialect,
+				table:   tableDefSource{table: users.TableDef()},
+				cols:    []schema.Expression{users.ID},
+			},
+		}).writeSQL(ctx)
+		if err != nil {
+			t.Fatalf("subqueryTableSource.writeSQL returned error: %v", err)
+		}
+		if !strings.Contains(ctx.String(), `AS "u"`) {
+			t.Fatalf("expected compiled subquery alias, got %q", ctx.String())
+		}
+	})
 
-	ctx = newCompileContext(dialectForTest(t, "postgres"))
-	if err := (subqueryTableSource{
-		alias: "broken",
-		query: &SelectQuery{dialect: ctx.dialect},
-	}).writeSQL(ctx); err == nil || !strings.Contains(err.Error(), "requires a table") {
-		t.Fatalf("expected nested query error, got %v", err)
-	}
+	t.Run("NestedQueryError", func(t *testing.T) {
+		ctx := newCompileContext(dialectForTest(t, "postgres"))
+		defer releaseCompileContext(ctx)
+		if err := (subqueryTableSource{
+			alias: "broken",
+			query: &SelectQuery{dialect: ctx.dialect},
+		}).writeSQL(ctx); err == nil || !strings.Contains(err.Error(), "requires a table") {
+			t.Fatalf("expected nested query error, got %v", err)
+		}
+	})
 }
 
 func TestCloseRows(t *testing.T) {

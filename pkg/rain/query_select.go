@@ -916,6 +916,7 @@ func (q *SelectQuery) compile() (compiledQuery, error) {
 	}
 
 	ctx := newCompileContext(q.dialect)
+	defer releaseCompileContext(ctx)
 	if err := q.writeSQL(ctx); err != nil {
 		return compiledQuery{}, err
 	}
@@ -940,6 +941,7 @@ func (q *SelectQuery) compileAggregate(selection string) (compiledQuery, error) 
 	}
 
 	ctx := newCompileContext(q.dialect)
+	defer releaseCompileContext(ctx)
 	ctx.writeString("SELECT ")
 	ctx.writeString(selection)
 	ctx.writeString(" FROM ")

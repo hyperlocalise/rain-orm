@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/hyperlocalise/rain-orm/pkg/dialect"
 	"github.com/hyperlocalise/rain-orm/pkg/schema"
@@ -84,11 +85,34 @@ type compileContext struct {
 	useLiterals bool
 }
 
+var compileContextPool = sync.Pool{
+	New: func() any {
+		return &compileContext{
+			argPlan: make([]compiledArg, 0, 8),
+		}
+	},
+}
+
 func newCompileContext(d dialect.Dialect) *compileContext {
-	return &compileContext{
-		dialect: d,
-		argPlan: make([]compiledArg, 0, 8),
-	}
+	ctx := compileContextPool.Get().(*compileContext)
+	ctx.reset(d)
+	return ctx
+}
+
+func releaseCompileContext(ctx *compileContext) {
+	compileContextPool.Put(ctx)
+}
+
+func (c *compileContext) reset(d dialect.Dialect) {
+	c.builder.Reset()
+	c.dialect = d
+	// Clear the argPlan slice to ensure any values it contains can be
+	// garbage collected before we reset its length for reuse.
+	clear(c.argPlan)
+	c.argPlan = c.argPlan[:0]
+	c.err = nil
+	c.skipCTEs = false
+	c.useLiterals = false
 }
 
 func (c *compileContext) String() string {
@@ -96,11 +120,15 @@ func (c *compileContext) String() string {
 }
 
 func (c *compileContext) compiledQuery() compiledQuery {
+	// OPTIMIZATION: Explicitly copy the argPlan slice so that the compileContext
+	// and its underlying array can be safely returned to the sync.Pool without
+	// causing data corruption for the caller of compiledQuery.
+	argPlan := append([]compiledArg(nil), c.argPlan...)
+
 	compiled := compiledQuery{
 		sql:     c.String(),
-		argPlan: make([]compiledArg, len(c.argPlan)),
+		argPlan: argPlan,
 	}
-	copy(compiled.argPlan, c.argPlan)
 	for _, arg := range compiled.argPlan {
 		if arg.kind == compiledArgNamedPlaceholder {
 			compiled.hasNames = true
