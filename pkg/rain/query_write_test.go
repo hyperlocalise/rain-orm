@@ -166,14 +166,21 @@ func TestDialectFeatures(t *testing.T) {
 				dialect.FeatureSelectDistinctOn,
 		},
 		{
-			name:     "mysql",
-			dialect:  "mysql",
-			features: dialect.FeatureOffset | dialect.FeatureUpsert | dialect.FeatureSavepoint | dialect.FeatureSelectLocking,
+			name:    "mysql",
+			dialect: "mysql",
+			features: dialect.FeatureOffset |
+				dialect.FeatureUpsert |
+				dialect.FeatureSavepoint |
+				dialect.FeatureSelectLocking |
+				dialect.FeatureCTE |
+				dialect.FeatureUpdateOrder |
+				dialect.FeatureUpdateLimit |
+				dialect.FeatureDeleteOrder |
+				dialect.FeatureDeleteLimit,
 			missing: []dialect.Feature{
 				dialect.FeatureInsertReturning,
 				dialect.FeatureUpdateReturning,
 				dialect.FeatureDeleteReturning,
-				dialect.FeatureCTE,
 				dialect.FeatureDefaultPlaceholder,
 			},
 		},
@@ -186,9 +193,13 @@ func TestDialectFeatures(t *testing.T) {
 				dialect.FeatureOffset |
 				dialect.FeatureUpsert |
 				dialect.FeatureSavepoint |
-				dialect.FeatureNullsOrder,
+				dialect.FeatureNullsOrder |
+				dialect.FeatureCTE |
+				dialect.FeatureUpdateOrder |
+				dialect.FeatureUpdateLimit |
+				dialect.FeatureDeleteOrder |
+				dialect.FeatureDeleteLimit,
 			missing: []dialect.Feature{
-				dialect.FeatureCTE,
 				dialect.FeatureDefaultPlaceholder,
 			},
 		},

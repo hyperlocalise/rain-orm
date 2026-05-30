@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"strings"
 
 	"github.com/hyperlocalise/rain-orm/pkg/dialect"
 	"github.com/hyperlocalise/rain-orm/pkg/schema"
@@ -385,32 +384,8 @@ func (q *SelectQuery) ToSQL() (string, []any, error) {
 }
 
 func (q *SelectQuery) writeSQL(ctx *compileContext) error {
-	if len(q.ctes) > 0 && !ctx.skipCTEs {
-		if !dialect.HasFeature(ctx.dialect.Features(), dialect.FeatureCTE) {
-			return fmt.Errorf("rain: select queries do not support CTEs for %s dialect", ctx.dialect.Name())
-		}
-		ctx.writeString("WITH ")
-		for idx, cte := range q.ctes {
-			if idx > 0 {
-				ctx.writeString(", ")
-			}
-			if strings.TrimSpace(cte.name) == "" {
-				return errors.New("rain: CTE name cannot be empty")
-			}
-			if cte.query == nil {
-				return fmt.Errorf("rain: CTE %q requires a query", cte.name)
-			}
-			if len(cte.query.ctes) > 0 {
-				return fmt.Errorf("rain: CTE %q body cannot itself contain CTEs", cte.name)
-			}
-			ctx.writeQuotedIdentifier(cte.name)
-			ctx.writeString(" AS (")
-			if err := cte.query.writeSQL(ctx); err != nil {
-				return err
-			}
-			ctx.writeByte(')')
-		}
-		ctx.writeByte(' ')
+	if err := writeCTEs(ctx, q.ctes, "select"); err != nil {
+		return err
 	}
 
 	if q.firstOperand != nil {
@@ -428,7 +403,7 @@ func (q *SelectQuery) writeSQL(ctx *compileContext) error {
 				return err
 			}
 		}
-		if err := q.writeOrderLimit(ctx); err != nil {
+		if err := writeOrderLimit(ctx, q.order, q.limit, q.offset, 0, dialect.FeatureOffset); err != nil {
 			return err
 		}
 		return q.writeLocking(ctx)
@@ -504,7 +479,7 @@ func (q *SelectQuery) writeSQL(ctx *compileContext) error {
 		}
 	}
 
-	if err := q.writeOrderLimit(ctx); err != nil {
+	if err := writeOrderLimit(ctx, q.order, q.limit, q.offset, 0, dialect.FeatureOffset); err != nil {
 		return err
 	}
 
@@ -602,35 +577,6 @@ func (q *SelectQuery) writeJoins(ctx *compileContext) error {
 		} else if join.on != nil {
 			return errors.New("rain: CROSS JOIN does not support an ON clause")
 		}
-	}
-	return nil
-}
-
-func (q *SelectQuery) writeOrderLimit(ctx *compileContext) error {
-	if len(q.order) > 0 {
-		ctx.writeString(" ORDER BY ")
-		for idx, item := range q.order {
-			if idx > 0 {
-				ctx.writeString(", ")
-			}
-			if err := ctx.writeExpression(item.Expr); err != nil {
-				return err
-			}
-			ctx.writeByte(' ')
-			ctx.writeString(string(item.Direction))
-			if item.NullsOrder != "" {
-				if !dialect.HasFeature(ctx.dialect.Features(), dialect.FeatureNullsOrder) {
-					return fmt.Errorf("rain: NULLS FIRST/LAST is not supported by %s dialect", ctx.dialect.Name())
-				}
-				ctx.writeByte(' ')
-				ctx.writeString(string(item.NullsOrder))
-			}
-		}
-	}
-
-	if clause := q.dialect.LimitOffset(q.limit, q.offset); clause != "" {
-		ctx.writeByte(' ')
-		ctx.writeString(clause)
 	}
 	return nil
 }
