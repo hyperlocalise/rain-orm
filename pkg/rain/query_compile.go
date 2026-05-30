@@ -106,6 +106,9 @@ func releaseCompileContext(ctx *compileContext) {
 func (c *compileContext) reset(d dialect.Dialect) {
 	c.builder.Reset()
 	c.dialect = d
+	// Clear the argPlan slice to ensure any values it contains can be
+	// garbage collected before we reset its length for reuse.
+	clear(c.argPlan)
 	c.argPlan = c.argPlan[:0]
 	c.err = nil
 	c.skipCTEs = false
