@@ -748,17 +748,17 @@ func TestCoverageDDLMethodsAndHelpers(t *testing.T) {
 		{value: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC), want: "'2026-01-02T03:04:05Z'"},
 		{value: []byte("abc"), want: "'abc'"},
 	} {
-		if got, err := columnDefaultSQL(pg, &schema.ColumnDef{Name: "x", Default: tc.value}); err != nil || got != tc.want {
+		if got, err := columnDefaultSQL(pg, users.TableDef(), &schema.ColumnDef{Name: "x", Default: tc.value}); err != nil || got != tc.want {
 			t.Fatalf("unexpected columnDefaultSQL for %#v: %q err=%v", tc.value, got, err)
 		}
 		if got, err := literalDDLSQL(pg, tc.value); err != nil || got != tc.want {
 			t.Fatalf("unexpected literalDDLSQL for %#v: %q err=%v", tc.value, got, err)
 		}
 	}
-	if got, err := columnDefaultSQL(pg, &schema.ColumnDef{Name: "x", DefaultSQL: "NOW()"}); err != nil || got != "NOW()" {
+	if got, err := columnDefaultSQL(pg, users.TableDef(), &schema.ColumnDef{Name: "x", DefaultSQL: "NOW()"}); err != nil || got != "NOW()" {
 		t.Fatalf("unexpected DefaultSQL passthrough: %q err=%v", got, err)
 	}
-	if _, err := columnDefaultSQL(pg, &schema.ColumnDef{Name: "x", Default: struct{}{}}); err == nil {
+	if _, err := columnDefaultSQL(pg, users.TableDef(), &schema.ColumnDef{Name: "x", Default: struct{}{}}); err == nil {
 		t.Fatalf("expected unsupported default type to fail")
 	}
 	if _, err := literalDDLSQL(pg, struct{}{}); err == nil {

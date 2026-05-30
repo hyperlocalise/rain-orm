@@ -140,11 +140,11 @@ func (db *DB) ColumnDefaultSQL(table schema.TableReference, columnName string) (
 	if !ok {
 		return "", fmt.Errorf("rain: table %q has no column %q", tableDef.Name, columnName)
 	}
-	if !column.HasDefault && column.DefaultSQL == "" {
+	if !column.HasDefault && column.DefaultSQL == "" && column.DefaultExpr == nil {
 		return "", nil
 	}
 
-	return columnDefaultSQL(db.dialect, column)
+	return columnDefaultSQL(db.dialect, tableDef, column)
 }
 
 func createTableSQL(d dialect.Dialect, table *schema.TableDef) (string, error) {
@@ -342,8 +342,8 @@ func columnDefinitionSQL(d dialect.Dialect, table *schema.TableDef, column *sche
 	if column.Unique {
 		parts = append(parts, "UNIQUE")
 	}
-	if column.HasDefault || column.DefaultSQL != "" {
-		defaultSQL, err := columnDefaultSQL(d, column)
+	if column.HasDefault || column.DefaultSQL != "" || column.DefaultExpr != nil {
+		defaultSQL, err := columnDefaultSQL(d, table, column)
 		if err != nil {
 			return "", err
 		}
@@ -396,7 +396,11 @@ func shouldEmitAutoIncrementKeyword(d dialect.Dialect, column *schema.ColumnDef,
 	}
 }
 
-func columnDefaultSQL(d dialect.Dialect, column *schema.ColumnDef) (string, error) {
+func columnDefaultSQL(d dialect.Dialect, table *schema.TableDef, column *schema.ColumnDef) (string, error) {
+	if column.DefaultExpr != nil {
+		return expressionDDLSQL(d, table, column.DefaultExpr)
+	}
+
 	if column.DefaultSQL != "" {
 		return column.DefaultSQL, nil
 	}
