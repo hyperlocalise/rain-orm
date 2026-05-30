@@ -552,6 +552,7 @@ func createViewSQL(d dialect.Dialect, table *schema.TableDef) (string, error) {
 	}
 
 	ctx := newCompileContext(d)
+	defer releaseCompileContext(ctx)
 	ctx.useLiterals = true
 	ctx.writeString("CREATE VIEW ")
 	ctx.writeQuotedIdentifier(table.Name)

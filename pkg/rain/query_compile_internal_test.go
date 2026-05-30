@@ -119,21 +119,27 @@ func TestCompileContextAndAssignmentsHelpers(t *testing.T) {
 
 	users, posts := defineInternalQueryTables()
 
-	ctx := newCompileContext(dialectForTest(t, "postgres"))
-	if err := ctx.writeRaw(schema.Raw("NOW()")); err != nil {
-		t.Fatalf("writeRaw without args failed: %v", err)
-	}
-	if ctx.String() != "NOW()" {
-		t.Fatalf("unexpected raw SQL: %s", ctx.String())
-	}
+	t.Run("WriteRawWithoutArgs", func(t *testing.T) {
+		ctx := newCompileContext(dialectForTest(t, "postgres"))
+		defer releaseCompileContext(ctx)
+		if err := ctx.writeRaw(schema.Raw("NOW()")); err != nil {
+			t.Fatalf("writeRaw without args failed: %v", err)
+		}
+		if ctx.String() != "NOW()" {
+			t.Fatalf("unexpected raw SQL: %s", ctx.String())
+		}
+	})
 
-	ctx = newCompileContext(dialectForTest(t, "postgres"))
-	if err := ctx.writeRaw(schema.Raw("? + ?", 1, 2)); err != nil {
-		t.Fatalf("writeRaw placeholders failed: %v", err)
-	}
-	if ctx.String() != "$1 + $2" {
-		t.Fatalf("unexpected placeholder SQL: %s", ctx.String())
-	}
+	t.Run("WriteRawWithPlaceholders", func(t *testing.T) {
+		ctx := newCompileContext(dialectForTest(t, "postgres"))
+		defer releaseCompileContext(ctx)
+		if err := ctx.writeRaw(schema.Raw("? + ?", 1, 2)); err != nil {
+			t.Fatalf("writeRaw placeholders failed: %v", err)
+		}
+		if ctx.String() != "$1 + $2" {
+			t.Fatalf("unexpected placeholder SQL: %s", ctx.String())
+		}
+	})
 
 	for _, tc := range []struct {
 		name    string
@@ -146,6 +152,7 @@ func TestCompileContextAndAssignmentsHelpers(t *testing.T) {
 	} {
 		t.Run("named placeholder "+tc.name, func(t *testing.T) {
 			ctx := newCompileContext(dialectForTest(t, tc.dialect))
+			defer releaseCompileContext(ctx)
 			expr := schema.And(
 				users.Email.EqExpr(schema.Placeholder("email")),
 				users.Active.EqExpr(schema.Placeholder("active")),
@@ -177,24 +184,53 @@ func TestCompileContextAndAssignmentsHelpers(t *testing.T) {
 		})
 	}
 
-	if err := newCompileContext(dialectForTest(t, "postgres")).writeRaw(schema.Raw("?", 1, 2)); err == nil || !strings.Contains(err.Error(), "unused args") {
-		t.Fatalf("expected raw unused args error, got %v", err)
-	}
-	if err := newCompileContext(dialectForTest(t, "postgres")).writeRaw(schema.Raw("? ?", 1)); err == nil || !strings.Contains(err.Error(), "placeholder count") {
-		t.Fatalf("expected raw placeholder mismatch error, got %v", err)
-	}
-	if err := newCompileContext(dialectForTest(t, "postgres")).writeExpression(schema.CoalesceExpr{Exprs: []schema.Expression{users.Email}}); err == nil || !strings.Contains(err.Error(), "at least two expressions") {
-		t.Fatalf("expected COALESCE arity error, got %v", err)
-	}
-	if err := newCompileContext(dialectForTest(t, "postgres")).writeExpression(schema.CaseExpr{}); err == nil || !strings.Contains(err.Error(), "CASE expression requires at least one WHEN clause") {
-		t.Fatalf("expected CASE arity error, got %v", err)
-	}
-	if err := newCompileContext(dialectForTest(t, "postgres")).writeExpression(users.ID.In()); err == nil || !strings.Contains(err.Error(), "requires at least one value") {
-		t.Fatalf("expected empty IN error, got %v", err)
-	}
-	if err := newCompileContext(dialectForTest(t, "postgres")).writeExpression(nil); err == nil || !strings.Contains(err.Error(), "unsupported expression type") {
-		t.Fatalf("expected unsupported expression error, got %v", err)
-	}
+	t.Run("RawUnusedArgsError", func(t *testing.T) {
+		ctx := newCompileContext(dialectForTest(t, "postgres"))
+		defer releaseCompileContext(ctx)
+		if err := ctx.writeRaw(schema.Raw("?", 1, 2)); err == nil || !strings.Contains(err.Error(), "unused args") {
+			t.Fatalf("expected raw unused args error, got %v", err)
+		}
+	})
+
+	t.Run("RawPlaceholderMismatchError", func(t *testing.T) {
+		ctx := newCompileContext(dialectForTest(t, "postgres"))
+		defer releaseCompileContext(ctx)
+		if err := ctx.writeRaw(schema.Raw("? ?", 1)); err == nil || !strings.Contains(err.Error(), "placeholder count") {
+			t.Fatalf("expected raw placeholder mismatch error, got %v", err)
+		}
+	})
+
+	t.Run("CoalesceArityError", func(t *testing.T) {
+		ctx := newCompileContext(dialectForTest(t, "postgres"))
+		defer releaseCompileContext(ctx)
+		if err := ctx.writeExpression(schema.CoalesceExpr{Exprs: []schema.Expression{users.Email}}); err == nil || !strings.Contains(err.Error(), "at least two expressions") {
+			t.Fatalf("expected COALESCE arity error, got %v", err)
+		}
+	})
+
+	t.Run("CaseArityError", func(t *testing.T) {
+		ctx := newCompileContext(dialectForTest(t, "postgres"))
+		defer releaseCompileContext(ctx)
+		if err := ctx.writeExpression(schema.CaseExpr{}); err == nil || !strings.Contains(err.Error(), "CASE expression requires at least one WHEN clause") {
+			t.Fatalf("expected CASE arity error, got %v", err)
+		}
+	})
+
+	t.Run("EmptyInError", func(t *testing.T) {
+		ctx := newCompileContext(dialectForTest(t, "postgres"))
+		defer releaseCompileContext(ctx)
+		if err := ctx.writeExpression(users.ID.In()); err == nil || !strings.Contains(err.Error(), "requires at least one value") {
+			t.Fatalf("expected empty IN error, got %v", err)
+		}
+	})
+
+	t.Run("UnsupportedExpressionError", func(t *testing.T) {
+		ctx := newCompileContext(dialectForTest(t, "postgres"))
+		defer releaseCompileContext(ctx)
+		if err := ctx.writeExpression(nil); err == nil || !strings.Contains(err.Error(), "unsupported expression type") {
+			t.Fatalf("expected unsupported expression error, got %v", err)
+		}
+	})
 
 	merged, err := mergeAssignments(users.TableDef(),
 		[]assignment{
@@ -426,6 +462,7 @@ func TestNewOperatorsSQL(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := newCompileContext(d)
+			defer releaseCompileContext(ctx)
 			if err := ctx.writeExpression(tc.expr); err != nil {
 				t.Fatalf("writeExpression failed: %v", err)
 			}

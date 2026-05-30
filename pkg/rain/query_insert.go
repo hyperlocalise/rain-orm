@@ -134,6 +134,7 @@ func (q *InsertQuery) ToSQL() (string, []any, error) {
 	}
 
 	ctx := newCompileContext(q.dialect)
+	defer releaseCompileContext(ctx)
 	ctx.writeString("INSERT INTO ")
 	ctx.writeTableName(q.table)
 	ctx.writeString(" (")
@@ -190,6 +191,7 @@ func (q *InsertQuery) toSelectSQL() (string, []any, error) {
 	}
 
 	ctx := newCompileContext(q.dialect)
+	defer releaseCompileContext(ctx)
 	ctx.writeString("INSERT INTO ")
 	ctx.writeTableName(q.table)
 
