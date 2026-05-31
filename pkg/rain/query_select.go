@@ -28,8 +28,8 @@ type SelectQuery struct {
 	setOps        []setOperation
 	distinct      bool
 	distinctOn    []schema.Expression
-	limit         int
-	offset        int
+	limit         *int
+	offset        *int
 	relationNames []string
 	cacheOptions  *queryCacheOptions
 	locking       *selectLocking
@@ -158,13 +158,13 @@ func (q *SelectQuery) OrderBy(order ...schema.OrderExpr) *SelectQuery {
 
 // Limit sets the LIMIT clause.
 func (q *SelectQuery) Limit(limit int) *SelectQuery {
-	q.limit = limit
+	q.limit = &limit
 	return q
 }
 
 // Offset sets the OFFSET clause.
 func (q *SelectQuery) Offset(offset int) *SelectQuery {
-	q.offset = offset
+	q.offset = &offset
 	return q
 }
 
@@ -285,6 +285,14 @@ func (q *SelectQuery) clone() *SelectQuery {
 	newQ.setOps = append([]setOperation(nil), q.setOps...)
 	newQ.distinctOn = append([]schema.Expression(nil), q.distinctOn...)
 	newQ.relationNames = append([]string(nil), q.relationNames...)
+	if q.limit != nil {
+		l := *q.limit
+		newQ.limit = &l
+	}
+	if q.offset != nil {
+		o := *q.offset
+		newQ.offset = &o
+	}
 	if q.locking != nil {
 		copyLocking := *q.locking
 		copyLocking.of = append([]schema.TableReference(nil), q.locking.of...)
@@ -336,7 +344,7 @@ func (q *SelectQuery) withSQLiteInsertSelectConflictWhereChanged() (*SelectQuery
 
 func (q *SelectQuery) isBareCompound() bool {
 	return q.firstOperand != nil &&
-		len(q.order) == 0 && q.limit == 0 && q.offset == 0 &&
+		len(q.order) == 0 && q.limit == nil && q.offset == nil &&
 		!q.distinct && len(q.distinctOn) == 0 && len(q.cols) == 0 && q.table == nil &&
 		len(q.where) == 0 && len(q.joins) == 0 &&
 		len(q.groupBy) == 0 && len(q.having) == 0 &&
@@ -403,7 +411,7 @@ func (q *SelectQuery) writeSQL(ctx *compileContext) error {
 				return err
 			}
 		}
-		if err := writeOrderLimit(ctx, q.order, q.limit, q.offset, 0, dialect.FeatureOffset); err != nil {
+		if err := writeOrderLimit(ctx, q.order, q.limit, q.offset, dialect.FeatureUnlimited, dialect.FeatureUnlimited); err != nil {
 			return err
 		}
 		return q.writeLocking(ctx)
@@ -479,7 +487,7 @@ func (q *SelectQuery) writeSQL(ctx *compileContext) error {
 		}
 	}
 
-	if err := writeOrderLimit(ctx, q.order, q.limit, q.offset, 0, dialect.FeatureOffset); err != nil {
+	if err := writeOrderLimit(ctx, q.order, q.limit, q.offset, dialect.FeatureUnlimited, dialect.FeatureUnlimited); err != nil {
 		return err
 	}
 
@@ -539,7 +547,7 @@ func (q *SelectQuery) writeCompoundOperandSQL(ctx *compileContext) error {
 	}
 	// Use parentheses if the operand has its own ORDER BY, LIMIT, locking, or is itself a compound query.
 	// Flattening is handled during builder chaining in wrapSetOp.
-	useParens := len(q.order) > 0 || q.limit > 0 || q.offset > 0 || q.locking != nil || q.firstOperand != nil
+	useParens := len(q.order) > 0 || q.limit != nil || q.offset != nil || q.locking != nil || q.firstOperand != nil
 	if useParens {
 		ctx.writeByte('(')
 	}

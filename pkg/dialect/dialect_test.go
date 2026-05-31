@@ -134,7 +134,7 @@ func TestPostgresDialect(t *testing.T) {
 	if got := d.Name(); got != "postgres" {
 		t.Fatalf("unexpected name: %q", got)
 	}
-	if got := d.Features(); got != FeatureInsertReturning|FeatureUpdateReturning|FeatureDeleteReturning|FeatureOffset|FeatureUpsert|FeatureCTE|FeatureDefaultPlaceholder|FeatureSavepoint|FeatureSelectLocking|FeatureNullsOrder|FeatureSelectDistinctOn {
+	if got := d.Features(); got != FeatureInsertReturning|FeatureUpdateReturning|FeatureDeleteReturning|FeatureOffset|FeatureUpsert|FeatureCTE|FeatureDefaultPlaceholder|FeatureSavepoint|FeatureSelectLocking|FeatureNullsOrder|FeatureSelectDistinctOn|FeatureUnlimited {
 		t.Fatalf("unexpected features: %b", got)
 	}
 	if got := d.QuoteIdentifier(`user"name`); got != `"user""name"` {
@@ -193,10 +193,10 @@ func TestPostgresDialect(t *testing.T) {
 	if got := d.LimitOffset(10, 0); got != "LIMIT 10" {
 		t.Fatalf("unexpected limit only clause: %q", got)
 	}
-	if got := d.LimitOffset(0, 20); got != "OFFSET 20" {
+	if got := d.LimitOffset(0, 20); got != "LIMIT 0 OFFSET 20" {
 		t.Fatalf("unexpected offset only clause: %q", got)
 	}
-	if got := d.LimitOffset(0, 0); got != "" {
+	if got := d.LimitOffset(0, 0); got != "LIMIT 0" {
 		t.Fatalf("unexpected empty limit clause: %q", got)
 	}
 	if got := d.UpsertClause("users", []string{"email"}, []string{"name"}); got != "ON CONFLICT DO UPDATE" {
@@ -224,7 +224,7 @@ func TestMySQLDialect(t *testing.T) {
 	if got := d.Name(); got != "mysql" {
 		t.Fatalf("unexpected name: %q", got)
 	}
-	if got := d.Features(); got != FeatureOffset|FeatureUpsert|FeatureSavepoint|FeatureSelectLocking|FeatureCTE|FeatureUpdateOrder|FeatureUpdateLimit|FeatureDeleteOrder|FeatureDeleteLimit {
+	if got := d.Features(); got != FeatureOffset|FeatureUpsert|FeatureSavepoint|FeatureSelectLocking|FeatureCTE|FeatureUpdateOrder|FeatureUpdateLimit|FeatureDeleteOrder|FeatureDeleteLimit|FeatureUnlimited {
 		t.Fatalf("unexpected features: %b", got)
 	}
 	if got := d.QuoteIdentifier("user`name"); got != "`user``name`" {
@@ -283,10 +283,10 @@ func TestMySQLDialect(t *testing.T) {
 	if got := d.LimitOffset(10, 0); got != "LIMIT 10" {
 		t.Fatalf("unexpected limit only clause: %q", got)
 	}
-	if got := d.LimitOffset(0, 20); got != "LIMIT 18446744073709551615 OFFSET 20" {
+	if got := d.LimitOffset(0, 20); got != "LIMIT 20, 0" {
 		t.Fatalf("unexpected offset only clause: %q", got)
 	}
-	if got := d.LimitOffset(0, 0); got != "" {
+	if got := d.LimitOffset(0, 0); got != "LIMIT 0" {
 		t.Fatalf("unexpected empty limit clause: %q", got)
 	}
 	if got := d.UpsertClause("users", []string{"email"}, []string{"name"}); got != "ON DUPLICATE KEY UPDATE" {
@@ -314,7 +314,7 @@ func TestSQLiteDialect(t *testing.T) {
 	if got := d.Name(); got != "sqlite" {
 		t.Fatalf("unexpected name: %q", got)
 	}
-	if got := d.Features(); got != FeatureInsertReturning|FeatureUpdateReturning|FeatureDeleteReturning|FeatureOffset|FeatureUpsert|FeatureSavepoint|FeatureNullsOrder|FeatureCTE|FeatureUpdateOrder|FeatureUpdateLimit|FeatureDeleteOrder|FeatureDeleteLimit {
+	if got := d.Features(); got != FeatureInsertReturning|FeatureUpdateReturning|FeatureDeleteReturning|FeatureOffset|FeatureUpsert|FeatureSavepoint|FeatureNullsOrder|FeatureCTE|FeatureUpdateOrder|FeatureUpdateLimit|FeatureDeleteOrder|FeatureDeleteLimit|FeatureUnlimited {
 		t.Fatalf("unexpected features: %b", got)
 	}
 	if got := d.QuoteIdentifier(`user"name`); got != `"user""name"` {
@@ -368,10 +368,10 @@ func TestSQLiteDialect(t *testing.T) {
 	if got := d.LimitOffset(10, 0); got != "LIMIT 10" {
 		t.Fatalf("unexpected limit only clause: %q", got)
 	}
-	if got := d.LimitOffset(0, 20); got != "LIMIT -1 OFFSET 20" {
+	if got := d.LimitOffset(0, 20); got != "LIMIT 0 OFFSET 20" {
 		t.Fatalf("unexpected offset only clause: %q", got)
 	}
-	if got := d.LimitOffset(0, 0); got != "" {
+	if got := d.LimitOffset(0, 0); got != "LIMIT 0" {
 		t.Fatalf("unexpected empty limit clause: %q", got)
 	}
 	if got := d.UpsertClause("users", []string{"email"}, []string{"name"}); got != "ON CONFLICT DO UPDATE" {

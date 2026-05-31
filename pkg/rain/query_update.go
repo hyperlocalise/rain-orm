@@ -18,7 +18,7 @@ type UpdateQuery struct {
 	values    []assignment
 	where     []schema.Predicate
 	order     []schema.OrderExpr
-	limit     int
+	limit     *int
 	ctes      []cteDefinition
 	returning []schema.Expression
 	unbounded bool
@@ -71,7 +71,7 @@ func (q *UpdateQuery) OrderBy(order ...schema.OrderExpr) *UpdateQuery {
 // Limit sets the LIMIT clause.
 // Supported by MySQL and SQLite.
 func (q *UpdateQuery) Limit(limit int) *UpdateQuery {
-	q.limit = limit
+	q.limit = &limit
 	return q
 }
 
@@ -127,7 +127,7 @@ func (q *UpdateQuery) ToSQL() (string, []any, error) {
 		}
 	}
 
-	if err := writeOrderLimit(ctx, q.order, q.limit, 0, dialect.FeatureUpdateOrder, dialect.FeatureUpdateLimit); err != nil {
+	if err := writeOrderLimit(ctx, q.order, q.limit, nil, dialect.FeatureUpdateOrder, dialect.FeatureUpdateLimit); err != nil {
 		return "", nil, err
 	}
 
