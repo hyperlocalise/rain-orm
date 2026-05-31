@@ -975,6 +975,10 @@ func (q *SelectQuery) compileExists() (compiledQuery, error) {
 }
 
 func wrapExistsCompiled(compiled compiledQuery) (compiledQuery, error) {
+	// NOTE: This shallow copies the input compiledQuery and wraps the SQL.
+	// The argPlan and args slices are shared with the original. This is safe
+	// because compileExists (the only caller) does not use the original after
+	// this call.
 	compiled.sql = "SELECT EXISTS(" + compiled.sql + ")"
 	return compiled, nil
 }

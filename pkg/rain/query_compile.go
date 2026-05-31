@@ -34,7 +34,10 @@ func (q compiledQuery) literalArgs() ([]any, error) {
 	if q.hasNames {
 		return nil, ErrPreparedArgsRequired
 	}
-	return q.args, nil
+	// OPTIMIZATION: Return a fresh copy of the pre-calculated arguments to avoid
+	// shared state footguns if the caller modifies the slice, while still
+	// avoiding the overhead of rebuilding the slice from argPlan.
+	return append([]any(nil), q.args...), nil
 }
 
 func (q compiledQuery) bind(args PreparedArgs) ([]any, error) {
@@ -42,7 +45,9 @@ func (q compiledQuery) bind(args PreparedArgs) ([]any, error) {
 		if len(args) > 0 {
 			return nil, fmt.Errorf("rain: unexpected prepared args for query without placeholders")
 		}
-		return q.args, nil
+		// OPTIMIZATION: Return a fresh copy of the pre-calculated arguments to avoid
+		// shared state footguns if the caller modifies the slice.
+		return append([]any(nil), q.args...), nil
 	}
 
 	seen := make(map[string]struct{}, len(args))
