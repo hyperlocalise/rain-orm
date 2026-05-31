@@ -67,23 +67,71 @@ func (q *DeleteQuery) Unbounded() *DeleteQuery {
 	return q
 }
 
+// Prepare compiles and prepares the DELETE query.
+func (q *DeleteQuery) Prepare(ctx context.Context) (*PreparedDeleteQuery, error) {
+	if q.runner == nil {
+		return nil, ErrNoConnection
+	}
+
+	runner, ok := q.runner.(preparingQueryRunner)
+	if !ok {
+		return nil, ErrPrepareNotSupported
+	}
+
+	compiled, err := q.compile()
+	if err != nil {
+		return nil, err
+	}
+
+	stmt, err := runner.prepareContext(ctx, compiled.sql)
+	if err != nil {
+		return nil, err
+	}
+
+	return &PreparedDeleteQuery{
+		table:    q.table,
+		compiled: compiled,
+		stmt:     stmt,
+	}, nil
+}
+
 // ToSQL compiles the delete into SQL and args.
 func (q *DeleteQuery) ToSQL() (string, []any, error) {
+	compiled, err := q.compile()
+	if err != nil {
+		return "", nil, err
+	}
+	args, err := compiled.literalArgs()
+	if err != nil {
+		return "", nil, err
+	}
+	return compiled.sql, args, nil
+}
+
+func (q *DeleteQuery) compile() (compiledQuery, error) {
 	if q.table == nil {
-		return "", nil, errors.New("rain: delete query requires a table")
+		return compiledQuery{}, errors.New("rain: delete query requires a table")
 	}
 	if q.table.IsView {
-		return "", nil, fmt.Errorf("rain: cannot delete from view %q", q.table.Name)
+		return compiledQuery{}, fmt.Errorf("rain: cannot delete from view %q", q.table.Name)
 	}
 	if len(q.where) == 0 && !q.unbounded {
-		return "", nil, errors.New("rain: delete query requires at least one WHERE predicate; call Unbounded() to allow all rows")
+		return compiledQuery{}, errors.New("rain: delete query requires at least one WHERE predicate; call Unbounded() to allow all rows")
 	}
 
 	ctx := newCompileContext(q.dialect)
 	defer releaseCompileContext(ctx)
 
+	if err := q.writeSQL(ctx); err != nil {
+		return compiledQuery{}, err
+	}
+
+	return ctx.compiledQuery(), ctx.err
+}
+
+func (q *DeleteQuery) writeSQL(ctx *compileContext) error {
 	if err := writeCTEs(ctx, q.ctes, "delete"); err != nil {
-		return "", nil, err
+		return err
 	}
 
 	ctx.writeString("DELETE FROM ")
@@ -91,24 +139,15 @@ func (q *DeleteQuery) ToSQL() (string, []any, error) {
 	if len(q.where) > 0 {
 		ctx.writeString(" WHERE ")
 		if err := ctx.writePredicate(joinPredicates(q.where)); err != nil {
-			return "", nil, err
+			return err
 		}
 	}
 
 	if err := writeOrderLimit(ctx, q.order, q.limit, nil, dialect.FeatureDeleteOrder, dialect.FeatureDeleteLimit); err != nil {
-		return "", nil, err
+		return err
 	}
 
-	if err := ctx.writeReturning(q.returning, q.returningClause()); err != nil {
-		return "", nil, err
-	}
-
-	compiled := ctx.compiledQuery()
-	args, err := compiled.literalArgs()
-	if err != nil {
-		return "", nil, err
-	}
-	return compiled.sql, args, ctx.err
+	return ctx.writeReturning(q.returning, q.returningClause())
 }
 
 func (q *DeleteQuery) returningClause() returningClause {
