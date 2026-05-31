@@ -81,26 +81,74 @@ func (q *UpdateQuery) Unbounded() *UpdateQuery {
 	return q
 }
 
+// Prepare compiles and prepares the UPDATE query.
+func (q *UpdateQuery) Prepare(ctx context.Context) (*PreparedUpdateQuery, error) {
+	if q.runner == nil {
+		return nil, ErrNoConnection
+	}
+
+	runner, ok := q.runner.(preparingQueryRunner)
+	if !ok {
+		return nil, ErrPrepareNotSupported
+	}
+
+	compiled, err := q.compile()
+	if err != nil {
+		return nil, err
+	}
+
+	stmt, err := runner.prepareContext(ctx, compiled.sql)
+	if err != nil {
+		return nil, err
+	}
+
+	return &PreparedUpdateQuery{
+		table:    q.table,
+		compiled: compiled,
+		stmt:     stmt,
+	}, nil
+}
+
 // ToSQL compiles the update into SQL and args.
 func (q *UpdateQuery) ToSQL() (string, []any, error) {
+	compiled, err := q.compile()
+	if err != nil {
+		return "", nil, err
+	}
+	args, err := compiled.literalArgs()
+	if err != nil {
+		return "", nil, err
+	}
+	return compiled.sql, args, nil
+}
+
+func (q *UpdateQuery) compile() (compiledQuery, error) {
 	if q.table == nil {
-		return "", nil, errors.New("rain: update query requires a table")
+		return compiledQuery{}, errors.New("rain: update query requires a table")
 	}
 	if q.table.IsView {
-		return "", nil, fmt.Errorf("rain: cannot update view %q", q.table.Name)
+		return compiledQuery{}, fmt.Errorf("rain: cannot update view %q", q.table.Name)
 	}
 	if len(q.values) == 0 {
-		return "", nil, errors.New("rain: update query requires at least one assignment")
+		return compiledQuery{}, errors.New("rain: update query requires at least one assignment")
 	}
 	if len(q.where) == 0 && !q.unbounded {
-		return "", nil, errors.New("rain: update query requires at least one WHERE predicate; call Unbounded() to allow all rows")
+		return compiledQuery{}, errors.New("rain: update query requires at least one WHERE predicate; call Unbounded() to allow all rows")
 	}
 
 	ctx := newCompileContext(q.dialect)
 	defer releaseCompileContext(ctx)
 
+	if err := q.writeSQL(ctx); err != nil {
+		return compiledQuery{}, err
+	}
+
+	return ctx.compiledQuery(), ctx.err
+}
+
+func (q *UpdateQuery) writeSQL(ctx *compileContext) error {
 	if err := writeCTEs(ctx, q.ctes, "update"); err != nil {
-		return "", nil, err
+		return err
 	}
 
 	ctx.writeString("UPDATE ")
@@ -108,7 +156,7 @@ func (q *UpdateQuery) ToSQL() (string, []any, error) {
 	ctx.writeString(" SET ")
 	for idx, item := range q.values {
 		if err := validateAssignmentTarget(q.table, item); err != nil {
-			return "", nil, err
+			return err
 		}
 		if idx > 0 {
 			ctx.writeString(", ")
@@ -116,31 +164,22 @@ func (q *UpdateQuery) ToSQL() (string, []any, error) {
 		ctx.writeQuotedIdentifier(item.column.ColumnDef().Name)
 		ctx.writeString(" = ")
 		if err := ctx.writeExpression(item.value); err != nil {
-			return "", nil, err
+			return err
 		}
 	}
 
 	if len(q.where) > 0 {
 		ctx.writeString(" WHERE ")
 		if err := ctx.writePredicate(joinPredicates(q.where)); err != nil {
-			return "", nil, err
+			return err
 		}
 	}
 
 	if err := writeOrderLimit(ctx, q.order, q.limit, nil, dialect.FeatureUpdateOrder, dialect.FeatureUpdateLimit); err != nil {
-		return "", nil, err
+		return err
 	}
 
-	if err := ctx.writeReturning(q.returning, q.returningClause()); err != nil {
-		return "", nil, err
-	}
-
-	compiled := ctx.compiledQuery()
-	args, err := compiled.literalArgs()
-	if err != nil {
-		return "", nil, err
-	}
-	return compiled.sql, args, ctx.err
+	return ctx.writeReturning(q.returning, q.returningClause())
 }
 
 func (q *UpdateQuery) returningClause() returningClause {

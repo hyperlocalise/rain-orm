@@ -818,6 +818,106 @@ func TestSQLiteIntegrationRichAdvancedSelectsAndPreparedQueries(t *testing.T) {
 	}
 }
 
+func TestSQLiteIntegrationPreparedExecQueries(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db := openSQLiteTestDB(t)
+	users, _, _ := defineSQLiteTables()
+	createSQLiteSchema(t, ctx, db)
+
+	// Prepare INSERT
+	prepInsert, err := db.Insert().
+		Table(users).
+		Set(users.Email, schema.Placeholder("email")).
+		Set(users.Name, schema.Placeholder("name")).
+		Prepare(ctx)
+	if err != nil {
+		t.Fatalf("prepare insert failed: %v", err)
+	}
+	defer func() { _ = prepInsert.Close() }()
+
+	res, err := prepInsert.Exec(ctx, rain.PreparedArgs{
+		"email": "prep@example.com",
+		"name":  "Prepared",
+	})
+	if err != nil {
+		t.Fatalf("exec prepared insert failed: %v", err)
+	}
+	id, _ := res.LastInsertId()
+
+	// Prepare UPDATE
+	prepUpdate, err := db.Update().
+		Table(users).
+		Set(users.Name, schema.Placeholder("name")).
+		Where(users.ID.EqExpr(schema.Placeholder("id"))).
+		Prepare(ctx)
+	if err != nil {
+		t.Fatalf("prepare update failed: %v", err)
+	}
+	defer func() { _ = prepUpdate.Close() }()
+
+	_, err = prepUpdate.Exec(ctx, rain.PreparedArgs{
+		"id":   id,
+		"name": "Updated Prepared",
+	})
+	if err != nil {
+		t.Fatalf("exec prepared update failed: %v", err)
+	}
+
+	// Verify update
+	var row sqliteUserRow
+	if err := db.Select().Table(users).Where(users.ID.Eq(id)).Scan(ctx, &row); err != nil {
+		t.Fatalf("select row failed: %v", err)
+	}
+	if row.Name != "Updated Prepared" {
+		t.Fatalf("expected Updated Prepared, got %q", row.Name)
+	}
+
+	// Prepare DELETE
+	prepDelete, err := db.Delete().
+		Table(users).
+		Where(users.ID.EqExpr(schema.Placeholder("id"))).
+		Prepare(ctx)
+	if err != nil {
+		t.Fatalf("prepare delete failed: %v", err)
+	}
+	defer func() { _ = prepDelete.Close() }()
+
+	_, err = prepDelete.Exec(ctx, rain.PreparedArgs{"id": id})
+	if err != nil {
+		t.Fatalf("exec prepared delete failed: %v", err)
+	}
+
+	// Verify delete
+	exists, err := db.Select().Table(users).Where(users.ID.Eq(id)).Exists(ctx)
+	if err != nil {
+		t.Fatalf("check exists failed: %v", err)
+	}
+	if exists {
+		t.Fatalf("expected row to be deleted")
+	}
+
+	// Test SCAN (RETURNING)
+	prepInsertScan, err := db.Insert().
+		Table(users).
+		Set(users.Email, schema.Placeholder("email")).
+		Returning(users.ID, users.Email).
+		Prepare(ctx)
+	if err != nil {
+		t.Fatalf("prepare insert scan failed: %v", err)
+	}
+	defer func() { _ = prepInsertScan.Close() }()
+
+	var inserted sqliteUserRow
+	if err := prepInsertScan.Scan(ctx, rain.PreparedArgs{"email": "scan@example.com"}, &inserted); err != nil {
+		t.Fatalf("scan prepared insert failed: %v", err)
+	}
+	if inserted.Email != "scan@example.com" || inserted.ID == 0 {
+		t.Fatalf("unexpected scan result: %+v", inserted)
+	}
+}
+
 func TestSQLiteIntegrationHasOneRelation(t *testing.T) {
 	t.Parallel()
 

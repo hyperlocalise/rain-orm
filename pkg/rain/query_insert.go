@@ -122,19 +122,70 @@ func (q *InsertQuery) Returning(exprs ...schema.Expression) *InsertQuery {
 	return q
 }
 
-// ToSQL compiles the insert into SQL and args.
-func (q *InsertQuery) ToSQL() (string, []any, error) {
-	if q.selectQuery != nil {
-		return q.toSelectSQL()
+// Prepare compiles and prepares the INSERT query.
+func (q *InsertQuery) Prepare(ctx context.Context) (*PreparedInsertQuery, error) {
+	if q.runner == nil {
+		return nil, ErrNoConnection
 	}
 
-	rows, err := q.insertAssignments()
+	runner, ok := q.runner.(preparingQueryRunner)
+	if !ok {
+		return nil, ErrPrepareNotSupported
+	}
+
+	compiled, err := q.compile()
+	if err != nil {
+		return nil, err
+	}
+
+	stmt, err := runner.prepareContext(ctx, compiled.sql)
+	if err != nil {
+		return nil, err
+	}
+
+	return &PreparedInsertQuery{
+		table:    q.table,
+		compiled: compiled,
+		stmt:     stmt,
+	}, nil
+}
+
+// ToSQL compiles the insert into SQL and args.
+func (q *InsertQuery) ToSQL() (string, []any, error) {
+	compiled, err := q.compile()
 	if err != nil {
 		return "", nil, err
 	}
+	args, err := compiled.literalArgs()
+	if err != nil {
+		return "", nil, err
+	}
+	return compiled.sql, args, nil
+}
 
+func (q *InsertQuery) compile() (compiledQuery, error) {
 	ctx := newCompileContext(q.dialect)
 	defer releaseCompileContext(ctx)
+
+	if q.selectQuery != nil {
+		if err := q.writeSelectSQL(ctx); err != nil {
+			return compiledQuery{}, err
+		}
+	} else {
+		if err := q.writeValuesSQL(ctx); err != nil {
+			return compiledQuery{}, err
+		}
+	}
+
+	return ctx.compiledQuery(), ctx.err
+}
+
+func (q *InsertQuery) writeValuesSQL(ctx *compileContext) error {
+	rows, err := q.insertAssignments()
+	if err != nil {
+		return err
+	}
+
 	ctx.writeString("INSERT INTO ")
 	ctx.writeTableName(q.table)
 	ctx.writeString(" (")
@@ -155,34 +206,25 @@ func (q *InsertQuery) ToSQL() (string, []any, error) {
 				ctx.writeString(", ")
 			}
 			if err := ctx.writeExpression(item.value); err != nil {
-				return "", nil, err
+				return err
 			}
 		}
 		ctx.writeByte(')')
 	}
 
 	if err := q.writeConflictClause(ctx); err != nil {
-		return "", nil, err
+		return err
 	}
 
-	if err := ctx.writeReturning(q.returning, q.returningClause()); err != nil {
-		return "", nil, err
-	}
-
-	compiled := ctx.compiledQuery()
-	args, err := compiled.literalArgs()
-	if err != nil {
-		return "", nil, err
-	}
-	return compiled.sql, args, ctx.err
+	return ctx.writeReturning(q.returning, q.returningClause())
 }
 
-func (q *InsertQuery) toSelectSQL() (string, []any, error) {
+func (q *InsertQuery) writeSelectSQL(ctx *compileContext) error {
 	if err := q.validateSources(); err != nil {
-		return "", nil, err
+		return err
 	}
 	if err := q.validateInsertSelectColumns(); err != nil {
-		return "", nil, err
+		return err
 	}
 
 	selectQuery := q.selectQuery
@@ -190,8 +232,6 @@ func (q *InsertQuery) toSelectSQL() (string, []any, error) {
 		selectQuery = selectQuery.withSQLiteInsertSelectConflictWhere()
 	}
 
-	ctx := newCompileContext(q.dialect)
-	defer releaseCompileContext(ctx)
 	ctx.writeString("INSERT INTO ")
 	ctx.writeTableName(q.table)
 
@@ -208,23 +248,14 @@ func (q *InsertQuery) toSelectSQL() (string, []any, error) {
 
 	ctx.writeByte(' ')
 	if err := selectQuery.writeSQL(ctx); err != nil {
-		return "", nil, err
+		return err
 	}
 
 	if err := q.writeConflictClause(ctx); err != nil {
-		return "", nil, err
+		return err
 	}
 
-	if err := ctx.writeReturning(q.returning, q.returningClause()); err != nil {
-		return "", nil, err
-	}
-
-	compiled := ctx.compiledQuery()
-	args, err := compiled.literalArgs()
-	if err != nil {
-		return "", nil, err
-	}
-	return compiled.sql, args, ctx.err
+	return ctx.writeReturning(q.returning, q.returningClause())
 }
 
 func (q *InsertQuery) validateInsertSelectColumns() error {
