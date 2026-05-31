@@ -27,37 +27,33 @@ type compiledQuery struct {
 	sql      string
 	argPlan  []compiledArg
 	hasNames bool
+	args     []any
 }
 
 func (q compiledQuery) literalArgs() ([]any, error) {
 	if q.hasNames {
 		return nil, ErrPreparedArgsRequired
 	}
-
-	args := make([]any, 0, len(q.argPlan))
-	for _, arg := range q.argPlan {
-		args = append(args, arg.value)
-	}
-	return args, nil
+	// OPTIMIZATION: Return a fresh copy of the pre-calculated arguments to avoid
+	// shared state footguns if the caller modifies the slice, while still
+	// avoiding the overhead of rebuilding the slice from argPlan.
+	return append([]any(nil), q.args...), nil
 }
 
 func (q compiledQuery) bind(args PreparedArgs) ([]any, error) {
 	if !q.hasNames {
-		bound := make([]any, 0, len(q.argPlan))
-		for _, arg := range q.argPlan {
-			bound = append(bound, arg.value)
-		}
 		if len(args) > 0 {
 			return nil, fmt.Errorf("rain: unexpected prepared args for query without placeholders")
 		}
-		return bound, nil
+		// OPTIMIZATION: Return a fresh copy of the pre-calculated arguments to avoid
+		// shared state footguns if the caller modifies the slice.
+		return append([]any(nil), q.args...), nil
 	}
 
 	seen := make(map[string]struct{}, len(args))
-	bound := make([]any, 0, len(q.argPlan))
-	for _, arg := range q.argPlan {
+	bound := append([]any(nil), q.args...)
+	for i, arg := range q.argPlan {
 		if arg.kind == compiledArgLiteral {
-			bound = append(bound, arg.value)
 			continue
 		}
 		value, ok := args[arg.name]
@@ -65,7 +61,7 @@ func (q compiledQuery) bind(args PreparedArgs) ([]any, error) {
 			return nil, fmt.Errorf("rain: missing prepared arg %q", arg.name)
 		}
 		seen[arg.name] = struct{}{}
-		bound = append(bound, value)
+		bound[i] = value
 	}
 	for name := range args {
 		if _, ok := seen[name]; ok {
@@ -120,19 +116,32 @@ func (c *compileContext) String() string {
 }
 
 func (c *compileContext) compiledQuery() compiledQuery {
-	// OPTIMIZATION: Explicitly copy the argPlan slice so that the compileContext
-	// and its underlying array can be safely returned to the sync.Pool without
-	// causing data corruption for the caller of compiledQuery.
-	argPlan := append([]compiledArg(nil), c.argPlan...)
+	var hasNames bool
+	for _, arg := range c.argPlan {
+		if arg.kind == compiledArgNamedPlaceholder {
+			hasNames = true
+			break
+		}
+	}
+
+	// OPTIMIZATION: Only copy the argPlan if the query has named placeholders.
+	// Queries with only literals can use the pre-calculated args slice.
+	var argPlan []compiledArg
+	if hasNames {
+		argPlan = append([]compiledArg(nil), c.argPlan...)
+	}
 
 	compiled := compiledQuery{
-		sql:     c.String(),
-		argPlan: argPlan,
+		sql:      c.String(),
+		argPlan:  argPlan,
+		hasNames: hasNames,
 	}
-	for _, arg := range compiled.argPlan {
-		if arg.kind == compiledArgNamedPlaceholder {
-			compiled.hasNames = true
-			break
+	if len(c.argPlan) > 0 {
+		compiled.args = make([]any, len(c.argPlan))
+		for i, arg := range c.argPlan {
+			if arg.kind == compiledArgLiteral {
+				compiled.args[i] = arg.value
+			}
 		}
 	}
 	return compiled

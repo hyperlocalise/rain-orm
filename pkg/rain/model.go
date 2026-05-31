@@ -334,20 +334,23 @@ func scanRowsAgainstTableDirect(rows *sql.Rows, dest any, table *schema.TableDef
 					return err
 				}
 			} else {
-				// Re-derive a reflect.Value for the element to reset it and handle non-offset columns.
-				item := reflect.NewAt(elemType, ptr).Elem()
-
-				// OPTIMIZATION: Skip zeroing existing elements if the plan is a full scan.
-				// This allows us to reuse existing pointer allocations in the struct fields.
-				if !plan.isFullScan {
-					// Reset existing element to its zero state before reuse to avoid data carry-over.
-					item.Set(zeroElem)
-				}
-
 				var targetVal reflect.Value
 				if plan.needsTargetValue {
-					targetVal = item
+					// Re-derive a reflect.Value for the element to reset it and handle non-offset columns.
+					targetVal = reflect.NewAt(elemType, ptr).Elem()
+
+					// OPTIMIZATION: Skip zeroing existing elements if the plan is a full scan.
+					// This allows us to reuse existing pointer allocations in the struct fields.
+					if !plan.isFullScan {
+						// Reset existing element to its zero state before reuse to avoid data carry-over.
+						targetVal.Set(zeroElem)
+					}
+				} else if !plan.isFullScan {
+					// Even if we don't need a reflect.Value for assignments, we still need it to zero the struct
+					// if this isn't a full scan to avoid data carry-over from previous rows.
+					reflect.NewAt(elemType, ptr).Elem().Set(zeroElem)
 				}
+
 				if err := scanDirectRowAddr(ptr, targetVal, plan, scratch); err != nil {
 					return err
 				}
@@ -1026,19 +1029,15 @@ func scanCachedRowsAgainstTable(result *cachedSelectRows, dest any, table *schem
 			return err
 		}
 
-		items := target
+		items := reflect.MakeSlice(target.Type(), 0, len(result.Rows))
 		for _, row := range result.Rows {
 			var item reflect.Value
-			if pointerElems {
-				item = reflect.New(structType)
-			} else {
-				item = reflect.New(structType).Elem()
-			}
-
 			var scanTarget reflect.Value
 			if pointerElems {
+				item = reflect.New(structType)
 				scanTarget = item.Elem()
 			} else {
+				item = reflect.New(structType).Elem()
 				scanTarget = item
 			}
 
@@ -1226,9 +1225,11 @@ func newRowScanPlanForColumns(cols []string, modelType reflect.Type, table *sche
 						plan.timeValueCols = append(plan.timeValueCols, colPlan)
 					}
 				} else {
+					plan.needsTargetValue = true
 					plan.otherCols = append(plan.otherCols, colPlan)
 				}
 			default:
+				plan.needsTargetValue = true
 				plan.otherCols = append(plan.otherCols, colPlan)
 			}
 		} else {
