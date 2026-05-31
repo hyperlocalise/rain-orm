@@ -975,11 +975,6 @@ func (q *SelectQuery) compileExists() (compiledQuery, error) {
 }
 
 func wrapExistsCompiled(compiled compiledQuery) (compiledQuery, error) {
-	existsQuery := compiledQuery{
-		sql:      "SELECT EXISTS(" + compiled.sql + ")",
-		argPlan:  make([]compiledArg, len(compiled.argPlan)),
-		hasNames: compiled.hasNames,
-	}
-	copy(existsQuery.argPlan, compiled.argPlan)
-	return existsQuery, nil
+	compiled.sql = "SELECT EXISTS(" + compiled.sql + ")"
+	return compiled, nil
 }
