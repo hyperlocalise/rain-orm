@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"strings"
 
 	"github.com/hyperlocalise/rain-orm/pkg/dialect"
 	"github.com/hyperlocalise/rain-orm/pkg/schema"
@@ -29,8 +28,8 @@ type SelectQuery struct {
 	setOps        []setOperation
 	distinct      bool
 	distinctOn    []schema.Expression
-	limit         int
-	offset        int
+	limit         *int
+	offset        *int
 	relationNames []string
 	cacheOptions  *queryCacheOptions
 	locking       *selectLocking
@@ -159,13 +158,13 @@ func (q *SelectQuery) OrderBy(order ...schema.OrderExpr) *SelectQuery {
 
 // Limit sets the LIMIT clause.
 func (q *SelectQuery) Limit(limit int) *SelectQuery {
-	q.limit = limit
+	q.limit = &limit
 	return q
 }
 
 // Offset sets the OFFSET clause.
 func (q *SelectQuery) Offset(offset int) *SelectQuery {
-	q.offset = offset
+	q.offset = &offset
 	return q
 }
 
@@ -286,6 +285,14 @@ func (q *SelectQuery) clone() *SelectQuery {
 	newQ.setOps = append([]setOperation(nil), q.setOps...)
 	newQ.distinctOn = append([]schema.Expression(nil), q.distinctOn...)
 	newQ.relationNames = append([]string(nil), q.relationNames...)
+	if q.limit != nil {
+		l := *q.limit
+		newQ.limit = &l
+	}
+	if q.offset != nil {
+		o := *q.offset
+		newQ.offset = &o
+	}
 	if q.locking != nil {
 		copyLocking := *q.locking
 		copyLocking.of = append([]schema.TableReference(nil), q.locking.of...)
@@ -337,7 +344,7 @@ func (q *SelectQuery) withSQLiteInsertSelectConflictWhereChanged() (*SelectQuery
 
 func (q *SelectQuery) isBareCompound() bool {
 	return q.firstOperand != nil &&
-		len(q.order) == 0 && q.limit == 0 && q.offset == 0 &&
+		len(q.order) == 0 && q.limit == nil && q.offset == nil &&
 		!q.distinct && len(q.distinctOn) == 0 && len(q.cols) == 0 && q.table == nil &&
 		len(q.where) == 0 && len(q.joins) == 0 &&
 		len(q.groupBy) == 0 && len(q.having) == 0 &&
@@ -385,32 +392,8 @@ func (q *SelectQuery) ToSQL() (string, []any, error) {
 }
 
 func (q *SelectQuery) writeSQL(ctx *compileContext) error {
-	if len(q.ctes) > 0 && !ctx.skipCTEs {
-		if !dialect.HasFeature(ctx.dialect.Features(), dialect.FeatureCTE) {
-			return fmt.Errorf("rain: select queries do not support CTEs for %s dialect", ctx.dialect.Name())
-		}
-		ctx.writeString("WITH ")
-		for idx, cte := range q.ctes {
-			if idx > 0 {
-				ctx.writeString(", ")
-			}
-			if strings.TrimSpace(cte.name) == "" {
-				return errors.New("rain: CTE name cannot be empty")
-			}
-			if cte.query == nil {
-				return fmt.Errorf("rain: CTE %q requires a query", cte.name)
-			}
-			if len(cte.query.ctes) > 0 {
-				return fmt.Errorf("rain: CTE %q body cannot itself contain CTEs", cte.name)
-			}
-			ctx.writeQuotedIdentifier(cte.name)
-			ctx.writeString(" AS (")
-			if err := cte.query.writeSQL(ctx); err != nil {
-				return err
-			}
-			ctx.writeByte(')')
-		}
-		ctx.writeByte(' ')
+	if err := writeCTEs(ctx, q.ctes, "select"); err != nil {
+		return err
 	}
 
 	if q.firstOperand != nil {
@@ -428,7 +411,7 @@ func (q *SelectQuery) writeSQL(ctx *compileContext) error {
 				return err
 			}
 		}
-		if err := q.writeOrderLimit(ctx); err != nil {
+		if err := writeOrderLimit(ctx, q.order, q.limit, q.offset, dialect.FeatureUnlimited, dialect.FeatureUnlimited); err != nil {
 			return err
 		}
 		return q.writeLocking(ctx)
@@ -504,7 +487,7 @@ func (q *SelectQuery) writeSQL(ctx *compileContext) error {
 		}
 	}
 
-	if err := q.writeOrderLimit(ctx); err != nil {
+	if err := writeOrderLimit(ctx, q.order, q.limit, q.offset, dialect.FeatureUnlimited, dialect.FeatureUnlimited); err != nil {
 		return err
 	}
 
@@ -564,7 +547,7 @@ func (q *SelectQuery) writeCompoundOperandSQL(ctx *compileContext) error {
 	}
 	// Use parentheses if the operand has its own ORDER BY, LIMIT, locking, or is itself a compound query.
 	// Flattening is handled during builder chaining in wrapSetOp.
-	useParens := len(q.order) > 0 || q.limit > 0 || q.offset > 0 || q.locking != nil || q.firstOperand != nil
+	useParens := len(q.order) > 0 || q.limit != nil || q.offset != nil || q.locking != nil || q.firstOperand != nil
 	if useParens {
 		ctx.writeByte('(')
 	}
@@ -602,35 +585,6 @@ func (q *SelectQuery) writeJoins(ctx *compileContext) error {
 		} else if join.on != nil {
 			return errors.New("rain: CROSS JOIN does not support an ON clause")
 		}
-	}
-	return nil
-}
-
-func (q *SelectQuery) writeOrderLimit(ctx *compileContext) error {
-	if len(q.order) > 0 {
-		ctx.writeString(" ORDER BY ")
-		for idx, item := range q.order {
-			if idx > 0 {
-				ctx.writeString(", ")
-			}
-			if err := ctx.writeExpression(item.Expr); err != nil {
-				return err
-			}
-			ctx.writeByte(' ')
-			ctx.writeString(string(item.Direction))
-			if item.NullsOrder != "" {
-				if !dialect.HasFeature(ctx.dialect.Features(), dialect.FeatureNullsOrder) {
-					return fmt.Errorf("rain: NULLS FIRST/LAST is not supported by %s dialect", ctx.dialect.Name())
-				}
-				ctx.writeByte(' ')
-				ctx.writeString(string(item.NullsOrder))
-			}
-		}
-	}
-
-	if clause := q.dialect.LimitOffset(q.limit, q.offset); clause != "" {
-		ctx.writeByte(' ')
-		ctx.writeString(clause)
 	}
 	return nil
 }

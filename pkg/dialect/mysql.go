@@ -19,7 +19,16 @@ func (d *MySQLDialect) Name() string {
 
 // Features returns MySQL capabilities supported by Rain.
 func (d *MySQLDialect) Features() Feature {
-	return FeatureOffset | FeatureUpsert | FeatureSavepoint | FeatureSelectLocking
+	return FeatureOffset |
+		FeatureUpsert |
+		FeatureSavepoint |
+		FeatureSelectLocking |
+		FeatureCTE |
+		FeatureUpdateOrder |
+		FeatureUpdateLimit |
+		FeatureDeleteOrder |
+		FeatureDeleteLimit |
+		FeatureUnlimited
 }
 
 // QuoteIdentifier quotes identifiers with backticks.
@@ -93,7 +102,7 @@ func (d *MySQLDialect) AutoIncrementKeyword() string {
 
 // LimitOffset returns MySQL LIMIT/OFFSET syntax.
 func (d *MySQLDialect) LimitOffset(limit, offset int) string {
-	if limit > 0 {
+	if limit >= 0 {
 		if offset > 0 {
 			return "LIMIT " + strconv.Itoa(offset) + ", " + strconv.Itoa(limit)
 		}

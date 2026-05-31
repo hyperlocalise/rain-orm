@@ -25,7 +25,13 @@ func (d *SQLiteDialect) Features() Feature {
 		FeatureOffset |
 		FeatureUpsert |
 		FeatureSavepoint |
-		FeatureNullsOrder
+		FeatureNullsOrder |
+		FeatureCTE |
+		FeatureUpdateOrder |
+		FeatureUpdateLimit |
+		FeatureDeleteOrder |
+		FeatureDeleteLimit |
+		FeatureUnlimited
 }
 
 // QuoteIdentifier quotes identifiers with double quotes.
@@ -76,7 +82,7 @@ func (d *SQLiteDialect) AutoIncrementKeyword() string {
 
 // LimitOffset returns SQLite LIMIT/OFFSET syntax.
 func (d *SQLiteDialect) LimitOffset(limit, offset int) string {
-	if limit > 0 {
+	if limit >= 0 {
 		if offset > 0 {
 			return "LIMIT " + strconv.Itoa(limit) + " OFFSET " + strconv.Itoa(offset)
 		}

@@ -30,7 +30,8 @@ func (d *PostgresDialect) Features() Feature {
 		FeatureSavepoint |
 		FeatureSelectLocking |
 		FeatureNullsOrder |
-		FeatureSelectDistinctOn
+		FeatureSelectDistinctOn |
+		FeatureUnlimited
 }
 
 // QuoteIdentifier quotes identifiers with double quotes.
@@ -104,10 +105,10 @@ func (d *PostgresDialect) AutoIncrementKeyword() string {
 
 // LimitOffset returns PostgreSQL LIMIT/OFFSET syntax.
 func (d *PostgresDialect) LimitOffset(limit, offset int) string {
-	if limit > 0 && offset > 0 {
-		return "LIMIT " + strconv.Itoa(limit) + " OFFSET " + strconv.Itoa(offset)
-	}
-	if limit > 0 {
+	if limit >= 0 {
+		if offset > 0 {
+			return "LIMIT " + strconv.Itoa(limit) + " OFFSET " + strconv.Itoa(offset)
+		}
 		return "LIMIT " + strconv.Itoa(limit)
 	}
 	if offset > 0 {

@@ -16,6 +16,9 @@ type DeleteQuery struct {
 	dialect   dialect.Dialect
 	table     *schema.TableDef
 	where     []schema.Predicate
+	order     []schema.OrderExpr
+	limit     *int
+	ctes      []cteDefinition
 	returning []schema.Expression
 	unbounded bool
 }
@@ -35,6 +38,26 @@ func (q *DeleteQuery) Where(predicate schema.Predicate) *DeleteQuery {
 // Returning adds RETURNING expressions when supported by the dialect.
 func (q *DeleteQuery) Returning(exprs ...schema.Expression) *DeleteQuery {
 	q.returning = append(q.returning, exprs...)
+	return q
+}
+
+// With appends a common table expression definition.
+func (q *DeleteQuery) With(name string, query *SelectQuery) *DeleteQuery {
+	q.ctes = append(q.ctes, cteDefinition{name: name, query: query})
+	return q
+}
+
+// OrderBy appends ORDER BY expressions.
+// Supported by MySQL and SQLite.
+func (q *DeleteQuery) OrderBy(order ...schema.OrderExpr) *DeleteQuery {
+	q.order = append(q.order, order...)
+	return q
+}
+
+// Limit sets the LIMIT clause.
+// Supported by MySQL and SQLite.
+func (q *DeleteQuery) Limit(limit int) *DeleteQuery {
+	q.limit = &limit
 	return q
 }
 
@@ -58,6 +81,11 @@ func (q *DeleteQuery) ToSQL() (string, []any, error) {
 
 	ctx := newCompileContext(q.dialect)
 	defer releaseCompileContext(ctx)
+
+	if err := writeCTEs(ctx, q.ctes, "delete"); err != nil {
+		return "", nil, err
+	}
+
 	ctx.writeString("DELETE FROM ")
 	ctx.writeTableName(q.table)
 	if len(q.where) > 0 {
@@ -65,6 +93,10 @@ func (q *DeleteQuery) ToSQL() (string, []any, error) {
 		if err := ctx.writePredicate(joinPredicates(q.where)); err != nil {
 			return "", nil, err
 		}
+	}
+
+	if err := writeOrderLimit(ctx, q.order, q.limit, nil, dialect.FeatureDeleteOrder, dialect.FeatureDeleteLimit); err != nil {
+		return "", nil, err
 	}
 
 	if err := ctx.writeReturning(q.returning, q.returningClause()); err != nil {

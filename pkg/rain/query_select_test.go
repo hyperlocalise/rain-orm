@@ -842,13 +842,13 @@ func TestSelectAdvancedComposition(t *testing.T) {
 			wantErr: "requires a non-nil query",
 		},
 		{
-			name:    "cte unsupported on mysql",
+			name:    "cte supported on mysql",
 			dialect: "mysql",
 			build: func(db *rain.DB) *rain.SelectQuery {
 				base := db.Select().Table(users)
 				return db.Select().With("u", base).Table(users)
 			},
-			wantErr: "do not support CTEs",
+			wantSQL: "WITH `u` AS (SELECT * FROM `users`) SELECT * FROM `users`",
 		},
 		{
 			name:    "nested cte body is invalid",

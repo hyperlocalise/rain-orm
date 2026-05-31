@@ -88,3 +88,86 @@ func closeRows(rows *sql.Rows, errp *error) {
 		*errp = err
 	}
 }
+
+func writeCTEs(ctx *compileContext, ctes []cteDefinition, label string) error {
+	if len(ctes) == 0 || ctx.skipCTEs {
+		return nil
+	}
+	if !dialect.HasFeature(ctx.dialect.Features(), dialect.FeatureCTE) {
+		return fmt.Errorf("rain: %s queries do not support CTEs for %s dialect", label, ctx.dialect.Name())
+	}
+	ctx.writeString("WITH ")
+	for idx, cte := range ctes {
+		if idx > 0 {
+			ctx.writeString(", ")
+		}
+		if strings.TrimSpace(cte.name) == "" {
+			return errors.New("rain: CTE name cannot be empty")
+		}
+		if cte.query == nil {
+			return fmt.Errorf("rain: CTE %q requires a query", cte.name)
+		}
+		if len(cte.query.ctes) > 0 {
+			return fmt.Errorf("rain: CTE %q body cannot itself contain CTEs", cte.name)
+		}
+		ctx.writeQuotedIdentifier(cte.name)
+		ctx.writeString(" AS (")
+		if err := cte.query.writeSQL(ctx); err != nil {
+			return err
+		}
+		ctx.writeByte(')')
+	}
+	ctx.writeByte(' ')
+	return nil
+}
+
+func writeOrderLimit(ctx *compileContext, order []schema.OrderExpr, limit *int, offset *int, featureOrder, featureLimit dialect.Feature) error {
+	if len(order) > 0 {
+		if featureOrder != dialect.FeatureUnlimited && !dialect.HasFeature(ctx.dialect.Features(), featureOrder) {
+			return fmt.Errorf("rain: ORDER BY is not supported for this query type in %s dialect", ctx.dialect.Name())
+		}
+		ctx.writeString(" ORDER BY ")
+		for idx, item := range order {
+			if idx > 0 {
+				ctx.writeString(", ")
+			}
+			if err := ctx.writeExpression(item.Expr); err != nil {
+				return err
+			}
+			ctx.writeByte(' ')
+			ctx.writeString(string(item.Direction))
+			if item.NullsOrder != "" {
+				if !dialect.HasFeature(ctx.dialect.Features(), dialect.FeatureNullsOrder) {
+					return fmt.Errorf("rain: NULLS FIRST/LAST is not supported by %s dialect", ctx.dialect.Name())
+				}
+				ctx.writeByte(' ')
+				ctx.writeString(string(item.NullsOrder))
+			}
+		}
+	}
+
+	if limit != nil || (offset != nil && *offset > 0) {
+		if featureLimit != dialect.FeatureUnlimited && !dialect.HasFeature(ctx.dialect.Features(), featureLimit) {
+			return fmt.Errorf("rain: LIMIT/OFFSET is not supported for this query type in %s dialect", ctx.dialect.Name())
+		}
+		l := -1
+		if limit != nil {
+			l = *limit
+			if l < 0 {
+				return errors.New("rain: LIMIT must be non-negative")
+			}
+		}
+		o := 0
+		if offset != nil {
+			o = *offset
+			if o < 0 {
+				return errors.New("rain: OFFSET must be non-negative")
+			}
+		}
+		if clause := ctx.dialect.LimitOffset(l, o); clause != "" {
+			ctx.writeByte(' ')
+			ctx.writeString(clause)
+		}
+	}
+	return nil
+}

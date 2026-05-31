@@ -15,6 +15,11 @@ const (
 	FeatureSelectLocking
 	FeatureNullsOrder
 	FeatureSelectDistinctOn
+	FeatureUpdateOrder
+	FeatureUpdateLimit
+	FeatureDeleteOrder
+	FeatureDeleteLimit
+	FeatureUnlimited
 )
 
 // HasFeature reports whether a feature set includes the requested capability.

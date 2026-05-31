@@ -17,6 +17,9 @@ type UpdateQuery struct {
 	table     *schema.TableDef
 	values    []assignment
 	where     []schema.Predicate
+	order     []schema.OrderExpr
+	limit     *int
+	ctes      []cteDefinition
 	returning []schema.Expression
 	unbounded bool
 }
@@ -52,6 +55,26 @@ func (q *UpdateQuery) Returning(exprs ...schema.Expression) *UpdateQuery {
 	return q
 }
 
+// With appends a common table expression definition.
+func (q *UpdateQuery) With(name string, query *SelectQuery) *UpdateQuery {
+	q.ctes = append(q.ctes, cteDefinition{name: name, query: query})
+	return q
+}
+
+// OrderBy appends ORDER BY expressions.
+// Supported by MySQL and SQLite.
+func (q *UpdateQuery) OrderBy(order ...schema.OrderExpr) *UpdateQuery {
+	q.order = append(q.order, order...)
+	return q
+}
+
+// Limit sets the LIMIT clause.
+// Supported by MySQL and SQLite.
+func (q *UpdateQuery) Limit(limit int) *UpdateQuery {
+	q.limit = &limit
+	return q
+}
+
 // Unbounded allows UPDATE without a WHERE clause.
 func (q *UpdateQuery) Unbounded() *UpdateQuery {
 	q.unbounded = true
@@ -75,6 +98,11 @@ func (q *UpdateQuery) ToSQL() (string, []any, error) {
 
 	ctx := newCompileContext(q.dialect)
 	defer releaseCompileContext(ctx)
+
+	if err := writeCTEs(ctx, q.ctes, "update"); err != nil {
+		return "", nil, err
+	}
+
 	ctx.writeString("UPDATE ")
 	ctx.writeTableName(q.table)
 	ctx.writeString(" SET ")
@@ -97,6 +125,10 @@ func (q *UpdateQuery) ToSQL() (string, []any, error) {
 		if err := ctx.writePredicate(joinPredicates(q.where)); err != nil {
 			return "", nil, err
 		}
+	}
+
+	if err := writeOrderLimit(ctx, q.order, q.limit, nil, dialect.FeatureUpdateOrder, dialect.FeatureUpdateLimit); err != nil {
+		return "", nil, err
 	}
 
 	if err := ctx.writeReturning(q.returning, q.returningClause()); err != nil {
