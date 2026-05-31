@@ -15,7 +15,8 @@ func TestPreparedInsertCompile(t *testing.T) {
 		ID    *schema.Column[int64]
 		Email *schema.Column[string]
 		Name  *schema.Column[string]
-	}) {
+	},
+	) {
 		t.ID = t.BigSerial("id").PrimaryKey()
 		t.Email = t.VarChar("email", 255)
 		t.Name = t.Text("name")
@@ -48,7 +49,8 @@ func TestPreparedUpdateCompile(t *testing.T) {
 		schema.TableModel
 		ID   *schema.Column[int64]
 		Name *schema.Column[string]
-	}) {
+	},
+	) {
 		t.ID = t.BigSerial("id").PrimaryKey()
 		t.Name = t.Text("name")
 	})
@@ -76,7 +78,8 @@ func TestPreparedDeleteCompile(t *testing.T) {
 	users := schema.Define("users", func(t *struct {
 		schema.TableModel
 		ID *schema.Column[int64]
-	}) {
+	},
+	) {
 		t.ID = t.BigSerial("id").PrimaryKey()
 	})
 
@@ -101,7 +104,8 @@ func TestPreparedInsertScanInternal(t *testing.T) {
 		schema.TableModel
 		ID    *schema.Column[int64]
 		Email *schema.Column[string]
-	}) {
+	},
+	) {
 		t.ID = t.BigSerial("id").PrimaryKey()
 		t.Email = t.VarChar("email", 255)
 	})

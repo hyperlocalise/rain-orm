@@ -835,7 +835,7 @@ func TestSQLiteIntegrationPreparedExecQueries(t *testing.T) {
 	if err != nil {
 		t.Fatalf("prepare insert failed: %v", err)
 	}
-	defer prepInsert.Close()
+	defer func() { _ = prepInsert.Close() }()
 
 	res, err := prepInsert.Exec(ctx, rain.PreparedArgs{
 		"email": "prep@example.com",
@@ -855,7 +855,7 @@ func TestSQLiteIntegrationPreparedExecQueries(t *testing.T) {
 	if err != nil {
 		t.Fatalf("prepare update failed: %v", err)
 	}
-	defer prepUpdate.Close()
+	defer func() { _ = prepUpdate.Close() }()
 
 	_, err = prepUpdate.Exec(ctx, rain.PreparedArgs{
 		"id":   id,
@@ -882,7 +882,7 @@ func TestSQLiteIntegrationPreparedExecQueries(t *testing.T) {
 	if err != nil {
 		t.Fatalf("prepare delete failed: %v", err)
 	}
-	defer prepDelete.Close()
+	defer func() { _ = prepDelete.Close() }()
 
 	_, err = prepDelete.Exec(ctx, rain.PreparedArgs{"id": id})
 	if err != nil {
@@ -907,7 +907,7 @@ func TestSQLiteIntegrationPreparedExecQueries(t *testing.T) {
 	if err != nil {
 		t.Fatalf("prepare insert scan failed: %v", err)
 	}
-	defer prepInsertScan.Close()
+	defer func() { _ = prepInsertScan.Close() }()
 
 	var inserted sqliteUserRow
 	if err := prepInsertScan.Scan(ctx, rain.PreparedArgs{"email": "scan@example.com"}, &inserted); err != nil {
