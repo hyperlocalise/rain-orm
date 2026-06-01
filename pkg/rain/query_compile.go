@@ -215,8 +215,17 @@ func (c *compileContext) writeSelectExpression(expr schema.Expression) error {
 
 func (c *compileContext) writeExpressionInContext(expr schema.Expression, context expressionContext) error {
 	switch value := expr.(type) {
+	case excludedColumn:
+		if c.dialect.Name() == "mysql" {
+			c.writeString("VALUES(")
+			c.writeQuotedIdentifier(value.column.ColumnDef().Name)
+			c.writeByte(')')
+		} else {
+			c.writeString("EXCLUDED.")
+			c.writeQuotedIdentifier(value.column.ColumnDef().Name)
+		}
 	case schema.ColumnReference:
-		c.writeColumn(value)
+		c.writeQualifiedColumn(value)
 	case schema.ValueExpr:
 		if c.useLiterals {
 			sql, err := literalDDLSQL(c.dialect, value.Value)
@@ -445,6 +454,11 @@ func (c *compileContext) writeRaw(raw schema.RawExpr) error {
 }
 
 func (c *compileContext) writeColumn(column schema.ColumnReference) {
+	def := column.ColumnDef()
+	c.writeQuotedIdentifier(def.Name)
+}
+
+func (c *compileContext) writeQualifiedColumn(column schema.ColumnReference) {
 	def := column.ColumnDef()
 	table := def.Table
 	qualifier := table.Name
