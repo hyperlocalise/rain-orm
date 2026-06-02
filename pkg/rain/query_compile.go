@@ -89,6 +89,14 @@ var compileContextPool = sync.Pool{
 	},
 }
 
+var (
+	// OPTIMIZATION: Cache quoted identifiers per-dialect to avoid redundant
+	// string allocations and escaping logic during query compilation.
+	postgresQuotedCache sync.Map
+	mysqlQuotedCache    sync.Map
+	sqliteQuotedCache   sync.Map
+)
+
 func newCompileContext(d dialect.Dialect) *compileContext {
 	ctx := compileContextPool.Get().(*compileContext)
 	ctx.reset(d)
@@ -160,7 +168,28 @@ func (c *compileContext) writeString(value string) {
 }
 
 func (c *compileContext) writeQuotedIdentifier(name string) {
-	c.writeString(c.dialect.QuoteIdentifier(name))
+	var cache *sync.Map
+	switch c.dialect.Name() {
+	case "postgres":
+		cache = &postgresQuotedCache
+	case "mysql":
+		cache = &mysqlQuotedCache
+	case "sqlite":
+		cache = &sqliteQuotedCache
+	default:
+		// Fallback for custom or less common dialects.
+		c.writeString(c.dialect.QuoteIdentifier(name))
+		return
+	}
+
+	if cached, ok := cache.Load(name); ok {
+		c.writeString(cached.(string))
+		return
+	}
+
+	quoted := c.dialect.QuoteIdentifier(name)
+	cache.Store(name, quoted)
+	c.writeString(quoted)
 }
 
 func (c *compileContext) writeTableName(table *schema.TableDef) {
