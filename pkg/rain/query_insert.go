@@ -35,14 +35,82 @@ const (
 )
 
 type insertConflictClause struct {
-	columns []schema.ColumnReference
-	action  insertConflictAction
-	updates []schema.ColumnReference
+	columns     []schema.ColumnReference
+	constraint  string
+	targetWhere []schema.Predicate
+	action      insertConflictAction
+	updates     []assignment
+	updateWhere []schema.Predicate
+}
+
+type excludedColumn struct {
+	schema.ExpressionMarker
+	column schema.ColumnReference
 }
 
 // InsertConflictBuilder configures conflict behavior for INSERT statements.
 type InsertConflictBuilder struct {
 	query *InsertQuery
+}
+
+// OnConstraint specifies a named constraint as the conflict target.
+func (b *InsertConflictBuilder) OnConstraint(name string) *InsertConflictBuilder {
+	b.query.conflict.constraint = name
+	return b
+}
+
+// Where adds a filter to the conflict target (partial index).
+func (b *InsertConflictBuilder) Where(predicate schema.Predicate) *InsertConflictBuilder {
+	b.query.conflict.targetWhere = append(b.query.conflict.targetWhere, predicate)
+	return b
+}
+
+// InsertConflictUpdateBuilder configures the DO UPDATE SET clause.
+type InsertConflictUpdateBuilder struct {
+	query *InsertQuery
+}
+
+// Set adds a custom assignment to the DO UPDATE SET clause.
+func (b *InsertConflictUpdateBuilder) Set(column schema.ColumnReference, value any) *InsertConflictUpdateBuilder {
+	var expr schema.Expression
+	if e, ok := value.(schema.Expression); ok {
+		expr = e
+	} else {
+		expr = schema.ValueExpr{Value: value}
+	}
+	b.query.conflict.updates = append(b.query.conflict.updates, assignment{column: column, value: expr})
+	return b
+}
+
+// Where adds a filter to the DO UPDATE SET clause.
+func (b *InsertConflictUpdateBuilder) Where(predicate schema.Predicate) *InsertConflictUpdateBuilder {
+	b.query.conflict.updateWhere = append(b.query.conflict.updateWhere, predicate)
+	return b
+}
+
+// Returning adds RETURNING expressions to the query.
+func (b *InsertConflictUpdateBuilder) Returning(exprs ...schema.Expression) *InsertQuery {
+	return b.query.Returning(exprs...)
+}
+
+// Prepare compiles and prepares the INSERT query.
+func (b *InsertConflictUpdateBuilder) Prepare(ctx context.Context) (*PreparedInsertQuery, error) {
+	return b.query.Prepare(ctx)
+}
+
+// ToSQL compiles the insert into SQL and args.
+func (b *InsertConflictUpdateBuilder) ToSQL() (string, []any, error) {
+	return b.query.ToSQL()
+}
+
+// Exec executes the INSERT query.
+func (b *InsertConflictUpdateBuilder) Exec(ctx context.Context) (sql.Result, error) {
+	return b.query.Exec(ctx)
+}
+
+// Scan executes an INSERT ... RETURNING query and scans one row into dest.
+func (b *InsertConflictUpdateBuilder) Scan(ctx context.Context, dest any) error {
+	return b.query.Scan(ctx, dest)
 }
 
 // Table sets the INSERT target table.
@@ -109,11 +177,18 @@ func (b *InsertConflictBuilder) DoNothing() *InsertQuery {
 	return b.query
 }
 
-// DoUpdateSet configures ON CONFLICT ... DO UPDATE SET using EXCLUDED values (PostgreSQL/SQLite) or VALUES() references for MySQL VALUES inserts.
-func (b *InsertConflictBuilder) DoUpdateSet(columns ...schema.ColumnReference) *InsertQuery {
+// DoUpdateSet configures ON CONFLICT ... DO UPDATE SET.
+// If columns are provided, they are automatically assigned using EXCLUDED values.
+// Returns an InsertConflictUpdateBuilder for further customization.
+func (b *InsertConflictBuilder) DoUpdateSet(columns ...schema.ColumnReference) *InsertConflictUpdateBuilder {
 	b.query.conflict.action = insertConflictActionDoUpdateSet
-	b.query.conflict.updates = columns
-	return b.query
+	for _, col := range columns {
+		b.query.conflict.updates = append(b.query.conflict.updates, assignment{
+			column: col,
+			value:  excludedColumn{column: col},
+		})
+	}
+	return &InsertConflictUpdateBuilder{query: b.query}
 }
 
 // Returning adds RETURNING expressions when supported by the dialect.
@@ -503,8 +578,11 @@ func (q *InsertQuery) writeConflictClause(ctx *compileContext) error {
 	}
 
 	if q.dialect.Name() == "mysql" {
-		if len(q.conflict.columns) > 0 {
-			return errors.New("rain: MySQL ON DUPLICATE KEY UPDATE cannot target specific conflict columns; call OnConflict() without columns")
+		if len(q.conflict.columns) > 0 || q.conflict.constraint != "" || len(q.conflict.targetWhere) > 0 {
+			return errors.New("rain: MySQL ON DUPLICATE KEY UPDATE does not support conflict targets (columns, constraints, or WHERE); call OnConflict() without modifiers")
+		}
+		if len(q.conflict.updateWhere) > 0 {
+			return errors.New("rain: MySQL ON DUPLICATE KEY UPDATE does not support WHERE filters")
 		}
 		if q.conflict.action == insertConflictActionDoNothing {
 			noopColumn, err := mysqlConflictNoopColumn(q.table)
@@ -525,37 +603,51 @@ func (q *InsertQuery) writeConflictClause(ctx *compileContext) error {
 				return errors.New("rain: MySQL conflict DO UPDATE is not supported for INSERT ... SELECT")
 			}
 			ctx.writeString(" ON DUPLICATE KEY UPDATE ")
-			for idx, col := range q.conflict.updates {
-				if err := validateAssignmentTarget(q.table, assignment{column: col}); err != nil {
+			for idx, item := range q.conflict.updates {
+				if err := validateAssignmentTarget(q.table, item); err != nil {
 					return err
 				}
 				if idx > 0 {
 					ctx.writeString(", ")
 				}
-				ctx.writeQuotedIdentifier(col.ColumnDef().Name)
-				ctx.writeString(" = VALUES(")
-				ctx.writeQuotedIdentifier(col.ColumnDef().Name)
-				ctx.writeByte(')')
+				ctx.writeQuotedIdentifier(item.column.ColumnDef().Name)
+				ctx.writeString(" = ")
+				if err := ctx.writeExpression(item.value); err != nil {
+					return err
+				}
 			}
 		}
 		return nil
 	}
 
-	if len(q.conflict.columns) == 0 {
-		return errors.New("rain: conflict clause requires at least one target column")
+	if len(q.conflict.columns) == 0 && q.conflict.constraint == "" {
+		return errors.New("rain: conflict clause requires at least one target (columns or constraint)")
 	}
 
-	ctx.writeString(" ON CONFLICT (")
-	for idx, col := range q.conflict.columns {
-		if err := validateColumnBelongsToTable(q.table, col.ColumnDef()); err != nil {
+	ctx.writeString(" ON CONFLICT")
+	if q.conflict.constraint != "" {
+		ctx.writeString(" ON CONSTRAINT ")
+		ctx.writeQuotedIdentifier(q.conflict.constraint)
+	} else if len(q.conflict.columns) > 0 {
+		ctx.writeString(" (")
+		for idx, col := range q.conflict.columns {
+			if err := validateColumnBelongsToTable(q.table, col.ColumnDef()); err != nil {
+				return err
+			}
+			if idx > 0 {
+				ctx.writeString(", ")
+			}
+			ctx.writeColumnName(col)
+		}
+		ctx.writeByte(')')
+	}
+
+	if len(q.conflict.targetWhere) > 0 {
+		ctx.writeString(" WHERE ")
+		if err := ctx.writePredicate(joinPredicates(q.conflict.targetWhere)); err != nil {
 			return err
 		}
-		if idx > 0 {
-			ctx.writeString(", ")
-		}
-		ctx.writeQuotedIdentifier(col.ColumnDef().Name)
 	}
-	ctx.writeByte(')')
 
 	switch q.conflict.action {
 	case insertConflictActionDoNothing:
@@ -565,16 +657,24 @@ func (q *InsertQuery) writeConflictClause(ctx *compileContext) error {
 			return errors.New("rain: conflict DO UPDATE requires at least one update column")
 		}
 		ctx.writeString(" DO UPDATE SET ")
-		for idx, col := range q.conflict.updates {
-			if err := validateAssignmentTarget(q.table, assignment{column: col}); err != nil {
+		for idx, item := range q.conflict.updates {
+			if err := validateAssignmentTarget(q.table, item); err != nil {
 				return err
 			}
 			if idx > 0 {
 				ctx.writeString(", ")
 			}
-			ctx.writeQuotedIdentifier(col.ColumnDef().Name)
-			ctx.writeString(" = EXCLUDED.")
-			ctx.writeQuotedIdentifier(col.ColumnDef().Name)
+			ctx.writeQuotedIdentifier(item.column.ColumnDef().Name)
+			ctx.writeString(" = ")
+			if err := ctx.writeExpression(item.value); err != nil {
+				return err
+			}
+		}
+		if len(q.conflict.updateWhere) > 0 {
+			ctx.writeString(" WHERE ")
+			if err := ctx.writePredicate(joinPredicates(q.conflict.updateWhere)); err != nil {
+				return err
+			}
 		}
 	}
 

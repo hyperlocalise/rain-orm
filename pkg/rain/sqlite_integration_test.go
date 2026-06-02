@@ -243,7 +243,7 @@ type sqliteRichSeedData struct {
 func defineSQLiteTables() (*sqliteUsersTable, *sqlitePostsTable, *sqliteProfilesTable) {
 	users := schema.Define("users", func(t *sqliteUsersTable) {
 		t.ID = t.BigSerial("id").PrimaryKey()
-		t.Email = t.VarChar("email", 255).NotNull()
+		t.Email = t.VarChar("email", 255).NotNull().Unique()
 		t.Name = t.Text("name").NotNull().Default("guest")
 		t.Active = t.Boolean("active").NotNull().Default(true)
 		t.Nickname = t.Text("nickname").Nullable().Default("buddy")
@@ -1677,4 +1677,66 @@ func TestSQLiteIntegrationAdvancedPredicatesAndOrder(t *testing.T) {
 			t.Fatalf("expected bob (null nickname) last with NULLS LAST, got %s", rows[2].Email)
 		}
 	})
+}
+
+func TestSQLiteIntegrationUpsertFilters(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db := openSQLiteTestDB(t)
+	users, _, _ := defineSQLiteTables()
+	createSQLiteSchema(t, ctx, db)
+
+	// 1. Initial insert
+	_, err := db.Insert().
+		Table(users).
+		Set(users.Email, "upsert@example.com").
+		Set(users.Name, "Initial").
+		Set(users.Active, true).
+		Exec(ctx)
+	if err != nil {
+		t.Fatalf("initial insert failed: %v", err)
+	}
+
+	// 2. Upsert with update WHERE: should NOT update because condition active=false is false
+	_, err = db.Insert().
+		Table(users).
+		Set(users.Email, "upsert@example.com").
+		Set(users.Name, "Update Attempt").
+		OnConflict(users.Email).
+		DoUpdateSet(users.Name).
+		Where(users.Active.Eq(false)).
+		Exec(ctx)
+	if err != nil {
+		t.Fatalf("upsert with update WHERE failed: %v", err)
+	}
+
+	var row sqliteUserRow
+	if err := db.Select().Table(users).Where(users.Email.Eq("upsert@example.com")).Scan(ctx, &row); err != nil {
+		t.Fatalf("select row failed: %v", err)
+	}
+	if row.Name != "Initial" {
+		t.Fatalf("expected Name to remain Initial after failed update WHERE, got %q", row.Name)
+	}
+
+	// 3. Upsert with update WHERE and custom Set: should update successfully
+	_, err = db.Insert().
+		Table(users).
+		Set(users.Email, "upsert@example.com").
+		Set(users.Name, "Ignored").
+		OnConflict(users.Email).
+		DoUpdateSet().
+		Set(users.Name, "Custom Updated").
+		Where(users.Active.Eq(true)).
+		Exec(ctx)
+	if err != nil {
+		t.Fatalf("upsert with successful update WHERE failed: %v", err)
+	}
+
+	if err := db.Select().Table(users).Where(users.Email.Eq("upsert@example.com")).Scan(ctx, &row); err != nil {
+		t.Fatalf("select row failed: %v", err)
+	}
+	if row.Name != "Custom Updated" {
+		t.Fatalf("expected Name to be Custom Updated, got %q", row.Name)
+	}
 }

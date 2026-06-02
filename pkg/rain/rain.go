@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 
 	"github.com/hyperlocalise/rain-orm/pkg/dialect"
+	"github.com/hyperlocalise/rain-orm/pkg/schema"
 )
 
 // ErrNoConnection is returned when execution is requested without a live database handle.
@@ -216,6 +217,12 @@ func (db *DB) Update() *UpdateQuery {
 // Delete starts a typed DELETE query builder.
 func (db *DB) Delete() *DeleteQuery {
 	return &DeleteQuery{runner: db.primaryRunner(), dialect: db.dialect}
+}
+
+// Excluded returns an expression that references the conflicting row's value during an UPSERT.
+// Used in .OnConflict().DoUpdateSet().
+func Excluded(column schema.ColumnReference) schema.Expression {
+	return excludedColumn{column: column}
 }
 
 // Exec executes raw SQL against the database.

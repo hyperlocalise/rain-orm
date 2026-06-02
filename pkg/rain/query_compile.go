@@ -450,11 +450,24 @@ func (c *compileContext) writeExpressionInContext(expr schema.Expression, contex
 		if err := c.writeRaw(value); err != nil {
 			return err
 		}
+	case excludedColumn:
+		if c.dialect.Name() == "mysql" {
+			c.writeString("VALUES(")
+			c.writeQuotedIdentifier(value.column.ColumnDef().Name)
+			c.writeByte(')')
+		} else {
+			c.writeString("EXCLUDED.")
+			c.writeQuotedIdentifier(value.column.ColumnDef().Name)
+		}
 	default:
 		return fmt.Errorf("rain: unsupported expression type %T", expr)
 	}
 
 	return nil
+}
+
+func (c *compileContext) writeColumnName(column schema.ColumnReference) {
+	c.writeQuotedIdentifier(column.ColumnDef().Name)
 }
 
 func (c *compileContext) writeRaw(raw schema.RawExpr) error {
