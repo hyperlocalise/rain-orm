@@ -79,6 +79,7 @@ type compileContext struct {
 	err         error
 	skipCTEs    bool
 	useLiterals bool
+	quotedCache *sync.Map
 }
 
 var compileContextPool = sync.Pool{
@@ -88,6 +89,14 @@ var compileContextPool = sync.Pool{
 		}
 	},
 }
+
+var (
+	// OPTIMIZATION: Cache quoted identifiers per-dialect to avoid redundant
+	// string allocations and escaping logic during query compilation.
+	postgresQuotedCache sync.Map
+	mysqlQuotedCache    sync.Map
+	sqliteQuotedCache   sync.Map
+)
 
 func newCompileContext(d dialect.Dialect) *compileContext {
 	ctx := compileContextPool.Get().(*compileContext)
@@ -109,6 +118,19 @@ func (c *compileContext) reset(d dialect.Dialect) {
 	c.err = nil
 	c.skipCTEs = false
 	c.useLiterals = false
+
+	// OPTIMIZATION: Pre-select the quoted identifier cache to avoid repeated
+	// name lookups or type assertions in the hot compilation loop.
+	switch d.(type) {
+	case *dialect.PostgresDialect:
+		c.quotedCache = &postgresQuotedCache
+	case *dialect.MySQLDialect:
+		c.quotedCache = &mysqlQuotedCache
+	case *dialect.SQLiteDialect:
+		c.quotedCache = &sqliteQuotedCache
+	default:
+		c.quotedCache = nil
+	}
 }
 
 func (c *compileContext) String() string {
@@ -160,7 +182,20 @@ func (c *compileContext) writeString(value string) {
 }
 
 func (c *compileContext) writeQuotedIdentifier(name string) {
-	c.writeString(c.dialect.QuoteIdentifier(name))
+	if c.quotedCache == nil {
+		// Fallback for custom or less common dialects that don't have a dedicated cache.
+		c.writeString(c.dialect.QuoteIdentifier(name))
+		return
+	}
+
+	if cached, ok := c.quotedCache.Load(name); ok {
+		c.writeString(cached.(string))
+		return
+	}
+
+	quoted := c.dialect.QuoteIdentifier(name)
+	c.quotedCache.Store(name, quoted)
+	c.writeString(quoted)
 }
 
 func (c *compileContext) writeTableName(table *schema.TableDef) {
