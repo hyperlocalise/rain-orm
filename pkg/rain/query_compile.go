@@ -201,8 +201,9 @@ func (c *compileContext) writePredicate(predicate schema.Predicate) error {
 }
 
 type expressionContext struct {
-	allowAlias bool
-	noParens   bool
+	allowAlias  bool
+	noParens    bool
+	unqualified bool
 }
 
 func (c *compileContext) writeExpression(expr schema.Expression) error {
@@ -225,7 +226,11 @@ func (c *compileContext) writeExpressionInContext(expr schema.Expression, contex
 			c.writeQuotedIdentifier(value.column.ColumnDef().Name)
 		}
 	case schema.ColumnReference:
-		c.writeQualifiedColumn(value)
+		if context.unqualified {
+			c.writeColumn(value)
+		} else {
+			c.writeQualifiedColumn(value)
+		}
 	case schema.ValueExpr:
 		if c.useLiterals {
 			sql, err := literalDDLSQL(c.dialect, value.Value)
@@ -246,20 +251,20 @@ func (c *compileContext) writeExpressionInContext(expr schema.Expression, contex
 		c.argPlan = append(c.argPlan, compiledArg{kind: compiledArgNamedPlaceholder, name: value.Name})
 		c.writeString(c.dialect.Placeholder(index))
 	case schema.ComparisonExpr:
-		if err := c.writeExpression(value.Left); err != nil {
+		if err := c.writeExpressionInContext(value.Left, context); err != nil {
 			return err
 		}
 		c.writeByte(' ')
 		c.writeString(value.Operator)
 		c.writeByte(' ')
-		if err := c.writeExpression(value.Right); err != nil {
+		if err := c.writeExpressionInContext(value.Right, context); err != nil {
 			return err
 		}
 	case schema.InExpr:
 		if len(value.Values) == 0 {
 			return errors.New("rain: IN predicate requires at least one value")
 		}
-		if err := c.writeExpression(value.Left); err != nil {
+		if err := c.writeExpressionInContext(value.Left, context); err != nil {
 			return err
 		}
 		if value.Negated {
@@ -271,7 +276,7 @@ func (c *compileContext) writeExpressionInContext(expr schema.Expression, contex
 			if idx > 0 {
 				c.writeString(", ")
 			}
-			ctx := expressionContext{}
+			ctx := expressionContext{unqualified: context.unqualified}
 			if len(value.Values) == 1 {
 				ctx.noParens = true
 			}
@@ -281,7 +286,7 @@ func (c *compileContext) writeExpressionInContext(expr schema.Expression, contex
 		}
 		c.writeByte(')')
 	case schema.BetweenExpr:
-		if err := c.writeExpression(value.Left); err != nil {
+		if err := c.writeExpressionInContext(value.Left, context); err != nil {
 			return err
 		}
 		if value.Negated {
@@ -289,16 +294,16 @@ func (c *compileContext) writeExpressionInContext(expr schema.Expression, contex
 		} else {
 			c.writeString(" BETWEEN ")
 		}
-		if err := c.writeExpression(value.Start); err != nil {
+		if err := c.writeExpressionInContext(value.Start, context); err != nil {
 			return err
 		}
 		c.writeString(" AND ")
-		if err := c.writeExpression(value.End); err != nil {
+		if err := c.writeExpressionInContext(value.End, context); err != nil {
 			return err
 		}
 	case schema.NotExpr:
 		c.writeString("NOT (")
-		if err := c.writePredicate(value.Expr); err != nil {
+		if err := c.writeExpressionInContext(value.Expr, context); err != nil {
 			return err
 		}
 		c.writeByte(')')
@@ -338,7 +343,7 @@ func (c *compileContext) writeExpressionInContext(expr schema.Expression, contex
 				c.writeString(value.Operator)
 				c.writeByte(' ')
 			}
-			if err := c.writePredicate(part); err != nil {
+			if err := c.writeExpressionInContext(part, context); err != nil {
 				return err
 			}
 		}
@@ -350,23 +355,23 @@ func (c *compileContext) writeExpressionInContext(expr schema.Expression, contex
 		c.writeString("CASE")
 		if value.ValueExpression != nil {
 			c.writeByte(' ')
-			if err := c.writeExpression(value.ValueExpression); err != nil {
+			if err := c.writeExpressionInContext(value.ValueExpression, context); err != nil {
 				return err
 			}
 		}
 		for _, pair := range value.WhenThenPairs {
 			c.writeString(" WHEN ")
-			if err := c.writeExpression(pair.When); err != nil {
+			if err := c.writeExpressionInContext(pair.When, context); err != nil {
 				return err
 			}
 			c.writeString(" THEN ")
-			if err := c.writeExpression(pair.Then); err != nil {
+			if err := c.writeExpressionInContext(pair.Then, context); err != nil {
 				return err
 			}
 		}
 		if value.ElseExpression != nil {
 			c.writeString(" ELSE ")
-			if err := c.writeExpression(value.ElseExpression); err != nil {
+			if err := c.writeExpressionInContext(value.ElseExpression, context); err != nil {
 				return err
 			}
 		}
@@ -387,7 +392,7 @@ func (c *compileContext) writeExpressionInContext(expr schema.Expression, contex
 		case value.Star:
 			c.writeByte('*')
 		case value.Expr != nil:
-			if err := c.writeExpression(value.Expr); err != nil {
+			if err := c.writeExpressionInContext(value.Expr, context); err != nil {
 				return err
 			}
 		default:
@@ -406,7 +411,7 @@ func (c *compileContext) writeExpressionInContext(expr schema.Expression, contex
 			if idx > 0 {
 				c.writeString(", ")
 			}
-			if err := c.writeExpression(part); err != nil {
+			if err := c.writeExpressionInContext(part, context); err != nil {
 				return err
 			}
 		}

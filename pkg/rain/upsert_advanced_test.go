@@ -62,11 +62,11 @@ func TestInsertOnConflictAdvancedPostgres(t *testing.T) {
 			t.Fatalf("ToSQL returned error: %v", err)
 		}
 
-		wantSQL := `INSERT INTO "users" ("email") VALUES ($1) ON CONFLICT ("email") WHERE "users"."active" = $2 DO NOTHING`
+		wantSQL := `INSERT INTO "users" ("email") VALUES ($1) ON CONFLICT ("email") WHERE "active" = TRUE DO NOTHING`
 		if sqlText != wantSQL {
 			t.Fatalf("unexpected SQL:\nwant: %s\ngot:  %s", wantSQL, sqlText)
 		}
-		if len(args) != 2 || args[1] != true {
+		if len(args) != 1 {
 			t.Fatalf("unexpected args: %#v", args)
 		}
 	})
@@ -85,7 +85,7 @@ func TestInsertOnConflictAdvancedPostgres(t *testing.T) {
 			t.Fatalf("ToSQL returned error: %v", err)
 		}
 
-		wantSQL := `INSERT INTO "users" ("email", "name") VALUES ($1, $2) ON CONFLICT ("email") DO UPDATE SET "active" = $3, "name" = EXCLUDED."name" WHERE "users"."active" = $4`
+		wantSQL := `INSERT INTO "users" ("email", "name") VALUES ($1, $2) ON CONFLICT ("email") DO UPDATE SET "name" = EXCLUDED."name", "active" = $3 WHERE "users"."active" = $4`
 		if sqlText != wantSQL {
 			t.Fatalf("unexpected SQL:\nwant: %s\ngot:  %s", wantSQL, sqlText)
 		}
@@ -137,11 +137,11 @@ func TestInsertOnConflictAdvancedSQLite(t *testing.T) {
 			t.Fatalf("ToSQL returned error: %v", err)
 		}
 
-		wantSQL := `INSERT INTO "users" ("email") VALUES (?) ON CONFLICT ("email") WHERE "users"."active" = ? DO NOTHING`
+		wantSQL := `INSERT INTO "users" ("email") VALUES (?) ON CONFLICT ("email") WHERE "active" = 1 DO NOTHING`
 		if sqlText != wantSQL {
 			t.Fatalf("unexpected SQL:\nwant: %s\ngot:  %s", wantSQL, sqlText)
 		}
-		if len(args) != 2 || args[1] != true {
+		if len(args) != 1 {
 			t.Fatalf("unexpected args: %#v", args)
 		}
 	})
@@ -169,7 +169,7 @@ func TestInsertOnConflictAdvancedMySQL(t *testing.T) {
 			t.Fatalf("ToSQL returned error: %v", err)
 		}
 
-		wantSQL := "INSERT INTO `users` (`email`, `name`) VALUES (?, ?) ON DUPLICATE KEY UPDATE `active` = ?, `name` = VALUES(`name`)"
+		wantSQL := "INSERT INTO `users` (`email`, `name`) VALUES (?, ?) ON DUPLICATE KEY UPDATE `name` = VALUES(`name`), `active` = ?"
 		if sqlText != wantSQL {
 			t.Fatalf("unexpected SQL:\nwant: %s\ngot:  %s", wantSQL, sqlText)
 		}

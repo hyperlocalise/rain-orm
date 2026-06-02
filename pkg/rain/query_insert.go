@@ -585,10 +585,11 @@ func (q *InsertQuery) writeConflictClause(ctx *compileContext) error {
 				return errors.New("rain: MySQL conflict DO UPDATE is not supported for INSERT ... SELECT")
 			}
 			ctx.writeString(" ON DUPLICATE KEY UPDATE ")
-			for idx, item := range q.conflict.updates {
-				if err := validateAssignmentTarget(q.table, item); err != nil {
-					return err
-				}
+			updates, err := mergeAssignments(q.table, nil, q.conflict.updates)
+			if err != nil {
+				return err
+			}
+			for idx, item := range updates {
 				if idx > 0 {
 					ctx.writeString(", ")
 				}
@@ -603,6 +604,9 @@ func (q *InsertQuery) writeConflictClause(ctx *compileContext) error {
 	}
 
 	if q.conflict.constraint != "" {
+		if q.dialect.Name() != "postgres" {
+			return fmt.Errorf("rain: ON CONSTRAINT is not supported by %s dialect", q.dialect.Name())
+		}
 		if len(q.conflict.targets) > 0 {
 			return errors.New("rain: ON CONFLICT cannot specify both targets and ON CONSTRAINT")
 		}
@@ -617,8 +621,11 @@ func (q *InsertQuery) writeConflictClause(ctx *compileContext) error {
 					ctx.writeString(", ")
 				}
 				if col, ok := target.(schema.ColumnReference); ok {
-					ctx.writeColumn(col)
-				} else if err := ctx.writeExpression(target); err != nil {
+					if err := validateColumnBelongsToTable(q.table, col.ColumnDef()); err != nil {
+						return err
+					}
+				}
+				if err := ctx.writeExpressionInContext(target, expressionContext{unqualified: true}); err != nil {
 					return err
 				}
 			}
@@ -629,7 +636,11 @@ func (q *InsertQuery) writeConflictClause(ctx *compileContext) error {
 
 		if q.conflict.targetWhere != nil {
 			ctx.writeString(" WHERE ")
-			if err := ctx.writePredicate(q.conflict.targetWhere); err != nil {
+			oldUseLiterals := ctx.useLiterals
+			ctx.useLiterals = true
+			err := ctx.writeExpressionInContext(q.conflict.targetWhere, expressionContext{unqualified: true})
+			ctx.useLiterals = oldUseLiterals
+			if err != nil {
 				return err
 			}
 		}
@@ -643,10 +654,11 @@ func (q *InsertQuery) writeConflictClause(ctx *compileContext) error {
 			return errors.New("rain: conflict DO UPDATE requires at least one update column")
 		}
 		ctx.writeString(" DO UPDATE SET ")
-		for idx, item := range q.conflict.updates {
-			if err := validateAssignmentTarget(q.table, item); err != nil {
-				return err
-			}
+		updates, err := mergeAssignments(q.table, nil, q.conflict.updates)
+		if err != nil {
+			return err
+		}
+		for idx, item := range updates {
 			if idx > 0 {
 				ctx.writeString(", ")
 			}
