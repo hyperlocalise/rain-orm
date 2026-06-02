@@ -327,7 +327,7 @@ func (c *compileContext) writeExpressionInContext(expr schema.Expression, contex
 			c.writeByte(')')
 		}
 	case schema.NullCheckExpr:
-		if err := c.writeExpression(value.Expr); err != nil {
+		if err := c.writeExpressionInContext(value.Expr, context); err != nil {
 			return err
 		}
 		if value.Negated {

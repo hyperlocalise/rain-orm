@@ -116,6 +116,46 @@ func TestInsertOnConflictAdvancedPostgres(t *testing.T) {
 	})
 }
 
+func TestInsertOnConflictValidation(t *testing.T) {
+	t.Parallel()
+
+	db, _ := rain.OpenDialect("postgres")
+	users, _ := defineTables()
+
+	t.Run("targetWhere without targets returns error", func(t *testing.T) {
+		_, _, err := db.Insert().
+			Table(users).
+			Set(users.Email, "a").
+			OnConflict().
+			TargetWhere(users.Active.Eq(true)).
+			DoNothing().
+			ToSQL()
+
+		if err == nil || err.Error() != "rain: conflict targetWhere requires at least one conflict target column" {
+			t.Fatalf("expected targetWhere validation error, got %v", err)
+		}
+	})
+
+	t.Run("NullCheckExpr in targetWhere is unqualified", func(t *testing.T) {
+		sqlText, _, err := db.Insert().
+			Table(users).
+			Set(users.Email, "a").
+			OnConflict(users.Email).
+			TargetWhere(users.Name.IsNull()).
+			DoNothing().
+			ToSQL()
+
+		if err != nil {
+			t.Fatalf("ToSQL returned error: %v", err)
+		}
+
+		wantSQL := `INSERT INTO "users" ("email") VALUES ($1) ON CONFLICT ("email") WHERE "name" IS NULL DO NOTHING`
+		if sqlText != wantSQL {
+			t.Fatalf("unexpected SQL:\nwant: %s\ngot:  %s", wantSQL, sqlText)
+		}
+	})
+}
+
 func TestInsertOnConflictAdvancedSQLite(t *testing.T) {
 	t.Parallel()
 

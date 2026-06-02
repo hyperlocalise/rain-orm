@@ -635,6 +635,9 @@ func (q *InsertQuery) writeConflictClause(ctx *compileContext) error {
 		}
 
 		if q.conflict.targetWhere != nil {
+			if len(q.conflict.targets) == 0 {
+				return errors.New("rain: conflict targetWhere requires at least one conflict target column")
+			}
 			ctx.writeString(" WHERE ")
 			oldUseLiterals := ctx.useLiterals
 			ctx.useLiterals = true
