@@ -144,7 +144,6 @@ func TestInsertOnConflictValidation(t *testing.T) {
 			TargetWhere(users.Name.IsNull()).
 			DoNothing().
 			ToSQL()
-
 		if err != nil {
 			t.Fatalf("ToSQL returned error: %v", err)
 		}
