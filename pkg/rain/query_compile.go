@@ -1,6 +1,7 @@
 package rain
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"strings"
@@ -73,7 +74,7 @@ func (q compiledQuery) bind(args PreparedArgs) ([]any, error) {
 }
 
 type compileContext struct {
-	builder     strings.Builder
+	buffer      bytes.Buffer
 	dialect     dialect.Dialect
 	argPlan     []compiledArg
 	err         error
@@ -84,9 +85,14 @@ type compileContext struct {
 
 var compileContextPool = sync.Pool{
 	New: func() any {
-		return &compileContext{
+		ctx := &compileContext{
 			argPlan: make([]compiledArg, 0, 8),
 		}
+		// OPTIMIZATION: Pre-allocate a reasonable buffer capacity to reduce early
+		// re-allocations during query building. bytes.Buffer preserves this
+		// capacity across Reset() calls.
+		ctx.buffer.Grow(512)
+		return ctx
 	},
 }
 
@@ -109,7 +115,7 @@ func releaseCompileContext(ctx *compileContext) {
 }
 
 func (c *compileContext) reset(d dialect.Dialect) {
-	c.builder.Reset()
+	c.buffer.Reset()
 	c.dialect = d
 	// Clear the argPlan slice to ensure any values it contains can be
 	// garbage collected before we reset its length for reuse.
@@ -134,7 +140,7 @@ func (c *compileContext) reset(d dialect.Dialect) {
 }
 
 func (c *compileContext) String() string {
-	return c.builder.String()
+	return c.buffer.String()
 }
 
 func (c *compileContext) compiledQuery() compiledQuery {
@@ -174,11 +180,11 @@ func (c *compileContext) nextPlaceholderIndex() int {
 }
 
 func (c *compileContext) writeByte(ch byte) {
-	c.builder.WriteByte(ch)
+	c.buffer.WriteByte(ch)
 }
 
 func (c *compileContext) writeString(value string) {
-	c.builder.WriteString(value)
+	c.buffer.WriteString(value)
 }
 
 func (c *compileContext) writeQuotedIdentifier(name string) {

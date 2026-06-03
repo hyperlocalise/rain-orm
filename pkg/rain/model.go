@@ -61,8 +61,7 @@ type rowScanScratch struct {
 }
 
 type rowScanPlan struct {
-	columns      []scanColumnPlan
-	clearIndices []int
+	columns []scanColumnPlan
 
 	// OPTIMIZATION: Track if we need a reflect.Value for any column.
 	needsTargetValue bool
@@ -91,8 +90,14 @@ type rowScanPlan struct {
 }
 
 type rowScanPlanKey struct {
-	modelType  reflect.Type
-	columns    string
+	modelType reflect.Type
+
+	// OPTIMIZATION: Avoid strings.Join for models with up to 10 columns by using
+	// a fixed-size array. Larger column sets fall back to the dynamic string.
+	columns      [10]string
+	columnString string
+	numColumns   int
+
 	hasTable   bool
 	tableName  string
 	tableAlias string
@@ -298,12 +303,9 @@ func scanRowsAgainstTableDirect(rows *sql.Rows, dest any, table *schema.TableDef
 		elemSize := elemType.Size()
 
 		for rows.Next() {
-			// Clear any previous generic scanned values to avoid carrying over data
-			// for non-direct columns. Direct columns use pointers to scratch variables
-			// that are overwritten by rows.Scan.
-			for _, idx := range plan.clearIndices {
-				scratch.scanned[idx] = nil
-			}
+			// OPTIMIZATION: Removed redundant clearing of scratch.scanned here.
+			// Generic scanned values (for non-direct columns) are overwritten by
+			// rows.Scan, and direct columns use separate scratch buffers.
 
 			if err := rows.Scan(scratch.scanTargets...); err != nil {
 				return err
@@ -1064,21 +1066,18 @@ func sliceElementStructType(elemType reflect.Type) (reflect.Type, bool, error) {
 }
 
 func newRowScanPlanForColumns(cols []string, modelType reflect.Type, table *schema.TableDef) (*rowScanPlan, error) {
-	var columnKey string
-	// OPTIMIZATION: Avoid strings.Join for the common single-column scan (Count/point lookups).
-	switch len(cols) {
-	case 0:
-		columnKey = ""
-	case 1:
-		columnKey = cols[0]
-	default:
-		columnKey = strings.Join(cols, "\x00")
+	key := rowScanPlanKey{
+		modelType:  modelType,
+		numColumns: len(cols),
+	}
+	// OPTIMIZATION: Populate the fixed-size column array for up to 10 columns
+	// to avoid strings.Join allocations in the hot plan lookup path.
+	if len(cols) <= 10 {
+		copy(key.columns[:], cols)
+	} else {
+		key.columnString = strings.Join(cols, "\x00")
 	}
 
-	key := rowScanPlanKey{
-		modelType: modelType,
-		columns:   columnKey,
-	}
 	if table != nil {
 		key.hasTable = true
 		key.tableName = table.Name
@@ -1098,8 +1097,7 @@ func newRowScanPlanForColumns(cols []string, modelType reflect.Type, table *sche
 	}
 
 	plan := &rowScanPlan{
-		columns:      make([]scanColumnPlan, 0, len(cols)),
-		clearIndices: make([]int, 0),
+		columns: make([]scanColumnPlan, 0, len(cols)),
 	}
 
 	var numInts, numStrings, numBools, numFloats, numTimes int
@@ -1108,7 +1106,6 @@ func newRowScanPlanForColumns(cols []string, modelType reflect.Type, table *sche
 	for idx, name := range cols {
 		fieldInfo, ok := meta.byColumn[name]
 		if !ok {
-			plan.clearIndices = append(plan.clearIndices, idx)
 			continue
 		}
 		matchedFields[name] = struct{}{}
@@ -1151,9 +1148,6 @@ func newRowScanPlanForColumns(cols []string, modelType reflect.Type, table *sche
 		}
 
 		isDirect := !isJSON && isSimpleDirectType(fieldType)
-		if !isDirect {
-			plan.clearIndices = append(plan.clearIndices, idx)
-		}
 
 		colPlan := scanColumnPlan{
 			columnName:   name,

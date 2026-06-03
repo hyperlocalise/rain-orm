@@ -103,7 +103,26 @@ func TestRowScanPlanCacheUsesStableTableIdentityForAliases(t *testing.T) {
 	var matchingEntries int
 	rowScanPlanCache.Range(func(key, _ any) bool {
 		planKey, ok := key.(rowScanPlanKey)
-		if ok && planKey.hasTable && planKey.tableName == "users" && planKey.tableAlias == "u" && planKey.columns == columnKey {
+		if !ok {
+			return true
+		}
+
+		var matchColumns bool
+		if len(cols) <= 10 {
+			matchColumns = planKey.numColumns == len(cols)
+			if matchColumns {
+				for i := range cols {
+					if planKey.columns[i] != cols[i] {
+						matchColumns = false
+						break
+					}
+				}
+			}
+		} else {
+			matchColumns = planKey.numColumns == len(cols) && planKey.columnString == columnKey
+		}
+
+		if planKey.hasTable && planKey.tableName == "users" && planKey.tableAlias == "u" && matchColumns {
 			matchingEntries++
 		}
 		return true
