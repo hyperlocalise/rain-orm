@@ -1,6 +1,6 @@
 services:
   postgres:
-    image: postgres:18
+    image: postgres:16-alpine
     container_name: rain-orm-postgres
     environment:
       POSTGRES_DB: rain_test
@@ -16,7 +16,7 @@ services:
       start_period: 5s
 
   mysql:
-    image: mysql:9.7
+    image: mysql:8.4
     container_name: rain-orm-mysql
     environment:
       MYSQL_DATABASE: rain_test
