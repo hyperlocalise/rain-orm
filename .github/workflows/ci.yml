@@ -53,7 +53,7 @@ jobs:
     timeout-minutes: 10
     services:
       postgres:
-        image: postgres:18
+        image: postgres:16-alpine
         env:
           POSTGRES_DB: rain_test
           POSTGRES_USER: rain
@@ -92,7 +92,7 @@ jobs:
     timeout-minutes: 10
     services:
       mysql:
-        image: mysql:9.7
+        image: mysql:8.4
         env:
           MYSQL_DATABASE: rain_test
           MYSQL_USER: rain

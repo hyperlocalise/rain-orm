@@ -202,6 +202,71 @@ func TestInsertOnConflictPostgres(t *testing.T) {
 			t.Fatalf("unexpected do update args: %#v", args)
 		}
 	})
+
+	t.Run("on constraint", func(t *testing.T) {
+		sqlText, _, err := db.Insert().
+			Table(users).
+			Set(users.Email, "alice@example.com").
+			Set(users.Name, "Alice").
+			OnConflict().
+			OnConstraint("users_email_key").
+			DoNothing().
+			ToSQL()
+		if err != nil {
+			t.Fatalf("ToSQL returned error: %v", err)
+		}
+
+		wantSQL := `INSERT INTO "users" ("email", "name") VALUES ($1, $2) ON CONFLICT ON CONSTRAINT "users_email_key" DO NOTHING`
+		if sqlText != wantSQL {
+			t.Fatalf("unexpected SQL:\nwant: %s\ngot:  %s", wantSQL, sqlText)
+		}
+	})
+
+	t.Run("conflict target where", func(t *testing.T) {
+		sqlText, args, err := db.Insert().
+			Table(users).
+			Set(users.Email, "alice@example.com").
+			Set(users.Name, "Alice").
+			OnConflict(users.Email).
+			Where(users.Active.Eq(true)).
+			DoNothing().
+			ToSQL()
+		if err != nil {
+			t.Fatalf("ToSQL returned error: %v", err)
+		}
+
+		wantSQL := `INSERT INTO "users" ("email", "name") VALUES ($1, $2) ON CONFLICT ("email") WHERE "users"."active" = $3 DO NOTHING`
+		if sqlText != wantSQL {
+			t.Fatalf("unexpected SQL:\nwant: %s\ngot:  %s", wantSQL, sqlText)
+		}
+		if len(args) != 3 || args[2] != true {
+			t.Fatalf("unexpected args: %#v", args)
+		}
+	})
+
+	t.Run("custom do update set and update where", func(t *testing.T) {
+		sqlText, args, err := db.Insert().
+			Table(users).
+			Set(users.Email, "alice@example.com").
+			Set(users.Name, "Alice").
+			OnConflict(users.Email).
+			DoUpdateSet().
+			Set(users.Name, rain.Excluded(users.Name)).
+			Set(users.Active, true).
+			Where(users.Active.Eq(false)).
+			ToSQL()
+		if err != nil {
+			t.Fatalf("ToSQL returned error: %v", err)
+		}
+
+		wantSQL := `INSERT INTO "users" ("email", "name") VALUES ($1, $2) ON CONFLICT ("email") DO UPDATE SET "name" = EXCLUDED."name", "active" = $3 WHERE "users"."active" = $4`
+		if sqlText != wantSQL {
+			t.Fatalf("unexpected SQL:\nwant: %s\ngot:  %s", wantSQL, sqlText)
+		}
+		if len(args) != 4 || args[2] != true || args[3] != false {
+			t.Fatalf("unexpected args: %#v", args)
+		}
+	})
 }
 
 func TestInsertSelectToSQL(t *testing.T) {
@@ -453,7 +518,7 @@ func TestInsertOnConflictMySQL(t *testing.T) {
 			OnConflict(users.Email).
 			DoNothing().
 			ToSQL()
-		if err == nil || !strings.Contains(err.Error(), "cannot target specific conflict columns") {
+		if err == nil || !strings.Contains(err.Error(), "does not support conflict targets") {
 			t.Fatalf("expected mysql conflict target error, got %v", err)
 		}
 	})
@@ -466,7 +531,7 @@ func TestInsertOnConflictMySQL(t *testing.T) {
 			OnConflict(users.Email).
 			DoUpdateSet(users.Name).
 			ToSQL()
-		if err == nil || !strings.Contains(err.Error(), "cannot target specific conflict columns") {
+		if err == nil || !strings.Contains(err.Error(), "does not support conflict targets") {
 			t.Fatalf("expected mysql conflict target error, got %v", err)
 		}
 	})
