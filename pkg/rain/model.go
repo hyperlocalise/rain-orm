@@ -1073,9 +1073,7 @@ func newRowScanPlanForColumns(cols []string, modelType reflect.Type, table *sche
 	// OPTIMIZATION: Populate the fixed-size column array for up to 10 columns
 	// to avoid strings.Join allocations in the hot plan lookup path.
 	if len(cols) <= 10 {
-		for i := range cols {
-			key.columns[i] = cols[i]
-		}
+		copy(key.columns[:], cols)
 	} else {
 		key.columnString = strings.Join(cols, "\x00")
 	}
