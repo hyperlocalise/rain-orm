@@ -610,7 +610,7 @@ func (q *InsertQuery) writeConflictClause(ctx *compileContext) error {
 				if idx > 0 {
 					ctx.writeString(", ")
 				}
-				ctx.writeQuotedIdentifier(item.column.ColumnDef().Name)
+				ctx.writeColumnName(item.column)
 				ctx.writeString(" = ")
 				if err := ctx.writeExpression(item.value); err != nil {
 					return err
@@ -664,7 +664,7 @@ func (q *InsertQuery) writeConflictClause(ctx *compileContext) error {
 			if idx > 0 {
 				ctx.writeString(", ")
 			}
-			ctx.writeQuotedIdentifier(item.column.ColumnDef().Name)
+			ctx.writeColumnName(item.column)
 			ctx.writeString(" = ")
 			if err := ctx.writeExpression(item.value); err != nil {
 				return err
