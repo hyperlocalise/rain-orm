@@ -133,7 +133,6 @@ func TestUpdateQueryParity(t *testing.T) {
 			Model(user).
 			Where(users.ID.Eq(int64(1))).
 			ToSQL()
-
 		if err != nil {
 			t.Fatalf("ToSQL: %v", err)
 		}
@@ -157,7 +156,6 @@ func TestUpdateQueryParity(t *testing.T) {
 			}).
 			Where(users.ID.Eq(int64(1))).
 			ToSQL()
-
 		if err != nil {
 			t.Fatalf("ToSQL: %v", err)
 		}
@@ -181,7 +179,6 @@ func TestUpdateQueryParity(t *testing.T) {
 			Set(users.Name, "Overridden").
 			Where(users.ID.Eq(int64(1))).
 			ToSQL()
-
 		if err != nil {
 			t.Fatalf("ToSQL: %v", err)
 		}
