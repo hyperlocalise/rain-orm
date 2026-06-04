@@ -76,9 +76,11 @@ func (d *MySQLDialect) DataType(columnType schema.ColumnType) string {
 		return "BOOLEAN"
 	case "date":
 		return "DATE"
+	case "time":
+		return "TIME"
 	case "timestamp":
 		return "TIMESTAMP"
-	case "time", "timestamptz":
+	case "timestamptz":
 		return "DATETIME"
 	case "json":
 		return "JSON"
@@ -90,6 +92,8 @@ func (d *MySQLDialect) DataType(columnType schema.ColumnType) string {
 		return "VARCHAR(255)"
 	case "bytes":
 		return "BLOB"
+	case "char":
+		return "CHAR"
 	default:
 		return string(columnType.DataType)
 	}

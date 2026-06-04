@@ -86,9 +86,11 @@ func (d *BaseDialect) DataType(columnType schema.ColumnType) string {
 		return "BOOLEAN"
 	case "date":
 		return "DATE"
+	case "time":
+		return "TIME"
 	case "timestamp":
 		return "TIMESTAMP"
-	case "time", "timestamptz":
+	case "timestamptz":
 		return "TIMESTAMP"
 	case "json":
 		return "JSON"
@@ -98,6 +100,8 @@ func (d *BaseDialect) DataType(columnType schema.ColumnType) string {
 		return "UUID"
 	case "bytes":
 		return "BLOB"
+	case "char":
+		return "CHAR"
 	case "enum":
 		return "VARCHAR"
 	default:

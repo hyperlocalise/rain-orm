@@ -35,7 +35,9 @@ const (
 	TypeJSONB       DataType = "JSONB"
 	TypeUUID        DataType = "UUID"
 	TypeBytes       DataType = "BYTES"
+	TypeChar        DataType = "CHAR"
 	TypeDate        DataType = "DATE"
+	TypeTime        DataType = "TIME"
 	TypeTimestamp   DataType = "TIMESTAMP"
 	TypeTimestampTZ DataType = "TIMESTAMPTZ"
 	TypeEnum        DataType = "ENUM"
@@ -209,16 +211,18 @@ type RelationDef struct {
 
 // IndexDef stores table-level index metadata.
 type IndexDef struct {
-	Name    string
-	Unique  bool
-	Columns []IndexColumn
-	Where   string
+	Name      string
+	Unique    bool
+	Columns   []IndexColumn
+	Where     string
+	WhereExpr Predicate
 }
 
 // IndexColumn stores an indexed column and its sort direction.
 type IndexColumn struct {
-	Column    ColumnReference
-	Direction SortDirection
+	Column     ColumnReference
+	Direction  SortDirection
+	NullsOrder NullsOrder
 }
 
 // IndexColumnSpec is implemented by values that can be bound to an index.
@@ -330,6 +334,15 @@ func (t *TableModel) VarChar(name string, size int) *Column[string] {
 	}, true, false)
 }
 
+// Char adds a CHAR column with fixed length.
+func (t *TableModel) Char(name string, size int) *Column[string] {
+	return addColumn[string](t.def, name, ColumnType{
+		DataType:        TypeChar,
+		Size:            size,
+		LengthSemantics: LengthSemanticsFixed,
+	}, true, false)
+}
+
 // Boolean adds a BOOLEAN column.
 func (t *TableModel) Boolean(name string) *Column[bool] {
 	return addColumn[bool](t.def, name, ColumnType{DataType: TypeBoolean}, true, false)
@@ -358,6 +371,19 @@ func (t *TableModel) Bytes(name string) *Column[[]byte] {
 // Date adds a DATE column intended for calendar-date values.
 func (t *TableModel) Date(name string) *Column[time.Time] {
 	return addColumn[time.Time](t.def, name, ColumnType{DataType: TypeDate}, true, false)
+}
+
+// Time adds a TIME column without timezone semantics.
+func (t *TableModel) Time(name string) *Column[time.Time] {
+	return addColumn[time.Time](t.def, name, ColumnType{DataType: TypeTime}, true, false)
+}
+
+// TimePrecision adds a TIME column with explicit fractional precision.
+func (t *TableModel) TimePrecision(name string, precision int) *Column[time.Time] {
+	return addColumn[time.Time](t.def, name, ColumnType{
+		DataType:      TypeTime,
+		TimePrecision: precision,
+	}, true, false)
 }
 
 // Timestamp adds a TIMESTAMP column without timezone semantics.
@@ -1296,12 +1322,22 @@ func (b *IndexBuilder) On(columns ...IndexColumnSpec) *IndexBuilder {
 			if !ok {
 				panic("schema: index order expression must wrap a column")
 			}
-			resolved = append(resolved, IndexColumn{Column: col, Direction: value.Direction})
+			resolved = append(resolved, IndexColumn{
+				Column:     col,
+				Direction:  value.Direction,
+				NullsOrder: value.NullsOrder,
+			})
 		default:
 			panic(fmt.Sprintf("schema: unsupported index column type %T", column))
 		}
 	}
 	b.table.Indexes[b.index].Columns = resolved
+	return b
+}
+
+// Where adds a filter to the index definition (partial index).
+func (b *IndexBuilder) Where(predicate Predicate) *IndexBuilder {
+	b.table.Indexes[b.index].WhereExpr = predicate
 	return b
 }
 

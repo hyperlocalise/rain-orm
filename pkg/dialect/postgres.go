@@ -79,9 +79,11 @@ func (d *PostgresDialect) DataType(columnType schema.ColumnType) string {
 		return "BOOLEAN"
 	case "date":
 		return "DATE"
+	case "time":
+		return "TIME"
 	case "timestamp":
 		return "TIMESTAMP"
-	case "time", "timestamptz":
+	case "timestamptz":
 		return "TIMESTAMPTZ"
 	case "json":
 		return "JSON"
@@ -93,6 +95,8 @@ func (d *PostgresDialect) DataType(columnType schema.ColumnType) string {
 		return "UUID"
 	case "bytes":
 		return "BYTEA"
+	case "char":
+		return "CHAR"
 	default:
 		return string(columnType.DataType)
 	}
