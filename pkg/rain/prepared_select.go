@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
+	"reflect"
 	"sync"
 )
 
@@ -28,6 +30,8 @@ type PreparedSelectQuery struct {
 	countErr    error
 	closeOnce   sync.Once
 	closeErr    error
+
+	scanPlans sync.Map // map[reflect.Type]*rowScanPlan
 }
 
 // Prepare compiles and prepares the SELECT query and derived aggregate statements.
@@ -88,7 +92,7 @@ func (q *SelectQuery) Prepare(ctx context.Context) (*PreparedSelectQuery, error)
 }
 
 // Scan executes the prepared SELECT query and scans results into dest.
-func (p *PreparedSelectQuery) Scan(ctx context.Context, args PreparedArgs, dest any) error {
+func (p *PreparedSelectQuery) Scan(ctx context.Context, args PreparedArgs, dest any) (err error) {
 	bound, err := p.selectQuery.bind(args)
 	if err != nil {
 		return err
@@ -110,9 +114,66 @@ func (p *PreparedSelectQuery) Scan(ctx context.Context, args PreparedArgs, dest 
 			}
 		}
 	}
-	rows, err := p.selectStmt.QueryContext(ctx, bound...)
-	if err != nil {
+
+	if len(p.query.relationNames) == 0 && (cacheKey == "" || cacheOptions == nil || cacheOptions.bypass || p.query.locking != nil) {
+		destVal := reflect.ValueOf(dest)
+		if destVal.Kind() != reflect.Pointer || destVal.IsNil() {
+			return fmt.Errorf("rain: destination must be a non-nil pointer")
+		}
+		target := destVal.Elem()
+		if !target.CanSet() {
+			return fmt.Errorf("rain: destination must be settable")
+		}
+
+		var structType reflect.Type
+		switch target.Kind() {
+		case reflect.Struct:
+			structType = target.Type()
+		case reflect.Slice:
+			var scanErr error
+			structType, _, scanErr = sliceElementStructType(target.Type().Elem())
+			if scanErr != nil {
+				return scanErr
+			}
+		default:
+			return fmt.Errorf("rain: destination must point to a struct or slice")
+		}
+
+		var plan *rowScanPlan
+		if cached, ok := p.scanPlans.Load(structType); ok {
+			plan = cached.(*rowScanPlan)
+		} else {
+			rows, queryErr := p.selectStmt.QueryContext(ctx, bound...)
+			if queryErr != nil {
+				return queryErr
+			}
+			defer closeRows(rows, &err)
+
+			colNames, colErr := rows.Columns()
+			if colErr != nil {
+				return colErr
+			}
+			plan, err = newRowScanPlanForColumns(colNames, structType, table)
+			if err != nil {
+				return err
+			}
+			p.scanPlans.Store(structType, plan)
+			err = scanRowsWithPlan(rows, target, plan)
+			return err
+		}
+
+		rows, queryErr := p.selectStmt.QueryContext(ctx, bound...)
+		if queryErr != nil {
+			return queryErr
+		}
+		defer closeRows(rows, &err)
+		err = scanRowsWithPlan(rows, target, plan)
 		return err
+	}
+
+	rows, queryErr := p.selectStmt.QueryContext(ctx, bound...)
+	if queryErr != nil {
+		return queryErr
 	}
 	defer closeRows(rows, &err)
 
@@ -126,16 +187,14 @@ func (p *PreparedSelectQuery) Scan(ctx context.Context, args PreparedArgs, dest 
 			if err != nil {
 				return err
 			}
-			return p.query.writeCachedSelectResult(ctx, cacheKey, cacheOptions, result)
+			err = p.query.writeCachedSelectResult(ctx, cacheKey, cacheOptions, result)
+			return err
 		}
 		err = scanRowsAgainstTableDirect(rows, dest, table)
 	} else {
 		err = p.query.scanRowsWithRelations(ctx, rows, dest)
 	}
-	if err != nil {
-		return err
-	}
-	return nil
+	return err
 }
 
 // Count executes the prepared COUNT(*) query.

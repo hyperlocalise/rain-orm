@@ -61,7 +61,8 @@ type rowScanScratch struct {
 }
 
 type rowScanPlan struct {
-	columns []scanColumnPlan
+	modelType reflect.Type
+	columns   []scanColumnPlan
 
 	// OPTIMIZATION: Track if we need a reflect.Value for any column.
 	needsTargetValue bool
@@ -252,13 +253,31 @@ func scanRowsAgainstTableDirect(rows *sql.Rows, dest any, table *schema.TableDef
 		return fmt.Errorf("rain: destination must be settable (pass a pointer to a slice or struct)")
 	}
 
+	var structType reflect.Type
 	switch target.Kind() {
 	case reflect.Struct:
-		plan, err := newRowScanPlanForColumns(cols, target.Type(), table)
+		structType = target.Type()
+	case reflect.Slice:
+		var err error
+		structType, _, err = sliceElementStructType(target.Type().Elem())
 		if err != nil {
 			return err
 		}
+	default:
+		return fmt.Errorf("rain: destination must point to a struct or slice")
+	}
 
+	plan, err := newRowScanPlanForColumns(cols, structType, table)
+	if err != nil {
+		return err
+	}
+
+	return scanRowsWithPlan(rows, target, plan)
+}
+
+func scanRowsWithPlan(rows *sql.Rows, target reflect.Value, plan *rowScanPlan) error {
+	switch target.Kind() {
+	case reflect.Struct:
 		scratch := plan.pool.Get().(*rowScanScratch)
 		defer plan.pool.Put(scratch)
 
@@ -280,14 +299,7 @@ func scanRowsAgainstTableDirect(rows *sql.Rows, dest any, table *schema.TableDef
 		return scanDirectRowAddr(target.Addr().UnsafePointer(), targetVal, plan, scratch)
 	case reflect.Slice:
 		elemType := target.Type().Elem()
-		structType, pointerElems, err := sliceElementStructType(elemType)
-		if err != nil {
-			return err
-		}
-		plan, err := newRowScanPlanForColumns(cols, structType, table)
-		if err != nil {
-			return err
-		}
+		pointerElems := elemType.Kind() == reflect.Pointer
 
 		scratch := plan.pool.Get().(*rowScanScratch)
 		defer plan.pool.Put(scratch)
@@ -303,10 +315,6 @@ func scanRowsAgainstTableDirect(rows *sql.Rows, dest any, table *schema.TableDef
 		elemSize := elemType.Size()
 
 		for rows.Next() {
-			// OPTIMIZATION: Removed redundant clearing of scratch.scanned here.
-			// Generic scanned values (for non-direct columns) are overwritten by
-			// rows.Scan, and direct columns use separate scratch buffers.
-
 			if err := rows.Scan(scratch.scanTargets...); err != nil {
 				return err
 			}
@@ -325,7 +333,7 @@ func scanRowsAgainstTableDirect(rows *sql.Rows, dest any, table *schema.TableDef
 			ptr := unsafe.Add(unsafe.Pointer(items.Pointer()), uintptr(n)*elemSize)
 
 			if pointerElems {
-				newStruct := reflect.New(structType)
+				newStruct := reflect.New(plan.modelType)
 				reflect.NewAt(elemType, ptr).Elem().Set(newStruct)
 
 				var targetVal reflect.Value
@@ -364,7 +372,7 @@ func scanRowsAgainstTableDirect(rows *sql.Rows, dest any, table *schema.TableDef
 		target.Set(items)
 		return nil
 	default:
-		return fmt.Errorf("rain: destination must point to a struct or slice")
+		return fmt.Errorf("rain: destination must be a struct or slice")
 	}
 }
 
@@ -1097,7 +1105,8 @@ func newRowScanPlanForColumns(cols []string, modelType reflect.Type, table *sche
 	}
 
 	plan := &rowScanPlan{
-		columns: make([]scanColumnPlan, 0, len(cols)),
+		modelType: modelType,
+		columns:   make([]scanColumnPlan, 0, len(cols)),
 	}
 
 	var numInts, numStrings, numBools, numFloats, numTimes int
