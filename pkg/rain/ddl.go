@@ -247,11 +247,31 @@ func createIndexesSQL(d dialect.Dialect, table *schema.TableDef) ([]string, erro
 				builder.WriteByte(' ')
 				builder.WriteString(string(column.Direction))
 			}
+			if column.NullsOrder != "" {
+				if !dialect.HasFeature(d.Features(), dialect.FeatureNullsOrder) {
+					return nil, fmt.Errorf("rain: index %q on table %q uses NULLS FIRST/LAST which is not supported by %s dialect", index.Name, table.Name, d.Name())
+				}
+				builder.WriteByte(' ')
+				builder.WriteString(string(column.NullsOrder))
+			}
 		}
 		builder.WriteByte(')')
-		if strings.TrimSpace(index.Where) != "" {
-			builder.WriteString(" WHERE ")
-			builder.WriteString(index.Where)
+
+		if index.WhereExpr != nil || strings.TrimSpace(index.Where) != "" {
+			if !dialect.HasFeature(d.Features(), dialect.FeaturePartialIndex) {
+				return nil, fmt.Errorf("rain: partial indexes are not supported by %s dialect", d.Name())
+			}
+			if index.WhereExpr != nil {
+				whereSQL, err := predicateDDLSQL(d, table, index.WhereExpr)
+				if err != nil {
+					return nil, fmt.Errorf("rain: index %q on table %q WHERE clause: %w", index.Name, table.Name, err)
+				}
+				builder.WriteString(" WHERE ")
+				builder.WriteString(whereSQL)
+			} else {
+				builder.WriteString(" WHERE ")
+				builder.WriteString(index.Where)
+			}
 		}
 		statements = append(statements, builder.String())
 	}
@@ -359,7 +379,8 @@ func columnDefinitionSQL(d dialect.Dialect, table *schema.TableDef, column *sche
 func columnTypeSQL(d dialect.Dialect, column *schema.ColumnDef) string {
 	typeSQL := d.DataType(column.Type)
 
-	if column.Type.DataType == schema.TypeVarChar && column.Type.Size > 0 && strings.EqualFold(typeSQL, "VARCHAR") {
+	if (column.Type.DataType == schema.TypeVarChar || column.Type.DataType == schema.TypeChar) && column.Type.Size > 0 &&
+		(strings.EqualFold(typeSQL, "VARCHAR") || strings.EqualFold(typeSQL, "CHAR")) {
 		typeSQL = fmt.Sprintf("%s(%d)", typeSQL, column.Type.Size)
 	}
 
@@ -607,7 +628,7 @@ func isTimestampColumn(columnType schema.ColumnType) bool {
 	}
 
 	switch columnType.DataType {
-	case schema.TypeTimestamp, schema.TypeTimestampTZ:
+	case schema.TypeTimestamp, schema.TypeTimestampTZ, schema.TypeTime:
 		return true
 	default:
 		return false

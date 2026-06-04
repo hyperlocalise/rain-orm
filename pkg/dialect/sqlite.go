@@ -31,7 +31,8 @@ func (d *SQLiteDialect) Features() Feature {
 		FeatureUpdateLimit |
 		FeatureDeleteOrder |
 		FeatureDeleteLimit |
-		FeatureUnlimited
+		FeatureUnlimited |
+		FeaturePartialIndex
 }
 
 // QuoteIdentifier quotes identifiers with double quotes.
@@ -60,9 +61,7 @@ func (d *SQLiteDialect) DataType(columnType schema.ColumnType) string {
 		return "REAL"
 	case "bool", "boolean":
 		return "INTEGER"
-	case "date", "timestamp":
-		return "TEXT"
-	case "time", "timestamptz":
+	case "date", "time", "timestamp", "timestamptz":
 		return "TEXT"
 	case "json", "jsonb":
 		return "TEXT"
@@ -70,6 +69,8 @@ func (d *SQLiteDialect) DataType(columnType schema.ColumnType) string {
 		return "TEXT"
 	case "bytes":
 		return "BLOB"
+	case "char":
+		return "TEXT"
 	default:
 		return string(columnType.DataType)
 	}

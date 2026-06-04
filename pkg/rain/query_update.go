@@ -15,7 +15,9 @@ type UpdateQuery struct {
 	runner    queryRunner
 	dialect   dialect.Dialect
 	table     *schema.TableDef
+	model     any
 	values    []assignment
+	rows      []map[schema.ColumnReference]any
 	where     []schema.Predicate
 	order     []schema.OrderExpr
 	limit     *int
@@ -40,6 +42,20 @@ func (q *UpdateQuery) Set(column schema.ColumnReference, value any) *UpdateQuery
 	}
 
 	q.values = append(q.values, assignment{column: column, value: expr})
+	return q
+}
+
+// Model sets a struct payload for the update.
+// Plain fields are treated as explicit values, including zero values.
+// Nil pointers are omitted, and rain.Set[T]{Valid:false} omits a value.
+func (q *UpdateQuery) Model(model any) *UpdateQuery {
+	q.model = model
+	return q
+}
+
+// Values sets explicit column assignments from a map.
+func (q *UpdateQuery) Values(values map[schema.ColumnReference]any) *UpdateQuery {
+	q.rows = append(q.rows, values)
 	return q
 }
 
@@ -129,9 +145,15 @@ func (q *UpdateQuery) compile() (compiledQuery, error) {
 	if q.table.IsView {
 		return compiledQuery{}, fmt.Errorf("rain: cannot update view %q", q.table.Name)
 	}
-	if len(q.values) == 0 {
+
+	assignments, err := q.updateAssignments()
+	if err != nil {
+		return compiledQuery{}, err
+	}
+	if len(assignments) == 0 {
 		return compiledQuery{}, errors.New("rain: update query requires at least one assignment")
 	}
+
 	if len(q.where) == 0 && !q.unbounded {
 		return compiledQuery{}, errors.New("rain: update query requires at least one WHERE predicate; call Unbounded() to allow all rows")
 	}
@@ -139,7 +161,7 @@ func (q *UpdateQuery) compile() (compiledQuery, error) {
 	ctx := newCompileContext(q.dialect)
 	defer releaseCompileContext(ctx)
 
-	if err := q.writeSQL(ctx); err != nil {
+	if err := q.writeSQLInternal(ctx, assignments); err != nil {
 		return compiledQuery{}, err
 	}
 
@@ -147,6 +169,14 @@ func (q *UpdateQuery) compile() (compiledQuery, error) {
 }
 
 func (q *UpdateQuery) writeSQL(ctx *compileContext) error {
+	assignments, err := q.updateAssignments()
+	if err != nil {
+		return err
+	}
+	return q.writeSQLInternal(ctx, assignments)
+}
+
+func (q *UpdateQuery) writeSQLInternal(ctx *compileContext, assignments []assignment) error {
 	if err := writeCTEs(ctx, q.ctes, "update"); err != nil {
 		return err
 	}
@@ -154,10 +184,7 @@ func (q *UpdateQuery) writeSQL(ctx *compileContext) error {
 	ctx.writeString("UPDATE ")
 	ctx.writeTableName(q.table)
 	ctx.writeString(" SET ")
-	for idx, item := range q.values {
-		if err := validateAssignmentTarget(q.table, item); err != nil {
-			return err
-		}
+	for idx, item := range assignments {
 		if idx > 0 {
 			ctx.writeString(", ")
 		}
@@ -225,4 +252,42 @@ func (q *UpdateQuery) Scan(ctx context.Context, dest any) error {
 
 	err = scanRowsAgainstTable(rows, dest, q.table)
 	return err
+}
+
+func (q *UpdateQuery) updateAssignments() ([]assignment, error) {
+	var (
+		modelAssignments []assignment
+		err              error
+	)
+
+	if q.model != nil {
+		// For UPDATE, we skip auto-incrementing columns (like primary keys) by default
+		// as they are typically not part of the update payload.
+		modelAssignments, err = assignmentsFromModel(q.table, q.model, true)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	var rowAssignments []assignment
+	for _, row := range q.rows {
+		for column, value := range row {
+			var expr schema.Expression
+			if e, ok := value.(schema.Expression); ok {
+				expr = e
+			} else {
+				expr = schema.ValueExpr{Value: value}
+			}
+			rowAssignments = append(rowAssignments, assignment{column: column, value: expr})
+		}
+	}
+
+	// Merge all sources: model < rows < explicit Set()
+	// mergeAssignments handles validation of targets and generated columns.
+	assignments, err := mergeAssignments(q.table, modelAssignments, rowAssignments)
+	if err != nil {
+		return nil, err
+	}
+
+	return mergeAssignments(q.table, assignments, q.values)
 }
