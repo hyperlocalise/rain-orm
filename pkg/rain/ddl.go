@@ -257,16 +257,21 @@ func createIndexesSQL(d dialect.Dialect, table *schema.TableDef) ([]string, erro
 		}
 		builder.WriteByte(')')
 
-		if index.WhereExpr != nil {
-			whereSQL, err := predicateDDLSQL(d, table, index.WhereExpr)
-			if err != nil {
-				return nil, fmt.Errorf("rain: index %q on table %q WHERE clause: %w", index.Name, table.Name, err)
+		if index.WhereExpr != nil || strings.TrimSpace(index.Where) != "" {
+			if !dialect.HasFeature(d.Features(), dialect.FeaturePartialIndex) {
+				return nil, fmt.Errorf("rain: partial indexes are not supported by %s dialect", d.Name())
 			}
-			builder.WriteString(" WHERE ")
-			builder.WriteString(whereSQL)
-		} else if strings.TrimSpace(index.Where) != "" {
-			builder.WriteString(" WHERE ")
-			builder.WriteString(index.Where)
+			if index.WhereExpr != nil {
+				whereSQL, err := predicateDDLSQL(d, table, index.WhereExpr)
+				if err != nil {
+					return nil, fmt.Errorf("rain: index %q on table %q WHERE clause: %w", index.Name, table.Name, err)
+				}
+				builder.WriteString(" WHERE ")
+				builder.WriteString(whereSQL)
+			} else {
+				builder.WriteString(" WHERE ")
+				builder.WriteString(index.Where)
+			}
 		}
 		statements = append(statements, builder.String())
 	}

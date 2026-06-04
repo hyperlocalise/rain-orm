@@ -51,7 +51,6 @@ func TestDrizzleParityDDL(t *testing.T) {
 			fragments: []string{
 				"`short_code` CHAR(3) NOT NULL",
 				"`daily_time` TIME(3) NOT NULL",
-				"CREATE INDEX `partial_idx` ON `parity` (`short_code` ASC) WHERE `short_code` IS NOT NULL",
 			},
 		},
 		{
@@ -79,7 +78,13 @@ func TestDrizzleParityDDL(t *testing.T) {
 			}
 
 			indexSQLs, err := db.CreateIndexesSQL(table)
-			if err != nil {
+			if tc.dialect == "mysql" {
+				if err == nil || !strings.Contains(err.Error(), "partial indexes are not supported") {
+					t.Fatalf("expected error for partial index on MySQL, got: %v", err)
+				}
+				// Skip index fragments check for MySQL as index creation failed as expected
+				indexSQLs = nil
+			} else if err != nil {
 				t.Fatalf("CreateIndexesSQL: %v", err)
 			}
 
