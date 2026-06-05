@@ -1015,39 +1015,48 @@ func scanCachedRowsAgainstTable(result *cachedSelectRows, dest any, table *schem
 	}
 
 	target := value.Elem()
+	var structType reflect.Type
 	switch target.Kind() {
 	case reflect.Struct:
-		plan, err := newRowScanPlanForColumns(result.Columns, target.Type(), table)
+		structType = target.Type()
+	case reflect.Slice:
+		var err error
+		structType, _, err = sliceElementStructType(target.Type().Elem())
 		if err != nil {
 			return err
 		}
+	default:
+		return fmt.Errorf("rain: destination must point to a struct or slice")
+	}
+
+	plan, err := newRowScanPlanForColumns(result.Columns, structType, table)
+	if err != nil {
+		return err
+	}
+
+	return scanCachedRowsWithPlan(result, target, plan)
+}
+
+func scanCachedRowsWithPlan(result *cachedSelectRows, target reflect.Value, plan *rowScanPlan) error {
+	switch target.Kind() {
+	case reflect.Struct:
 		if len(result.Rows) == 0 {
 			return sql.ErrNoRows
 		}
-		if err := scanCachedRowWithPlan(result.Rows[0], target, plan); err != nil {
-			return err
-		}
-		return nil
+		return scanCachedRowWithPlan(result.Rows[0], target, plan)
 	case reflect.Slice:
 		elemType := target.Type().Elem()
-		structType, pointerElems, err := sliceElementStructType(elemType)
-		if err != nil {
-			return err
-		}
-		plan, err := newRowScanPlanForColumns(result.Columns, structType, table)
-		if err != nil {
-			return err
-		}
+		pointerElems := elemType.Kind() == reflect.Pointer
 
 		items := reflect.MakeSlice(target.Type(), 0, len(result.Rows))
 		for _, row := range result.Rows {
 			var item reflect.Value
 			var scanTarget reflect.Value
 			if pointerElems {
-				item = reflect.New(structType)
+				item = reflect.New(plan.modelType)
 				scanTarget = item.Elem()
 			} else {
-				item = reflect.New(structType).Elem()
+				item = reflect.New(plan.modelType).Elem()
 				scanTarget = item
 			}
 
@@ -1059,7 +1068,7 @@ func scanCachedRowsAgainstTable(result *cachedSelectRows, dest any, table *schem
 		target.Set(items)
 		return nil
 	default:
-		return fmt.Errorf("rain: destination must point to a struct or slice")
+		return fmt.Errorf("rain: destination must be a struct or slice")
 	}
 }
 

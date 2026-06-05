@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"reflect"
 	"sync"
+
+	"golang.org/x/sync/singleflight"
 )
 
 // ErrPreparedArgsRequired is returned when a query with named placeholders is executed without prepared binding.
@@ -32,6 +34,7 @@ type PreparedSelectQuery struct {
 	closeErr    error
 
 	scanPlans sync.Map // map[reflect.Type]*rowScanPlan
+	planGroup singleflight.Group
 }
 
 // Prepare compiles and prepares the SELECT query and derived aggregate statements.
@@ -103,19 +106,7 @@ func (p *PreparedSelectQuery) Scan(ctx context.Context, args PreparedArgs, dest 
 		return err
 	}
 	table := p.query.scanValidationTable()
-	if cacheOptions != nil && !cacheOptions.bypass && len(p.query.relationNames) == 0 && p.query.locking == nil {
-		cached, ok, cacheErr := p.query.cache.Get(ctx, cacheKey)
-		if cacheErr != nil {
-			return cacheErr
-		}
-		if ok {
-			if result, err := decodeCachedSelectRows(cached); err == nil {
-				return scanCachedRowsAgainstTable(result, dest, table)
-			}
-		}
-	}
-
-	if len(p.query.relationNames) == 0 && (cacheKey == "" || cacheOptions == nil || cacheOptions.bypass || p.query.locking != nil) {
+	if len(p.query.relationNames) == 0 {
 		destVal := reflect.ValueOf(dest)
 		if destVal.Kind() != reflect.Pointer || destVal.IsNil() {
 			return fmt.Errorf("rain: destination must be a non-nil pointer")
@@ -142,24 +133,30 @@ func (p *PreparedSelectQuery) Scan(ctx context.Context, args PreparedArgs, dest 
 		var plan *rowScanPlan
 		if cached, ok := p.scanPlans.Load(structType); ok {
 			plan = cached.(*rowScanPlan)
-		} else {
-			rows, queryErr := p.selectStmt.QueryContext(ctx, bound...)
-			if queryErr != nil {
-				return queryErr
-			}
-			defer closeRows(rows, &err)
+		}
 
-			colNames, colErr := rows.Columns()
-			if colErr != nil {
-				return colErr
+		if cacheOptions != nil && !cacheOptions.bypass && p.query.locking == nil {
+			cached, ok, cacheErr := p.query.cache.Get(ctx, cacheKey)
+			if cacheErr != nil {
+				return cacheErr
 			}
-			plan, err = newRowScanPlanForColumns(colNames, structType, table)
-			if err != nil {
-				return err
+			if ok {
+				if result, decodeErr := decodeCachedSelectRows(cached); decodeErr == nil {
+					if plan != nil {
+						return scanCachedRowsWithPlan(result, target, plan)
+					}
+					// Populate plan cache on application cache hit if missing
+					v, err, _ := p.planGroup.Do(structType.String(), func() (any, error) {
+						return newRowScanPlanForColumns(result.Columns, structType, table)
+					})
+					if err != nil {
+						return err
+					}
+					plan = v.(*rowScanPlan)
+					p.scanPlans.Store(structType, plan)
+					return scanCachedRowsWithPlan(result, target, plan)
+				}
 			}
-			p.scanPlans.Store(structType, plan)
-			err = scanRowsWithPlan(rows, target, plan)
-			return err
 		}
 
 		rows, queryErr := p.selectStmt.QueryContext(ctx, bound...)
@@ -167,6 +164,35 @@ func (p *PreparedSelectQuery) Scan(ctx context.Context, args PreparedArgs, dest 
 			return queryErr
 		}
 		defer closeRows(rows, &err)
+
+		if plan == nil {
+			v, err, _ := p.planGroup.Do(structType.String(), func() (any, error) {
+				colNames, colErr := rows.Columns()
+				if colErr != nil {
+					return nil, colErr
+				}
+				return newRowScanPlanForColumns(colNames, structType, table)
+			})
+			if err != nil {
+				return err
+			}
+			plan = v.(*rowScanPlan)
+			p.scanPlans.Store(structType, plan)
+		}
+
+		if cacheKey != "" && cacheOptions != nil && !cacheOptions.bypass && p.query.locking == nil {
+			result, readErr := readCachedSelectRows(rows)
+			if readErr != nil {
+				return readErr
+			}
+			err = scanCachedRowsWithPlan(result, target, plan)
+			if err != nil {
+				return err
+			}
+			err = p.query.writeCachedSelectResult(ctx, cacheKey, cacheOptions, result)
+			return err
+		}
+
 		err = scanRowsWithPlan(rows, target, plan)
 		return err
 	}
