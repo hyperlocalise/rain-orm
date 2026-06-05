@@ -252,13 +252,29 @@ func scanRowsAgainstTableDirect(rows *sql.Rows, dest any, table *schema.TableDef
 		return fmt.Errorf("rain: destination must be settable (pass a pointer to a slice or struct)")
 	}
 
-	switch target.Kind() {
-	case reflect.Struct:
-		plan, err := newRowScanPlanForColumns(cols, target.Type(), table)
+	structType := target.Type()
+	if target.Kind() == reflect.Slice {
+		var err error
+		structType, _, err = sliceElementStructType(structType.Elem())
 		if err != nil {
 			return err
 		}
+	}
 
+	plan, err := newRowScanPlanForColumns(cols, structType, table)
+	if err != nil {
+		return err
+	}
+
+	return scanRowsWithPlan(rows, dest, plan)
+}
+
+func scanRowsWithPlan(rows *sql.Rows, dest any, plan *rowScanPlan) error {
+	value := reflect.ValueOf(dest)
+	target := value.Elem()
+
+	switch target.Kind() {
+	case reflect.Struct:
 		scratch := plan.pool.Get().(*rowScanScratch)
 		defer plan.pool.Put(scratch)
 
@@ -281,10 +297,6 @@ func scanRowsAgainstTableDirect(rows *sql.Rows, dest any, table *schema.TableDef
 	case reflect.Slice:
 		elemType := target.Type().Elem()
 		structType, pointerElems, err := sliceElementStructType(elemType)
-		if err != nil {
-			return err
-		}
-		plan, err := newRowScanPlanForColumns(cols, structType, table)
 		if err != nil {
 			return err
 		}

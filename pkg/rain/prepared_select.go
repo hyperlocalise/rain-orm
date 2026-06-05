@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
+	"reflect"
 	"sync"
 )
 
@@ -26,8 +28,11 @@ type PreparedSelectQuery struct {
 	countStmt   *sql.Stmt
 	existsStmt  *sql.Stmt
 	countErr    error
-	closeOnce   sync.Once
-	closeErr    error
+	// OPTIMIZATION: Local cache for scan plans to bypass rows.Columns() and
+	// global cache lookups on every execution.
+	planCache sync.Map
+	closeOnce sync.Once
+	closeErr  error
 }
 
 // Prepare compiles and prepares the SELECT query and derived aggregate statements.
@@ -88,7 +93,7 @@ func (q *SelectQuery) Prepare(ctx context.Context) (*PreparedSelectQuery, error)
 }
 
 // Scan executes the prepared SELECT query and scans results into dest.
-func (p *PreparedSelectQuery) Scan(ctx context.Context, args PreparedArgs, dest any) error {
+func (p *PreparedSelectQuery) Scan(ctx context.Context, args PreparedArgs, dest any) (err error) {
 	bound, err := p.selectQuery.bind(args)
 	if err != nil {
 		return err
@@ -128,14 +133,41 @@ func (p *PreparedSelectQuery) Scan(ctx context.Context, args PreparedArgs, dest 
 			}
 			return p.query.writeCachedSelectResult(ctx, cacheKey, cacheOptions, result)
 		}
-		err = scanRowsAgainstTableDirect(rows, dest, table)
-	} else {
-		err = p.query.scanRowsWithRelations(ctx, rows, dest)
+
+		// OPTIMIZATION: Use the local plan cache to bypass rows.Columns() and
+		// global cache lookups.
+		destVal := reflect.ValueOf(dest)
+		if destVal.Kind() != reflect.Pointer || destVal.IsNil() {
+			return fmt.Errorf("rain: destination must be a non-nil pointer")
+		}
+		target := destVal.Elem()
+		destType := target.Type()
+		if cached, ok := p.planCache.Load(destType); ok {
+			return scanRowsWithPlan(rows, dest, cached.(*rowScanPlan))
+		}
+
+		cols, err := rows.Columns()
+		if err != nil {
+			return err
+		}
+
+		structType := destType
+		if target.Kind() == reflect.Slice {
+			structType, _, err = sliceElementStructType(destType.Elem())
+			if err != nil {
+				return err
+			}
+		}
+
+		plan, err := newRowScanPlanForColumns(cols, structType, table)
+		if err != nil {
+			return err
+		}
+		p.planCache.Store(destType, plan)
+		return scanRowsWithPlan(rows, dest, plan)
 	}
-	if err != nil {
-		return err
-	}
-	return nil
+
+	return p.query.scanRowsWithRelations(ctx, rows, dest)
 }
 
 // Count executes the prepared COUNT(*) query.
