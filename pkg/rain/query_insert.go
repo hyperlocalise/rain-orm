@@ -24,6 +24,7 @@ type InsertQuery struct {
 	columns     []schema.ColumnReference
 	returning   []schema.Expression
 	conflict    *insertConflictClause
+	ctes        []cteDefinition
 }
 
 type insertConflictAction uint8
@@ -88,6 +89,12 @@ func (b *InsertConflictUpdateBuilder) Where(predicate schema.Predicate) *InsertC
 	return b
 }
 
+// With appends a common table expression definition.
+func (b *InsertConflictUpdateBuilder) With(name string, query *SelectQuery) *InsertConflictUpdateBuilder {
+	b.query.With(name, query)
+	return b
+}
+
 // Returning adds RETURNING expressions to the query.
 func (b *InsertConflictUpdateBuilder) Returning(exprs ...schema.Expression) *InsertQuery {
 	return b.query.Returning(exprs...)
@@ -111,6 +118,12 @@ func (b *InsertConflictUpdateBuilder) Exec(ctx context.Context) (sql.Result, err
 // Scan executes an INSERT ... RETURNING query and scans one row into dest.
 func (b *InsertConflictUpdateBuilder) Scan(ctx context.Context, dest any) error {
 	return b.query.Scan(ctx, dest)
+}
+
+// With appends a common table expression definition.
+func (q *InsertQuery) With(name string, query *SelectQuery) *InsertQuery {
+	q.ctes = append(q.ctes, cteDefinition{name: name, query: query})
+	return q
 }
 
 // Table sets the INSERT target table.
@@ -256,6 +269,10 @@ func (q *InsertQuery) compile() (compiledQuery, error) {
 }
 
 func (q *InsertQuery) writeValuesSQL(ctx *compileContext) error {
+	if err := writeCTEs(ctx, q.ctes, "insert"); err != nil {
+		return err
+	}
+
 	rows, err := q.insertAssignments()
 	if err != nil {
 		return err
@@ -295,6 +312,10 @@ func (q *InsertQuery) writeValuesSQL(ctx *compileContext) error {
 }
 
 func (q *InsertQuery) writeSelectSQL(ctx *compileContext) error {
+	if err := writeCTEs(ctx, q.ctes, "insert"); err != nil {
+		return err
+	}
+
 	if err := q.validateSources(); err != nil {
 		return err
 	}

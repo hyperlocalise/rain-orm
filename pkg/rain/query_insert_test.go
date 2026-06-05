@@ -269,6 +269,86 @@ func TestInsertOnConflictPostgres(t *testing.T) {
 	})
 }
 
+func TestInsertWithCTEToSQL(t *testing.T) {
+	t.Parallel()
+
+	users, _ := defineTables()
+
+	t.Run("insert values with cte", func(t *testing.T) {
+		db, _ := rain.OpenDialect("postgres")
+		cte := db.Select().Table(users).Where(users.Active.Eq(true))
+
+		sqlText, args, err := db.Insert().
+			With("active_users", cte).
+			Table(users).
+			Set(users.Email, "new@example.com").
+			Set(users.Name, "New User").
+			ToSQL()
+		if err != nil {
+			t.Fatalf("ToSQL returned error: %v", err)
+		}
+
+		wantSQL := `WITH "active_users" AS (SELECT * FROM "users" WHERE "users"."active" = $1) INSERT INTO "users" ("email", "name") VALUES ($2, $3)`
+		if sqlText != wantSQL {
+			t.Fatalf("unexpected SQL:\nwant: %s\ngot:  %s", wantSQL, sqlText)
+		}
+		if len(args) != 3 || args[0] != true || args[1] != "new@example.com" || args[2] != "New User" {
+			t.Fatalf("unexpected args: %#v", args)
+		}
+	})
+
+	t.Run("insert select with cte", func(t *testing.T) {
+		db, _ := rain.OpenDialect("postgres")
+		cte := db.Select().Table(users).Where(users.Active.Eq(true))
+
+		// Use a TableSubquery that defines its own source SQL to simulate a CTE reference
+		subquery := db.Select().TableSubquery(db.Select().Table(users), "active_users")
+
+		sqlText, args, err := db.Insert().
+			With("active_users", cte).
+			Table(users).
+			Columns(users.Email, users.Name).
+			Select(subquery).
+			ToSQL()
+		if err != nil {
+			t.Fatalf("ToSQL returned error: %v", err)
+		}
+
+		// TableSubquery will render as (SELECT * FROM "users") AS "active_users", which is fine for verification
+		// that the WITH clause is present.
+		if !strings.HasPrefix(sqlText, `WITH "active_users" AS (SELECT * FROM "users" WHERE "users"."active" = $1) INSERT INTO "users"`) {
+			t.Fatalf("unexpected SQL prefix: %s", sqlText)
+		}
+		if len(args) < 1 || args[0] != true {
+			t.Fatalf("unexpected args: %#v", args)
+		}
+	})
+
+	t.Run("upsert with cte", func(t *testing.T) {
+		db, _ := rain.OpenDialect("postgres")
+		cte := db.Select().Table(users).Where(users.Active.Eq(true))
+
+		sqlText, args, err := db.Insert().
+			With("active_users", cte).
+			Table(users).
+			Set(users.Email, "alice@example.com").
+			OnConflict(users.Email).
+			DoUpdateSet(users.Name).
+			ToSQL()
+		if err != nil {
+			t.Fatalf("ToSQL returned error: %v", err)
+		}
+
+		wantSQL := `WITH "active_users" AS (SELECT * FROM "users" WHERE "users"."active" = $1) INSERT INTO "users" ("email") VALUES ($2) ON CONFLICT ("email") DO UPDATE SET "name" = EXCLUDED."name"`
+		if sqlText != wantSQL {
+			t.Fatalf("unexpected SQL:\nwant: %s\ngot:  %s", wantSQL, sqlText)
+		}
+		if len(args) != 2 || args[0] != true || args[1] != "alice@example.com" {
+			t.Fatalf("unexpected args: %#v", args)
+		}
+	})
+}
+
 func TestInsertSelectToSQL(t *testing.T) {
 	t.Parallel()
 
