@@ -12,9 +12,9 @@ import (
 
 // PreparedInsertQuery is a prepared INSERT query with reusable named argument binding.
 type PreparedInsertQuery struct {
-	table     *schema.TableDef
-	compiled  compiledQuery
-	stmt      *sql.Stmt
+	table    *schema.TableDef
+	compiled compiledQuery
+	stmt     *sql.Stmt
 	// OPTIMIZATION: Local cache for scan plans to bypass rows.Columns() and
 	// global cache lookups on every execution.
 	planCache sync.Map
@@ -90,9 +90,9 @@ func (p *PreparedInsertQuery) Close() error {
 
 // PreparedUpdateQuery is a prepared UPDATE query with reusable named argument binding.
 type PreparedUpdateQuery struct {
-	table     *schema.TableDef
-	compiled  compiledQuery
-	stmt      *sql.Stmt
+	table    *schema.TableDef
+	compiled compiledQuery
+	stmt     *sql.Stmt
 	// OPTIMIZATION: Local cache for scan plans to bypass rows.Columns() and
 	// global cache lookups on every execution.
 	planCache sync.Map
@@ -168,9 +168,9 @@ func (p *PreparedUpdateQuery) Close() error {
 
 // PreparedDeleteQuery is a prepared DELETE query with reusable named argument binding.
 type PreparedDeleteQuery struct {
-	table     *schema.TableDef
-	compiled  compiledQuery
-	stmt      *sql.Stmt
+	table    *schema.TableDef
+	compiled compiledQuery
+	stmt     *sql.Stmt
 	// OPTIMIZATION: Local cache for scan plans to bypass rows.Columns() and
 	// global cache lookups on every execution.
 	planCache sync.Map
