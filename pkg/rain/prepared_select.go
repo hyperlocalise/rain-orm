@@ -96,105 +96,75 @@ func (q *SelectQuery) Prepare(ctx context.Context) (*PreparedSelectQuery, error)
 
 // Scan executes the prepared SELECT query and scans results into dest.
 func (p *PreparedSelectQuery) Scan(ctx context.Context, args PreparedArgs, dest any) (err error) {
-	bound, err := p.selectQuery.bind(args)
-	if err != nil {
-		return err
+	bound, bindErr := p.selectQuery.bind(args)
+	if bindErr != nil {
+		return bindErr
 	}
 
-	cacheKey, cacheOptions, err := p.query.resolveCacheKey(p.selectQuery.sql, bound)
-	if err != nil {
-		return err
+	cacheKey, cacheOptions, resolveErr := p.query.resolveCacheKey(p.selectQuery.sql, bound)
+	if resolveErr != nil {
+		return resolveErr
 	}
-	table := p.query.scanValidationTable()
-	if len(p.query.relationNames) == 0 {
-		destVal := reflect.ValueOf(dest)
-		if destVal.Kind() != reflect.Pointer || destVal.IsNil() {
-			return fmt.Errorf("rain: destination must be a non-nil pointer")
-		}
-		target := destVal.Elem()
-		if !target.CanSet() {
-			return fmt.Errorf("rain: destination must be settable")
-		}
 
-		var structType reflect.Type
-		switch target.Kind() {
-		case reflect.Struct:
-			structType = target.Type()
-		case reflect.Slice:
-			var scanErr error
-			structType, _, scanErr = sliceElementStructType(target.Type().Elem())
-			if scanErr != nil {
-				return scanErr
-			}
-		default:
-			return fmt.Errorf("rain: destination must point to a struct or slice")
-		}
-
-		var plan *rowScanPlan
-		if cached, ok := p.scanPlans.Load(structType); ok {
-			plan = cached.(*rowScanPlan)
-		}
-
-		if cacheOptions != nil && !cacheOptions.bypass && p.query.locking == nil {
-			cached, ok, cacheErr := p.query.cache.Get(ctx, cacheKey)
-			if cacheErr != nil {
-				return cacheErr
-			}
-			if ok {
-				if result, decodeErr := decodeCachedSelectRows(cached); decodeErr == nil {
-					if plan != nil {
-						return scanCachedRowsWithPlan(result, target, plan)
-					}
-					// Populate plan cache on application cache hit if missing
-					v, err, _ := p.planGroup.Do(structType.String(), func() (any, error) {
-						return newRowScanPlanForColumns(result.Columns, structType, table)
-					})
-					if err != nil {
-						return err
-					}
-					plan = v.(*rowScanPlan)
-					p.scanPlans.Store(structType, plan)
-					return scanCachedRowsWithPlan(result, target, plan)
-				}
-			}
-		}
-
+	if len(p.query.relationNames) != 0 {
 		rows, queryErr := p.selectStmt.QueryContext(ctx, bound...)
 		if queryErr != nil {
 			return queryErr
 		}
 		defer closeRows(rows, &err)
+		return p.query.scanRowsWithRelations(ctx, rows, dest)
+	}
 
-		if plan == nil {
-			v, err, _ := p.planGroup.Do(structType.String(), func() (any, error) {
-				colNames, colErr := rows.Columns()
-				if colErr != nil {
-					return nil, colErr
+	destVal := reflect.ValueOf(dest)
+	if destVal.Kind() != reflect.Pointer || destVal.IsNil() {
+		return fmt.Errorf("rain: destination must be a non-nil pointer")
+	}
+	target := destVal.Elem()
+	if !target.CanSet() {
+		return fmt.Errorf("rain: destination must be settable")
+	}
+
+	var structType reflect.Type
+	switch target.Kind() {
+	case reflect.Struct:
+		structType = target.Type()
+	case reflect.Slice:
+		var scanErr error
+		structType, _, scanErr = sliceElementStructType(target.Type().Elem())
+		if scanErr != nil {
+			return scanErr
+		}
+	default:
+		return fmt.Errorf("rain: destination must point to a struct or slice")
+	}
+
+	var plan *rowScanPlan
+	if cached, ok := p.scanPlans.Load(structType); ok {
+		plan = cached.(*rowScanPlan)
+	}
+
+	table := p.query.scanValidationTable()
+
+	if cacheOptions != nil && !cacheOptions.bypass && p.query.locking == nil {
+		cached, ok, cacheErr := p.query.cache.Get(ctx, cacheKey)
+		if cacheErr != nil {
+			return cacheErr
+		}
+		if ok {
+			if result, decodeErr := decodeCachedSelectRows(cached); decodeErr == nil {
+				if plan == nil {
+					v, buildErr, _ := p.planGroup.Do(structType.String(), func() (any, error) {
+						return newRowScanPlanForColumns(result.Columns, structType, table)
+					})
+					if buildErr != nil {
+						return buildErr
+					}
+					plan = v.(*rowScanPlan)
+					p.scanPlans.Store(structType, plan)
 				}
-				return newRowScanPlanForColumns(colNames, structType, table)
-			})
-			if err != nil {
-				return err
+				return scanCachedRowsWithPlan(result, target, plan)
 			}
-			plan = v.(*rowScanPlan)
-			p.scanPlans.Store(structType, plan)
 		}
-
-		if cacheKey != "" && cacheOptions != nil && !cacheOptions.bypass && p.query.locking == nil {
-			result, readErr := readCachedSelectRows(rows)
-			if readErr != nil {
-				return readErr
-			}
-			err = scanCachedRowsWithPlan(result, target, plan)
-			if err != nil {
-				return err
-			}
-			err = p.query.writeCachedSelectResult(ctx, cacheKey, cacheOptions, result)
-			return err
-		}
-
-		err = scanRowsWithPlan(rows, target, plan)
-		return err
 	}
 
 	rows, queryErr := p.selectStmt.QueryContext(ctx, bound...)
@@ -203,24 +173,33 @@ func (p *PreparedSelectQuery) Scan(ctx context.Context, args PreparedArgs, dest 
 	}
 	defer closeRows(rows, &err)
 
-	if len(p.query.relationNames) == 0 {
-		if cacheKey != "" && cacheOptions != nil && !cacheOptions.bypass && p.query.locking == nil {
-			result, readErr := readCachedSelectRows(rows)
-			if readErr != nil {
-				return readErr
-			}
-			err = scanCachedRowsAgainstTable(result, dest, table)
-			if err != nil {
-				return err
-			}
-			err = p.query.writeCachedSelectResult(ctx, cacheKey, cacheOptions, result)
-			return err
+	if plan == nil {
+		colNames, colErr := rows.Columns()
+		if colErr != nil {
+			return colErr
 		}
-		err = scanRowsAgainstTableDirect(rows, dest, table)
-	} else {
-		err = p.query.scanRowsWithRelations(ctx, rows, dest)
+		v, buildErr, _ := p.planGroup.Do(structType.String(), func() (any, error) {
+			return newRowScanPlanForColumns(colNames, structType, table)
+		})
+		if buildErr != nil {
+			return buildErr
+		}
+		plan = v.(*rowScanPlan)
+		p.scanPlans.Store(structType, plan)
 	}
-	return err
+
+	if cacheKey != "" && cacheOptions != nil && !cacheOptions.bypass && p.query.locking == nil {
+		result, readErr := readCachedSelectRows(rows)
+		if readErr != nil {
+			return readErr
+		}
+		if scanErr := scanCachedRowsWithPlan(result, target, plan); scanErr != nil {
+			return scanErr
+		}
+		return p.query.writeCachedSelectResult(ctx, cacheKey, cacheOptions, result)
+	}
+
+	return scanRowsWithPlan(rows, target, plan)
 }
 
 // Count executes the prepared COUNT(*) query.
