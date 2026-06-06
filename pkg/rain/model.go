@@ -395,9 +395,17 @@ func scanDirectRowAddr(baseAddr unsafe.Pointer, target reflect.Value, plan *rowS
 
 		if col.canUseOffset {
 			ptr := unsafe.Add(baseAddr, col.offset)
+			// OPTIMIZATION: Reordered cases to handle the most common database
+			// types (Int64, Int, Int32) first to reduce branch mispredictions.
 			switch col.kind {
 			case reflect.Int64:
 				*(*int64)(ptr) = v.Int64
+			case reflect.Int:
+				val := int(v.Int64)
+				if int64(val) != v.Int64 {
+					return fmt.Errorf("rain: value %d overflows field %s", v.Int64, col.fieldType)
+				}
+				*(*int)(ptr) = val
 			case reflect.Int32:
 				val := int32(v.Int64)
 				if int64(val) != v.Int64 {
@@ -416,12 +424,6 @@ func scanDirectRowAddr(baseAddr unsafe.Pointer, target reflect.Value, plan *rowS
 					return fmt.Errorf("rain: value %d overflows field %s", v.Int64, col.fieldType)
 				}
 				*(*int8)(ptr) = val
-			case reflect.Int:
-				val := int(v.Int64)
-				if int64(val) != v.Int64 {
-					return fmt.Errorf("rain: value %d overflows field %s", v.Int64, col.fieldType)
-				}
-				*(*int)(ptr) = val
 			case reflect.Uint64:
 				if v.Int64 < 0 {
 					return fmt.Errorf("rain: value %d overflows field %s", v.Int64, col.fieldType)
@@ -517,12 +519,23 @@ func scanDirectRowAddr(baseAddr unsafe.Pointer, target reflect.Value, plan *rowS
 			switch col.kind {
 			case reflect.Pointer:
 				elemKind := col.fieldType.Elem().Kind()
+				// OPTIMIZATION: Prioritize Int64 and Int pointers for faster scanning.
 				switch elemKind {
 				case reflect.Int64:
 					if *ptr == nil {
 						*ptr = new(int64)
 					}
 					**ptr = v.Int64
+				case reflect.Int:
+					val := int(v.Int64)
+					if int64(val) != v.Int64 {
+						return fmt.Errorf("rain: value %d overflows field %s", v.Int64, col.fieldType)
+					}
+					p := (**int)(unsafe.Pointer(ptr))
+					if *p == nil {
+						*p = new(int)
+					}
+					**p = val
 				case reflect.Int32:
 					val := int32(v.Int64)
 					if int64(val) != v.Int64 {
@@ -551,16 +564,6 @@ func scanDirectRowAddr(baseAddr unsafe.Pointer, target reflect.Value, plan *rowS
 					p := (**int8)(unsafe.Pointer(ptr))
 					if *p == nil {
 						*p = new(int8)
-					}
-					**p = val
-				case reflect.Int:
-					val := int(v.Int64)
-					if int64(val) != v.Int64 {
-						return fmt.Errorf("rain: value %d overflows field %s", v.Int64, col.fieldType)
-					}
-					p := (**int)(unsafe.Pointer(ptr))
-					if *p == nil {
-						*p = new(int)
 					}
 					**p = val
 				case reflect.Uint64:
@@ -1305,11 +1308,12 @@ func isSimpleDirectType(t reflect.Type) bool {
 	if t.Implements(scannerType) || reflect.PointerTo(t).Implements(scannerType) {
 		return false
 	}
+	// OPTIMIZATION: Prioritize common database types to speed up metadata resolution.
 	switch t.Kind() {
-	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+	case reflect.Int64, reflect.Int, reflect.Int32, reflect.String, reflect.Bool,
+		reflect.Int16, reflect.Int8,
 		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64,
-		reflect.Float32, reflect.Float64,
-		reflect.String, reflect.Bool:
+		reflect.Float32, reflect.Float64:
 		return true
 	case reflect.Struct:
 		return t == reflect.TypeFor[time.Time]()
