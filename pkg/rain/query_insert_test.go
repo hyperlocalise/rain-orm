@@ -299,27 +299,33 @@ func TestInsertWithCTEToSQL(t *testing.T) {
 
 	t.Run("insert select with cte", func(t *testing.T) {
 		db, _ := rain.OpenDialect("postgres")
+		// The CTE itself has a predicate (arg $1)
 		cte := db.Select().Table(users).Where(users.Active.Eq(true))
 
-		// Use a TableSubquery that defines its own source SQL to simulate a CTE reference
-		subquery := db.Select().TableSubquery(db.Select().Table(users), "active_users")
+		// The SELECT query uses a CTE from its own level, which should be suppressed
+		// when passed to INSERT to avoid double WITH.
+		innerSelect := db.Select().
+			With("active_users", cte).
+			TableSubquery(db.Select().Table(users), "active_users").
+			Column(schema.Raw("*")).
+			Where(schema.Raw("1=?", 1)) // arg $2
 
 		sqlText, args, err := db.Insert().
 			With("active_users", cte).
 			Table(users).
 			Columns(users.Email, users.Name).
-			Select(subquery).
+			Select(innerSelect).
 			ToSQL()
 		if err != nil {
 			t.Fatalf("ToSQL returned error: %v", err)
 		}
 
-		// TableSubquery will render as (SELECT * FROM "users") AS "active_users", which is fine for verification
-		// that the WITH clause is present.
-		if !strings.HasPrefix(sqlText, `WITH "active_users" AS (SELECT * FROM "users" WHERE "users"."active" = $1) INSERT INTO "users"`) {
-			t.Fatalf("unexpected SQL prefix: %s", sqlText)
+		// Verify WITH appears once at the top, and the inner SELECT does not repeat it.
+		wantSQL := `WITH "active_users" AS (SELECT * FROM "users" WHERE "users"."active" = $1) INSERT INTO "users" ("email", "name") SELECT * FROM (SELECT * FROM "users") AS "active_users" WHERE 1=$2`
+		if sqlText != wantSQL {
+			t.Fatalf("unexpected SQL:\nwant: %s\ngot:  %s", wantSQL, sqlText)
 		}
-		if len(args) < 1 || args[0] != true {
+		if len(args) != 2 || args[0] != true || args[1] != 1 {
 			t.Fatalf("unexpected args: %#v", args)
 		}
 	})

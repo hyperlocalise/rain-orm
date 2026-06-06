@@ -66,6 +66,12 @@ func (b *InsertConflictBuilder) Where(predicate schema.Predicate) *InsertConflic
 	return b
 }
 
+// With appends a common table expression definition.
+func (b *InsertConflictBuilder) With(name string, query *SelectQuery) *InsertConflictBuilder {
+	b.query.With(name, query)
+	return b
+}
+
 // InsertConflictUpdateBuilder configures the DO UPDATE SET clause.
 type InsertConflictUpdateBuilder struct {
 	query *InsertQuery
@@ -343,6 +349,9 @@ func (q *InsertQuery) writeSelectSQL(ctx *compileContext) error {
 	}
 
 	ctx.writeByte(' ')
+	prevSkip := ctx.skipCTEs
+	ctx.skipCTEs = true
+	defer func() { ctx.skipCTEs = prevSkip }()
 	if err := selectQuery.writeSQL(ctx); err != nil {
 		return err
 	}
