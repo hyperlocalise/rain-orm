@@ -278,6 +278,9 @@ func (q *InsertQuery) writeValuesSQL(ctx *compileContext) error {
 	if err := writeCTEs(ctx, q.ctes, "insert"); err != nil {
 		return err
 	}
+	prevSkip := ctx.skipCTEs
+	ctx.skipCTEs = true
+	defer func() { ctx.skipCTEs = prevSkip }()
 
 	rows, err := q.insertAssignments()
 	if err != nil {
@@ -321,6 +324,9 @@ func (q *InsertQuery) writeSelectSQL(ctx *compileContext) error {
 	if err := writeCTEs(ctx, q.ctes, "insert"); err != nil {
 		return err
 	}
+	prevSkip := ctx.skipCTEs
+	ctx.skipCTEs = true
+	defer func() { ctx.skipCTEs = prevSkip }()
 
 	if err := q.validateSources(); err != nil {
 		return err
@@ -349,9 +355,6 @@ func (q *InsertQuery) writeSelectSQL(ctx *compileContext) error {
 	}
 
 	ctx.writeByte(' ')
-	prevSkip := ctx.skipCTEs
-	ctx.skipCTEs = true
-	defer func() { ctx.skipCTEs = prevSkip }()
 	if err := selectQuery.writeSQL(ctx); err != nil {
 		return err
 	}
