@@ -24,6 +24,7 @@ type InsertQuery struct {
 	columns     []schema.ColumnReference
 	returning   []schema.Expression
 	conflict    *insertConflictClause
+	ctes        []cteDefinition
 }
 
 type insertConflictAction uint8
@@ -65,6 +66,12 @@ func (b *InsertConflictBuilder) Where(predicate schema.Predicate) *InsertConflic
 	return b
 }
 
+// With appends a common table expression definition.
+func (b *InsertConflictBuilder) With(name string, query *SelectQuery) *InsertConflictBuilder {
+	b.query.With(name, query)
+	return b
+}
+
 // InsertConflictUpdateBuilder configures the DO UPDATE SET clause.
 type InsertConflictUpdateBuilder struct {
 	query *InsertQuery
@@ -85,6 +92,12 @@ func (b *InsertConflictUpdateBuilder) Set(column schema.ColumnReference, value a
 // Where adds a filter to the DO UPDATE SET clause.
 func (b *InsertConflictUpdateBuilder) Where(predicate schema.Predicate) *InsertConflictUpdateBuilder {
 	b.query.conflict.updateWhere = append(b.query.conflict.updateWhere, predicate)
+	return b
+}
+
+// With appends a common table expression definition.
+func (b *InsertConflictUpdateBuilder) With(name string, query *SelectQuery) *InsertConflictUpdateBuilder {
+	b.query.With(name, query)
 	return b
 }
 
@@ -111,6 +124,12 @@ func (b *InsertConflictUpdateBuilder) Exec(ctx context.Context) (sql.Result, err
 // Scan executes an INSERT ... RETURNING query and scans one row into dest.
 func (b *InsertConflictUpdateBuilder) Scan(ctx context.Context, dest any) error {
 	return b.query.Scan(ctx, dest)
+}
+
+// With appends a common table expression definition.
+func (q *InsertQuery) With(name string, query *SelectQuery) *InsertQuery {
+	q.ctes = append(q.ctes, cteDefinition{name: name, query: query})
+	return q
 }
 
 // Table sets the INSERT target table.
@@ -256,6 +275,13 @@ func (q *InsertQuery) compile() (compiledQuery, error) {
 }
 
 func (q *InsertQuery) writeValuesSQL(ctx *compileContext) error {
+	if err := writeCTEs(ctx, q.ctes, "insert"); err != nil {
+		return err
+	}
+	prevSkip := ctx.skipCTEs
+	ctx.skipCTEs = true
+	defer func() { ctx.skipCTEs = prevSkip }()
+
 	rows, err := q.insertAssignments()
 	if err != nil {
 		return err
@@ -295,6 +321,13 @@ func (q *InsertQuery) writeValuesSQL(ctx *compileContext) error {
 }
 
 func (q *InsertQuery) writeSelectSQL(ctx *compileContext) error {
+	if err := writeCTEs(ctx, q.ctes, "insert"); err != nil {
+		return err
+	}
+	prevSkip := ctx.skipCTEs
+	ctx.skipCTEs = true
+	defer func() { ctx.skipCTEs = prevSkip }()
+
 	if err := q.validateSources(); err != nil {
 		return err
 	}

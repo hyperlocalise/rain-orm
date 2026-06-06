@@ -269,6 +269,92 @@ func TestInsertOnConflictPostgres(t *testing.T) {
 	})
 }
 
+func TestInsertWithCTEToSQL(t *testing.T) {
+	t.Parallel()
+
+	users, _ := defineTables()
+
+	t.Run("insert values with cte", func(t *testing.T) {
+		db, _ := rain.OpenDialect("postgres")
+		cte := db.Select().Table(users).Where(users.Active.Eq(true))
+
+		sqlText, args, err := db.Insert().
+			With("active_users", cte).
+			Table(users).
+			Set(users.Email, "new@example.com").
+			Set(users.Name, "New User").
+			ToSQL()
+		if err != nil {
+			t.Fatalf("ToSQL returned error: %v", err)
+		}
+
+		wantSQL := `WITH "active_users" AS (SELECT * FROM "users" WHERE "users"."active" = $1) INSERT INTO "users" ("email", "name") VALUES ($2, $3)`
+		if sqlText != wantSQL {
+			t.Fatalf("unexpected SQL:\nwant: %s\ngot:  %s", wantSQL, sqlText)
+		}
+		if len(args) != 3 || args[0] != true || args[1] != "new@example.com" || args[2] != "New User" {
+			t.Fatalf("unexpected args: %#v", args)
+		}
+	})
+
+	t.Run("insert select with cte", func(t *testing.T) {
+		db, _ := rain.OpenDialect("postgres")
+		// The CTE itself has a predicate (arg $1)
+		cte := db.Select().Table(users).Where(users.Active.Eq(true))
+
+		// The SELECT query uses a CTE from its own level, which should be suppressed
+		// when passed to INSERT to avoid double WITH.
+		innerSelect := db.Select().
+			With("active_users", cte).
+			TableSubquery(db.Select().Table(users), "active_users").
+			Column(schema.Raw("*")).
+			Where(schema.Raw("1=?", 1)) // arg $2
+
+		sqlText, args, err := db.Insert().
+			With("active_users", cte).
+			Table(users).
+			Columns(users.Email, users.Name).
+			Select(innerSelect).
+			ToSQL()
+		if err != nil {
+			t.Fatalf("ToSQL returned error: %v", err)
+		}
+
+		// Verify WITH appears once at the top, and the inner SELECT does not repeat it.
+		wantSQL := `WITH "active_users" AS (SELECT * FROM "users" WHERE "users"."active" = $1) INSERT INTO "users" ("email", "name") SELECT * FROM (SELECT * FROM "users") AS "active_users" WHERE 1=$2`
+		if sqlText != wantSQL {
+			t.Fatalf("unexpected SQL:\nwant: %s\ngot:  %s", wantSQL, sqlText)
+		}
+		if len(args) != 2 || args[0] != true || args[1] != 1 {
+			t.Fatalf("unexpected args: %#v", args)
+		}
+	})
+
+	t.Run("upsert with cte", func(t *testing.T) {
+		db, _ := rain.OpenDialect("postgres")
+		cte := db.Select().Table(users).Where(users.Active.Eq(true))
+
+		sqlText, args, err := db.Insert().
+			With("active_users", cte).
+			Table(users).
+			Set(users.Email, "alice@example.com").
+			OnConflict(users.Email).
+			DoUpdateSet(users.Name).
+			ToSQL()
+		if err != nil {
+			t.Fatalf("ToSQL returned error: %v", err)
+		}
+
+		wantSQL := `WITH "active_users" AS (SELECT * FROM "users" WHERE "users"."active" = $1) INSERT INTO "users" ("email") VALUES ($2) ON CONFLICT ("email") DO UPDATE SET "name" = EXCLUDED."name"`
+		if sqlText != wantSQL {
+			t.Fatalf("unexpected SQL:\nwant: %s\ngot:  %s", wantSQL, sqlText)
+		}
+		if len(args) != 2 || args[0] != true || args[1] != "alice@example.com" {
+			t.Fatalf("unexpected args: %#v", args)
+		}
+	})
+}
+
 func TestInsertSelectToSQL(t *testing.T) {
 	t.Parallel()
 
