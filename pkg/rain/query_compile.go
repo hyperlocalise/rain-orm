@@ -77,6 +77,8 @@ type compileContext struct {
 	buffer      bytes.Buffer
 	dialect     dialect.Dialect
 	argPlan     []compiledArg
+	hasNames    bool
+	args        []any
 	err         error
 	skipCTEs    bool
 	useLiterals bool
@@ -87,6 +89,7 @@ var compileContextPool = sync.Pool{
 	New: func() any {
 		ctx := &compileContext{
 			argPlan: make([]compiledArg, 0, 8),
+			args:    make([]any, 0, 8),
 		}
 		// OPTIMIZATION: Pre-allocate a reasonable buffer capacity to reduce early
 		// re-allocations during query building. bytes.Buffer preserves this
@@ -121,6 +124,9 @@ func (c *compileContext) reset(d dialect.Dialect) {
 	// garbage collected before we reset its length for reuse.
 	clear(c.argPlan)
 	c.argPlan = c.argPlan[:0]
+	c.hasNames = false
+	clear(c.args)
+	c.args = c.args[:0]
 	c.err = nil
 	c.skipCTEs = false
 	c.useLiterals = false
@@ -144,34 +150,23 @@ func (c *compileContext) String() string {
 }
 
 func (c *compileContext) compiledQuery() compiledQuery {
-	var hasNames bool
-	for _, arg := range c.argPlan {
-		if arg.kind == compiledArgNamedPlaceholder {
-			hasNames = true
-			break
-		}
-	}
-
 	// OPTIMIZATION: Only copy the argPlan if the query has named placeholders.
 	// Queries with only literals can use the pre-calculated args slice.
 	var argPlan []compiledArg
-	if hasNames {
+	if c.hasNames {
 		argPlan = append([]compiledArg(nil), c.argPlan...)
 	}
 
 	compiled := compiledQuery{
 		sql:      c.String(),
 		argPlan:  argPlan,
-		hasNames: hasNames,
+		hasNames: c.hasNames,
 	}
-	if len(c.argPlan) > 0 {
-		compiled.args = make([]any, len(c.argPlan))
-		for i, arg := range c.argPlan {
-			if arg.kind == compiledArgLiteral {
-				compiled.args[i] = arg.value
-			}
-		}
+
+	if len(c.args) > 0 {
+		compiled.args = append([]any(nil), c.args...)
 	}
+
 	return compiled
 }
 
@@ -268,6 +263,7 @@ func (c *compileContext) writeExpressionInContext(expr schema.Expression, contex
 		} else {
 			index := c.nextPlaceholderIndex()
 			c.argPlan = append(c.argPlan, compiledArg{kind: compiledArgLiteral, value: value.Value})
+			c.args = append(c.args, value.Value)
 			c.writeString(c.dialect.Placeholder(index))
 		}
 	case schema.PlaceholderExpr:
@@ -276,6 +272,8 @@ func (c *compileContext) writeExpressionInContext(expr schema.Expression, contex
 		}
 		index := c.nextPlaceholderIndex()
 		c.argPlan = append(c.argPlan, compiledArg{kind: compiledArgNamedPlaceholder, name: value.Name})
+		c.hasNames = true
+		c.args = append(c.args, nil)
 		c.writeString(c.dialect.Placeholder(index))
 	case schema.ComparisonExpr:
 		if err := c.writeExpression(value.Left); err != nil {
@@ -488,6 +486,7 @@ func (c *compileContext) writeRaw(raw schema.RawExpr) error {
 		}
 		index := c.nextPlaceholderIndex()
 		c.argPlan = append(c.argPlan, compiledArg{kind: compiledArgLiteral, value: raw.Args[argIndex]})
+		c.args = append(c.args, raw.Args[argIndex])
 		c.writeString(c.dialect.Placeholder(index))
 		argIndex++
 	}
