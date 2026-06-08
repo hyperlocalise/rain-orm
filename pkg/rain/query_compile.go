@@ -83,6 +83,8 @@ type compileContext struct {
 	skipCTEs    bool
 	useLiterals bool
 	quotedCache *sync.Map
+	columnCache *sync.Map
+	tableCache  *sync.Map
 }
 
 var compileContextPool = sync.Pool{
@@ -105,6 +107,16 @@ var (
 	postgresQuotedCache sync.Map
 	mysqlQuotedCache    sync.Map
 	sqliteQuotedCache   sync.Map
+
+	// OPTIMIZATION: Cache qualified column and table names per-dialect to avoid
+	// repeated string concatenations and identifier quoting.
+	postgresColumnCache sync.Map
+	mysqlColumnCache    sync.Map
+	sqliteColumnCache   sync.Map
+
+	postgresTableCache sync.Map
+	mysqlTableCache    sync.Map
+	sqliteTableCache   sync.Map
 )
 
 func newCompileContext(d dialect.Dialect) *compileContext {
@@ -136,12 +148,20 @@ func (c *compileContext) reset(d dialect.Dialect) {
 	switch d.(type) {
 	case *dialect.PostgresDialect:
 		c.quotedCache = &postgresQuotedCache
+		c.columnCache = &postgresColumnCache
+		c.tableCache = &postgresTableCache
 	case *dialect.MySQLDialect:
 		c.quotedCache = &mysqlQuotedCache
+		c.columnCache = &mysqlColumnCache
+		c.tableCache = &mysqlTableCache
 	case *dialect.SQLiteDialect:
 		c.quotedCache = &sqliteQuotedCache
+		c.columnCache = &sqliteColumnCache
+		c.tableCache = &sqliteTableCache
 	default:
 		c.quotedCache = nil
+		c.columnCache = nil
+		c.tableCache = nil
 	}
 }
 
@@ -204,11 +224,29 @@ func (c *compileContext) writeTableName(table *schema.TableDef) {
 }
 
 func (c *compileContext) writeTable(table *schema.TableDef) {
+	if c.tableCache == nil {
+		c.writeTableName(table)
+		if table.Alias != "" {
+			c.writeString(" AS ")
+			c.writeQuotedIdentifier(table.Alias)
+		}
+		return
+	}
+
+	if cached, ok := c.tableCache.Load(table); ok {
+		c.writeString(cached.(string))
+		return
+	}
+
+	// Capture the current buffer length to derive the table reference string.
+	start := c.buffer.Len()
 	c.writeTableName(table)
 	if table.Alias != "" {
 		c.writeString(" AS ")
 		c.writeQuotedIdentifier(table.Alias)
 	}
+	ref := strings.Clone(c.buffer.String()[start:])
+	c.tableCache.Store(table, ref)
 }
 
 func (c *compileContext) writeReturning(exprs []schema.Expression, clause returningClause) error {
@@ -499,6 +537,24 @@ func (c *compileContext) writeRaw(raw schema.RawExpr) error {
 
 func (c *compileContext) writeColumn(column schema.ColumnReference) {
 	def := column.ColumnDef()
+	if c.columnCache == nil {
+		c.writeColumnInternal(def)
+		return
+	}
+
+	if cached, ok := c.columnCache.Load(def); ok {
+		c.writeString(cached.(string))
+		return
+	}
+
+	// Capture the current buffer length to derive the qualified column string.
+	start := c.buffer.Len()
+	c.writeColumnInternal(def)
+	qualified := strings.Clone(c.buffer.String()[start:])
+	c.columnCache.Store(def, qualified)
+}
+
+func (c *compileContext) writeColumnInternal(def *schema.ColumnDef) {
 	table := def.Table
 	qualifier := table.Name
 	if table.Alias != "" {
