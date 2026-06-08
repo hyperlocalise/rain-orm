@@ -41,8 +41,19 @@ func (d *PostgresDialect) QuoteIdentifier(name string) string {
 	return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
 }
 
+var postgresPlaceholderCache [101]string
+
+func init() {
+	for i := 1; i <= 100; i++ {
+		postgresPlaceholderCache[i] = "$" + strconv.Itoa(i)
+	}
+}
+
 // Placeholder returns PostgreSQL-style $n placeholders.
 func (d *PostgresDialect) Placeholder(n int) string {
+	if n > 0 && n <= 100 {
+		return postgresPlaceholderCache[n]
+	}
 	return "$" + strconv.Itoa(n)
 }
 
