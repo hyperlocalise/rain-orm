@@ -245,7 +245,7 @@ func (c *compileContext) writeTable(table *schema.TableDef) {
 		c.writeString(" AS ")
 		c.writeQuotedIdentifier(table.Alias)
 	}
-	ref := c.buffer.String()[start:]
+	ref := strings.Clone(c.buffer.String()[start:])
 	c.tableCache.Store(table, ref)
 }
 
@@ -550,7 +550,7 @@ func (c *compileContext) writeColumn(column schema.ColumnReference) {
 	// Capture the current buffer length to derive the qualified column string.
 	start := c.buffer.Len()
 	c.writeColumnInternal(def)
-	qualified := c.buffer.String()[start:]
+	qualified := strings.Clone(c.buffer.String()[start:])
 	c.columnCache.Store(def, qualified)
 }
 
