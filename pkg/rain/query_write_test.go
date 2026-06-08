@@ -141,6 +141,98 @@ func TestInsertModelExpressionToSQL(t *testing.T) {
 	}
 }
 
+func TestSelectVariadicAndFrom(t *testing.T) {
+	t.Parallel()
+
+	db, _ := rain.OpenDialect("postgres")
+	users, _ := defineTables()
+
+	// Test variadic Select and From alias
+	sql, _, err := db.Select(users.ID, users.Email).From(users).ToSQL()
+	if err != nil {
+		t.Fatalf("ToSQL failed: %v", err)
+	}
+	want := `SELECT "users"."id", "users"."email" FROM "users"`
+	if sql != want {
+		t.Errorf("unexpected SQL:\nwant: %s\ngot:  %s", want, sql)
+	}
+
+	// Test SelectDistinct
+	sql, _, err = db.SelectDistinct(users.Name).From(users).ToSQL()
+	if err != nil {
+		t.Fatalf("ToSQL failed: %v", err)
+	}
+	want = `SELECT DISTINCT "users"."name" FROM "users"`
+	if sql != want {
+		t.Errorf("unexpected SQL:\nwant: %s\ngot:  %s", want, sql)
+	}
+
+	// Test Count().Distinct()
+	sql, _, err = db.Select(schema.Count(users.ID).Distinct()).From(users).ToSQL()
+	if err != nil {
+		t.Fatalf("ToSQL failed: %v", err)
+	}
+	want = `SELECT COUNT(DISTINCT "users"."id") FROM "users"`
+	if sql != want {
+		t.Errorf("unexpected SQL:\nwant: %s\ngot:  %s", want, sql)
+	}
+}
+
+func TestInsertDefaultValues(t *testing.T) {
+	t.Parallel()
+
+	users, _ := defineTables()
+
+	t.Run("postgres", func(t *testing.T) {
+		db, _ := rain.OpenDialect("postgres")
+		sql, _, err := db.Insert().Table(users).ToSQL()
+		if err != nil {
+			t.Fatalf("ToSQL failed: %v", err)
+		}
+		want := `INSERT INTO "users" DEFAULT VALUES`
+		if sql != want {
+			t.Errorf("unexpected SQL:\nwant: %s\ngot:  %s", want, sql)
+		}
+	})
+
+	t.Run("mysql", func(t *testing.T) {
+		db, _ := rain.OpenDialect("mysql")
+		sql, _, err := db.Insert().Table(users).ToSQL()
+		if err != nil {
+			t.Fatalf("ToSQL failed: %v", err)
+		}
+		want := "INSERT INTO `users` () VALUES ()"
+		if sql != want {
+			t.Errorf("unexpected SQL:\nwant: %s\ngot:  %s", want, sql)
+		}
+	})
+}
+
+func TestMySQLInsertSelectOnDuplicateKeyUpdate(t *testing.T) {
+	t.Parallel()
+
+	db, _ := rain.OpenDialect("mysql")
+	users, _ := defineTables()
+
+	subquery := db.Select(users.Email, users.Name).From(users).Where(users.ID.Eq(int64(1)))
+
+	sql, _, err := db.Insert().
+		Table(users).
+		Columns(users.Email, users.Name).
+		Select(subquery).
+		OnConflict().
+		DoUpdateSet(users.Name).
+		ToSQL()
+	if err != nil {
+		t.Fatalf("ToSQL failed: %v", err)
+	}
+
+	want := "INSERT INTO `users` (`email`, `name`) SELECT `users`.`email`, `users`.`name` FROM `users` WHERE `users`.`id` = ? ON DUPLICATE KEY UPDATE `name` = VALUES(`name`)"
+	if sql != want {
+		t.Errorf("unexpected SQL:\nwant: %s\ngot:  %s", want, sql)
+	}
+}
+
 func TestDialectFeatures(t *testing.T) {
 	t.Parallel()
 

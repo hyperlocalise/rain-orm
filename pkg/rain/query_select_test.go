@@ -672,9 +672,9 @@ func TestSelectAdvancedComposition(t *testing.T) {
 				return db.Select().
 					Table(posts).
 					Column(schema.AggregateExpr{
-						Function: "COUNT",
-						Distinct: true,
-						Star:     true,
+						Function:    "COUNT",
+						UseDistinct: true,
+						Star:        true,
 					})
 			},
 			wantErr: "cannot combine DISTINCT with *",

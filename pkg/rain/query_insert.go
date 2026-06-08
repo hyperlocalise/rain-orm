@@ -289,28 +289,42 @@ func (q *InsertQuery) writeValuesSQL(ctx *compileContext) error {
 
 	ctx.writeString("INSERT INTO ")
 	ctx.writeTableName(q.table)
-	ctx.writeString(" (")
-	for idx, item := range rows[0] {
-		if idx > 0 {
-			ctx.writeString(", ")
+
+	// Handle the case where one row with all default values is requested.
+	if len(rows) == 1 && len(rows[0]) == 0 {
+		if ctx.dialect.Name() == "mysql" {
+			ctx.writeString(" () VALUES ()")
+		} else {
+			ctx.writeString(" DEFAULT VALUES")
 		}
-		ctx.writeQuotedIdentifier(item.column.ColumnDef().Name)
-	}
-	ctx.writeString(") VALUES ")
-	for rowIdx, row := range rows {
-		if rowIdx > 0 {
-			ctx.writeString(", ")
+	} else {
+		if len(rows) > 0 && len(rows[0]) == 0 {
+			return errors.New("rain: bulk insert of multiple rows with only default values is not supported")
 		}
-		ctx.writeByte('(')
-		for idx, item := range row {
+
+		ctx.writeString(" (")
+		for idx, item := range rows[0] {
 			if idx > 0 {
 				ctx.writeString(", ")
 			}
-			if err := ctx.writeExpression(item.value); err != nil {
-				return err
-			}
+			ctx.writeQuotedIdentifier(item.column.ColumnDef().Name)
 		}
-		ctx.writeByte(')')
+		ctx.writeString(") VALUES ")
+		for rowIdx, row := range rows {
+			if rowIdx > 0 {
+				ctx.writeString(", ")
+			}
+			ctx.writeByte('(')
+			for idx, item := range row {
+				if idx > 0 {
+					ctx.writeString(", ")
+				}
+				if err := ctx.writeExpression(item.value); err != nil {
+					return err
+				}
+			}
+			ctx.writeByte(')')
+		}
 	}
 
 	if err := q.writeConflictClause(ctx); err != nil {
@@ -443,9 +457,6 @@ func (q *InsertQuery) validateSources() error {
 		sources++
 	}
 
-	if sources == 0 {
-		return errors.New("rain: insert query requires a data source: Model/Set, Models, Values, or Select")
-	}
 	if sources > 1 {
 		return errors.New("rain: insert query requires exactly one data source: Model/Set, Models, Values, or Select")
 	}
@@ -482,7 +493,9 @@ func (q *InsertQuery) insertAssignments() ([][]assignment, error) {
 	}
 
 	if len(rows) == 0 {
-		return nil, errors.New("rain: insert query produced no values")
+		// If no sources were provided or they produced no assignments,
+		// we treat it as one row of default values.
+		rows = [][]assignment{{}}
 	}
 
 	if err := validateInsertRowShape(rows); err != nil {
@@ -507,9 +520,6 @@ func (q *InsertQuery) assignmentsFromModelAndSet() ([]assignment, error) {
 	assignments, err := mergeAssignments(q.table, modelAssignments, q.values)
 	if err != nil {
 		return nil, err
-	}
-	if len(assignments) == 0 {
-		return nil, errors.New("rain: insert query produced no values")
 	}
 
 	return assignments, nil
@@ -548,10 +558,6 @@ func (q *InsertQuery) assignmentsFromModels() ([][]assignment, error) {
 func (q *InsertQuery) assignmentsFromRows() ([][]assignment, error) {
 	rows := make([][]assignment, 0, len(q.rows))
 	for idx, row := range q.rows {
-		if len(row) == 0 {
-			return nil, fmt.Errorf("rain: insert row %d has no values", idx+1)
-		}
-
 		overrides := make([]assignment, 0, len(row))
 		for column, value := range row {
 			var expr schema.Expression
@@ -631,9 +637,6 @@ func (q *InsertQuery) writeConflictClause(ctx *compileContext) error {
 		if q.conflict.action == insertConflictActionDoUpdateSet {
 			if len(q.conflict.updates) == 0 {
 				return errors.New("rain: conflict DO UPDATE requires at least one update column")
-			}
-			if q.selectQuery != nil {
-				return errors.New("rain: MySQL conflict DO UPDATE is not supported for INSERT ... SELECT")
 			}
 			ctx.writeString(" ON DUPLICATE KEY UPDATE ")
 			for idx, item := range q.conflict.updates {

@@ -186,8 +186,17 @@ func (db *DB) Primary() *DB {
 }
 
 // Select starts a typed SELECT query builder.
-func (db *DB) Select() *SelectQuery {
-	return &SelectQuery{runner: db.selectRunner(), dialect: db.dialect, cache: db.queryCache()}
+func (db *DB) Select(cols ...schema.Expression) *SelectQuery {
+	q := &SelectQuery{runner: db.selectRunner(), dialect: db.dialect, cache: db.queryCache()}
+	if len(cols) > 0 {
+		q.Column(cols...)
+	}
+	return q
+}
+
+// SelectDistinct starts a typed SELECT DISTINCT query builder.
+func (db *DB) SelectDistinct(cols ...schema.Expression) *SelectQuery {
+	return db.Select(cols...).Distinct()
 }
 
 // WithQueryCache sets the shared SELECT query cache backend on DB.
@@ -367,8 +376,17 @@ func (tx *Tx) RunInTx(ctx context.Context, fn func(*Tx) error) error {
 }
 
 // Select starts a typed SELECT query builder in the transaction.
-func (tx *Tx) Select() *SelectQuery {
-	return &SelectQuery{runner: tx, dialect: tx.dialect, cache: tx.queryCache}
+func (tx *Tx) Select(cols ...schema.Expression) *SelectQuery {
+	q := &SelectQuery{runner: tx, dialect: tx.dialect, cache: tx.queryCache}
+	if len(cols) > 0 {
+		q.Column(cols...)
+	}
+	return q
+}
+
+// SelectDistinct starts a typed SELECT DISTINCT query builder in the transaction.
+func (tx *Tx) SelectDistinct(cols ...schema.Expression) *SelectQuery {
+	return tx.Select(cols...).Distinct()
 }
 
 // InvalidateQueryCache removes cached query entries associated with any provided tag.

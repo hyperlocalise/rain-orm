@@ -1063,12 +1063,12 @@ func (c CaseExpr) As(alias string) AliasExpr {
 
 // AggregateExpr renders SQL aggregate functions.
 //
-// Function must be non-empty. Distinct must not be combined with Star.
+// Function must be non-empty. UseDistinct must not be combined with Star.
 type AggregateExpr struct {
-	Function string
-	Expr     Expression
-	Star     bool
-	Distinct bool
+	Function    string
+	Expr        Expression
+	Star        bool
+	UseDistinct bool
 }
 
 func (AggregateExpr) isExpression() {}
@@ -1076,6 +1076,12 @@ func (AggregateExpr) isExpression() {}
 // As aliases this computed expression in a SELECT list.
 func (a AggregateExpr) As(alias string) AliasExpr {
 	return As(a, alias)
+}
+
+// Distinct marks the aggregate function as DISTINCT.
+func (a AggregateExpr) Distinct() AggregateExpr {
+	a.UseDistinct = true
+	return a
 }
 
 // CoalesceExpr renders COALESCE(expr1, expr2, ...).

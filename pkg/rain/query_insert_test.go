@@ -464,23 +464,27 @@ func TestInsertSelectToSQL(t *testing.T) {
 		}
 	})
 
-	t.Run("mysql select with do update set returns error", func(t *testing.T) {
+	t.Run("mysql select with do update set", func(t *testing.T) {
 		db, _ := rain.OpenDialect("mysql")
 		subquery := db.Select().
 			Table(users).
 			Column(users.ID, users.Name).
 			Where(users.Active.Eq(true))
 
-		_, _, err := db.Insert().
+		sql, _, err := db.Insert().
 			Table(users).
 			Columns(users.ID, users.Name).
 			Select(subquery).
 			OnConflict().
 			DoUpdateSet(users.Name).
 			ToSQL()
+		if err != nil {
+			t.Fatalf("ToSQL failed: %v", err)
+		}
 
-		if err == nil || !strings.Contains(err.Error(), "MySQL conflict DO UPDATE is not supported for INSERT ... SELECT") {
-			t.Fatalf("expected mysql insert-select conflict update error, got %v", err)
+		want := "INSERT INTO `users` (`id`, `name`) SELECT `users`.`id`, `users`.`name` FROM `users` WHERE `users`.`active` = ? ON DUPLICATE KEY UPDATE `name` = VALUES(`name`)"
+		if sql != want {
+			t.Errorf("unexpected SQL:\nwant: %s\ngot:  %s", want, sql)
 		}
 	})
 

@@ -443,12 +443,12 @@ func (c *compileContext) writeExpressionInContext(expr schema.Expression, contex
 		if value.Function == "" {
 			return errors.New("rain: aggregate function name cannot be empty")
 		}
-		if value.Distinct && value.Star {
+		if value.UseDistinct && value.Star {
 			return fmt.Errorf("rain: aggregate %s cannot combine DISTINCT with *", value.Function)
 		}
 		c.writeString(value.Function)
 		c.writeByte('(')
-		if value.Distinct {
+		if value.UseDistinct {
 			c.writeString("DISTINCT ")
 		}
 		switch {
