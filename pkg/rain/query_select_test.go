@@ -74,9 +74,6 @@ func TestSelectErgonomicsToSQL(t *testing.T) {
 				if err != nil {
 					panic(err)
 				}
-				// We don't rollback here because we are returning a query built from it,
-				// and the test runner will call ToSQL on it after this function returns.
-				// In a real app, you'd use a closure or defer rollback.
 				return tx.Select(users.ID, users.Email).From(users)
 			},
 			wantSQL: `SELECT "users"."id", "users"."email" FROM "users"`,
