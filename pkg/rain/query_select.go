@@ -41,6 +41,11 @@ func (q *SelectQuery) Table(table schema.TableReference) *SelectQuery {
 	return q
 }
 
+// From is a semantic alias for Table.
+func (q *SelectQuery) From(table schema.TableReference) *SelectQuery {
+	return q.Table(table)
+}
+
 // TableSubquery sets a subquery source for the query's FROM clause.
 func (q *SelectQuery) TableSubquery(query *SelectQuery, alias string) *SelectQuery {
 	q.table = subqueryTableSource{query: query, alias: alias}
