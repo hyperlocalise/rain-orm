@@ -239,13 +239,15 @@ func (c *compileContext) writeTable(table *schema.TableDef) {
 	}
 
 	// Capture the current buffer length to derive the table reference string.
+	// OPTIMIZATION: Extracting the substring from the byte slice avoids
+	// allocating the entire buffer string via c.buffer.String().
 	start := c.buffer.Len()
 	c.writeTableName(table)
 	if table.Alias != "" {
 		c.writeString(" AS ")
 		c.writeQuotedIdentifier(table.Alias)
 	}
-	ref := strings.Clone(c.buffer.String()[start:])
+	ref := string(c.buffer.Bytes()[start:])
 	c.tableCache.Store(table, ref)
 }
 
@@ -548,9 +550,11 @@ func (c *compileContext) writeColumn(column schema.ColumnReference) {
 	}
 
 	// Capture the current buffer length to derive the qualified column string.
+	// OPTIMIZATION: Extracting the substring from the byte slice avoids
+	// allocating the entire buffer string via c.buffer.String().
 	start := c.buffer.Len()
 	c.writeColumnInternal(def)
-	qualified := strings.Clone(c.buffer.String()[start:])
+	qualified := string(c.buffer.Bytes()[start:])
 	c.columnCache.Store(def, qualified)
 }
 
