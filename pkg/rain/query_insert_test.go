@@ -464,14 +464,14 @@ func TestInsertSelectToSQL(t *testing.T) {
 		}
 	})
 
-	t.Run("mysql select with do update set returns error", func(t *testing.T) {
+	t.Run("mysql select with do update set (on duplicate key update)", func(t *testing.T) {
 		db, _ := rain.OpenDialect("mysql")
 		subquery := db.Select().
 			Table(users).
 			Column(users.ID, users.Name).
 			Where(users.Active.Eq(true))
 
-		_, _, err := db.Insert().
+		sqlText, args, err := db.Insert().
 			Table(users).
 			Columns(users.ID, users.Name).
 			Select(subquery).
@@ -479,8 +479,16 @@ func TestInsertSelectToSQL(t *testing.T) {
 			DoUpdateSet(users.Name).
 			ToSQL()
 
-		if err == nil || !strings.Contains(err.Error(), "MySQL conflict DO UPDATE is not supported for INSERT ... SELECT") {
-			t.Fatalf("expected mysql insert-select conflict update error, got %v", err)
+		if err != nil {
+			t.Fatalf("ToSQL returned error: %v", err)
+		}
+
+		wantSQL := "INSERT INTO `users` (`id`, `name`) SELECT `users`.`id`, `users`.`name` FROM `users` WHERE `users`.`active` = ? ON DUPLICATE KEY UPDATE `name` = VALUES(`name`)"
+		if sqlText != wantSQL {
+			t.Fatalf("unexpected SQL:\nwant: %s\ngot:  %s", wantSQL, sqlText)
+		}
+		if len(args) != 1 || args[0] != true {
+			t.Fatalf("unexpected args: %#v", args)
 		}
 	})
 
@@ -531,6 +539,104 @@ func TestInsertSelectToSQL(t *testing.T) {
 
 		if err == nil || !strings.Contains(err.Error(), "requires exactly one data source") {
 			t.Fatalf("expected multiple source error, got %v", err)
+		}
+	})
+}
+
+func TestInsertQuery_DefaultValues(t *testing.T) {
+	t.Parallel()
+
+	users, _ := defineTables()
+
+	t.Run("postgres", func(t *testing.T) {
+		db, _ := rain.OpenDialect("postgres")
+		sqlText, args, err := db.Insert().
+			Table(users).
+			DefaultValues().
+			ToSQL()
+		if err != nil {
+			t.Fatalf("ToSQL returned error: %v", err)
+		}
+
+		wantSQL := `INSERT INTO "users" DEFAULT VALUES`
+		if sqlText != wantSQL {
+			t.Fatalf("unexpected SQL:\nwant: %s\ngot:  %s", wantSQL, sqlText)
+		}
+		if len(args) != 0 {
+			t.Fatalf("unexpected args: %#v", args)
+		}
+	})
+
+	t.Run("sqlite", func(t *testing.T) {
+		db, _ := rain.OpenDialect("sqlite")
+		sqlText, args, err := db.Insert().
+			Table(users).
+			DefaultValues().
+			ToSQL()
+		if err != nil {
+			t.Fatalf("ToSQL returned error: %v", err)
+		}
+
+		wantSQL := `INSERT INTO "users" DEFAULT VALUES`
+		if sqlText != wantSQL {
+			t.Fatalf("unexpected SQL:\nwant: %s\ngot:  %s", wantSQL, sqlText)
+		}
+		if len(args) != 0 {
+			t.Fatalf("unexpected args: %#v", args)
+		}
+	})
+
+	t.Run("mysql", func(t *testing.T) {
+		db, _ := rain.OpenDialect("mysql")
+		sqlText, args, err := db.Insert().
+			Table(users).
+			DefaultValues().
+			ToSQL()
+		if err != nil {
+			t.Fatalf("ToSQL returned error: %v", err)
+		}
+
+		wantSQL := "INSERT INTO `users` () VALUES ()"
+		if sqlText != wantSQL {
+			t.Fatalf("unexpected SQL:\nwant: %s\ngot:  %s", wantSQL, sqlText)
+		}
+		if len(args) != 0 {
+			t.Fatalf("unexpected args: %#v", args)
+		}
+	})
+
+	t.Run("with returning", func(t *testing.T) {
+		db, _ := rain.OpenDialect("postgres")
+		sqlText, _, err := db.Insert().
+			Table(users).
+			DefaultValues().
+			Returning(users.ID).
+			ToSQL()
+		if err != nil {
+			t.Fatalf("ToSQL returned error: %v", err)
+		}
+
+		wantSQL := `INSERT INTO "users" DEFAULT VALUES RETURNING "users"."id"`
+		if sqlText != wantSQL {
+			t.Fatalf("unexpected SQL:\nwant: %s\ngot:  %s", wantSQL, sqlText)
+		}
+	})
+
+	t.Run("with conflict", func(t *testing.T) {
+		db, _ := rain.OpenDialect("postgres")
+		sqlText, _, err := db.Insert().
+			Table(users).
+			DefaultValues().
+			OnConflict(users.Email).
+			DoNothing().
+			ToSQL()
+		if err != nil {
+			t.Fatalf("ToSQL returned error: %v", err)
+		}
+
+		wantSQL := `INSERT INTO "users" DEFAULT VALUES ON CONFLICT ("email") DO NOTHING`
+		if sqlText != wantSQL {
+			t.Fatalf("unexpected SQL:\nwant: %s\ngot:  %s", wantSQL, sqlText)
 		}
 	})
 }

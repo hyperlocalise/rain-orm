@@ -22,9 +22,10 @@ type InsertQuery struct {
 	rows        []map[schema.ColumnReference]any
 	selectQuery *SelectQuery
 	columns     []schema.ColumnReference
-	returning   []schema.Expression
-	conflict    *insertConflictClause
-	ctes        []cteDefinition
+	returning     []schema.Expression
+	conflict      *insertConflictClause
+	ctes          []cteDefinition
+	defaultValues bool
 }
 
 type insertConflictAction uint8
@@ -184,6 +185,13 @@ func (q *InsertQuery) Values(rows ...map[schema.ColumnReference]any) *InsertQuer
 	return q
 }
 
+// DefaultValues configures the INSERT to use default values for all columns.
+// PostgreSQL and SQLite render "DEFAULT VALUES", while MySQL renders "() VALUES ()".
+func (q *InsertQuery) DefaultValues() *InsertQuery {
+	q.defaultValues = true
+	return q
+}
+
 // OnConflict starts an upsert clause for PostgreSQL and SQLite dialects.
 func (q *InsertQuery) OnConflict(columns ...schema.ColumnReference) *InsertConflictBuilder {
 	q.conflict = &insertConflictClause{columns: columns}
@@ -266,6 +274,7 @@ func (q *InsertQuery) compile() (compiledQuery, error) {
 			return compiledQuery{}, err
 		}
 	} else {
+		// Handles Model, Models, Values, and DefaultValues.
 		if err := q.writeValuesSQL(ctx); err != nil {
 			return compiledQuery{}, err
 		}
@@ -282,35 +291,48 @@ func (q *InsertQuery) writeValuesSQL(ctx *compileContext) error {
 	ctx.skipCTEs = true
 	defer func() { ctx.skipCTEs = prevSkip }()
 
-	rows, err := q.insertAssignments()
-	if err != nil {
-		return err
-	}
+	if q.defaultValues {
+		if err := q.validateSources(); err != nil {
+			return err
+		}
+		ctx.writeString("INSERT INTO ")
+		ctx.writeTableName(q.table)
+		if ctx.dialect.Name() == "mysql" {
+			ctx.writeString(" () VALUES ()")
+		} else {
+			ctx.writeString(" DEFAULT VALUES")
+		}
+	} else {
+		rows, err := q.insertAssignments()
+		if err != nil {
+			return err
+		}
 
-	ctx.writeString("INSERT INTO ")
-	ctx.writeTableName(q.table)
-	ctx.writeString(" (")
-	for idx, item := range rows[0] {
-		if idx > 0 {
-			ctx.writeString(", ")
-		}
-		ctx.writeQuotedIdentifier(item.column.ColumnDef().Name)
-	}
-	ctx.writeString(") VALUES ")
-	for rowIdx, row := range rows {
-		if rowIdx > 0 {
-			ctx.writeString(", ")
-		}
-		ctx.writeByte('(')
-		for idx, item := range row {
+		ctx.writeString("INSERT INTO ")
+		ctx.writeTableName(q.table)
+		ctx.writeString(" (")
+		for idx, item := range rows[0] {
 			if idx > 0 {
 				ctx.writeString(", ")
 			}
-			if err := ctx.writeExpression(item.value); err != nil {
-				return err
-			}
+			ctx.writeQuotedIdentifier(item.column.ColumnDef().Name)
 		}
-		ctx.writeByte(')')
+		ctx.writeString(") VALUES ")
+		for rowIdx, row := range rows {
+			if rowIdx > 0 {
+				ctx.writeString(", ")
+			}
+			ctx.writeByte('(')
+			for idx, item := range row {
+				if idx > 0 {
+					ctx.writeString(", ")
+				}
+				if err := ctx.writeExpression(item.value); err != nil {
+					return err
+				}
+			}
+			ctx.writeByte(')')
+		}
 	}
 
 	if err := q.writeConflictClause(ctx); err != nil {
@@ -442,12 +464,15 @@ func (q *InsertQuery) validateSources() error {
 	if q.selectQuery != nil {
 		sources++
 	}
+	if q.defaultValues {
+		sources++
+	}
 
 	if sources == 0 {
-		return errors.New("rain: insert query requires a data source: Model/Set, Models, Values, or Select")
+		return errors.New("rain: insert query requires a data source: Model/Set, Models, Values, Select, or DefaultValues")
 	}
 	if sources > 1 {
-		return errors.New("rain: insert query requires exactly one data source: Model/Set, Models, Values, or Select")
+		return errors.New("rain: insert query requires exactly one data source: Model/Set, Models, Values, Select, or DefaultValues")
 	}
 
 	return nil
@@ -631,9 +656,6 @@ func (q *InsertQuery) writeConflictClause(ctx *compileContext) error {
 		if q.conflict.action == insertConflictActionDoUpdateSet {
 			if len(q.conflict.updates) == 0 {
 				return errors.New("rain: conflict DO UPDATE requires at least one update column")
-			}
-			if q.selectQuery != nil {
-				return errors.New("rain: MySQL conflict DO UPDATE is not supported for INSERT ... SELECT")
 			}
 			ctx.writeString(" ON DUPLICATE KEY UPDATE ")
 			for idx, item := range q.conflict.updates {
