@@ -1,6 +1,7 @@
 package rain
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/hyperlocalise/rain-orm/pkg/schema"
@@ -73,6 +74,38 @@ func BenchmarkSelectToSQL(b *testing.B) {
 				Column(lt.C11, lt.C12, lt.C13, lt.C14, lt.C15, lt.C16, lt.C17, lt.C18, lt.C19, lt.C20).
 				Where(lt.C1.Eq(1)).
 				ToSQL()
+		}
+	})
+}
+
+func BenchmarkInsertToSQL(b *testing.B) {
+	db, _ := OpenDialect("postgres")
+	users, _ := defineInternalQueryTables()
+
+	b.Run("BulkInsert1000Rows", func(b *testing.B) {
+		rows := make([]map[schema.ColumnReference]any, 1000)
+		for i := range 1000 {
+			rows[i] = map[schema.ColumnReference]any{
+				users.Email:    fmt.Sprintf("user-%d@example.com", i),
+				users.Name:     "Benchmark User",
+				users.Active:   true,
+				users.Nickname: "nick",
+			}
+		}
+
+		b.ReportAllocs()
+		b.ResetTimer()
+		for range b.N {
+			_, args, err := db.Insert().
+				Table(users).
+				Values(rows...).
+				ToSQL()
+			if err != nil {
+				b.Fatal(err)
+			}
+			if len(args) != 4000 {
+				b.Fatalf("expected 4000 args, got %d", len(args))
+			}
 		}
 	})
 }
