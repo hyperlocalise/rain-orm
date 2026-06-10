@@ -13,15 +13,15 @@ import (
 
 // InsertQuery builds typed INSERT statements.
 type InsertQuery struct {
-	runner      queryRunner
-	dialect     dialect.Dialect
-	table       *schema.TableDef
-	model       any
-	models      any
-	values      []assignment
-	rows        []map[schema.ColumnReference]any
-	selectQuery *SelectQuery
-	columns     []schema.ColumnReference
+	runner        queryRunner
+	dialect       dialect.Dialect
+	table         *schema.TableDef
+	model         any
+	models        any
+	values        []assignment
+	rows          []map[schema.ColumnReference]any
+	selectQuery   *SelectQuery
+	columns       []schema.ColumnReference
 	returning     []schema.Expression
 	conflict      *insertConflictClause
 	ctes          []cteDefinition

@@ -478,7 +478,6 @@ func TestInsertSelectToSQL(t *testing.T) {
 			OnConflict().
 			DoUpdateSet(users.Name).
 			ToSQL()
-
 		if err != nil {
 			t.Fatalf("ToSQL returned error: %v", err)
 		}
