@@ -41,20 +41,24 @@ func (d *PostgresDialect) QuoteIdentifier(name string) string {
 	return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
 }
 
-var postgresPlaceholderCache [101]string
+var postgresPlaceholderCache [1025]string
 
 func init() {
-	for i := 1; i <= 100; i++ {
+	for i := 1; i <= 1024; i++ {
 		postgresPlaceholderCache[i] = "$" + strconv.Itoa(i)
 	}
 }
 
 // Placeholder returns PostgreSQL-style $n placeholders.
 func (d *PostgresDialect) Placeholder(n int) string {
-	if n > 0 && n <= 100 {
+	if n > 0 && n <= 1024 {
 		return postgresPlaceholderCache[n]
 	}
-	return "$" + strconv.Itoa(n)
+	// OPTIMIZATION: Use strconv.AppendInt with a byte buffer and convert to string
+	// to reduce allocations to exactly 1 on cache misses.
+	var b [16]byte
+	b[0] = '$'
+	return string(strconv.AppendInt(b[:1], int64(n), 10))
 }
 
 // DataType returns PostgreSQL-specific type.
