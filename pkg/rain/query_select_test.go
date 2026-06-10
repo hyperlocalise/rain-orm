@@ -43,6 +43,80 @@ func TestSelectToSQL(t *testing.T) {
 	}
 }
 
+func TestSelectErgonomicsToSQL(t *testing.T) {
+	t.Parallel()
+
+	db, err := rain.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("Open returned error: %v", err)
+	}
+	users, _ := defineTables()
+
+	type tc struct {
+		name     string
+		build    func(*rain.DB) *rain.SelectQuery
+		wantSQL  string
+		wantArgs []any
+	}
+
+	cases := []tc{
+		{
+			name: "variadic select and from",
+			build: func(db *rain.DB) *rain.SelectQuery {
+				return db.Select(users.ID, users.Email).From(users)
+			},
+			wantSQL: `SELECT "users"."id", "users"."email" FROM "users"`,
+		},
+		{
+			name: "tx variadic select and from",
+			build: func(db *rain.DB) *rain.SelectQuery {
+				tx, err := db.Begin(context.Background())
+				if err != nil {
+					panic(err)
+				}
+				return tx.Select(users.ID, users.Email).From(users)
+			},
+			wantSQL: `SELECT "users"."id", "users"."email" FROM "users"`,
+		},
+		{
+			name: "select distinct and from",
+			build: func(db *rain.DB) *rain.SelectQuery {
+				return db.SelectDistinct(users.Email).From(users)
+			},
+			wantSQL: `SELECT DISTINCT "users"."email" FROM "users"`,
+		},
+		{
+			name: "variadic select then column appends",
+			build: func(db *rain.DB) *rain.SelectQuery {
+				return db.Select(users.ID).From(users).Column(users.Email)
+			},
+			wantSQL: `SELECT "users"."id", "users"."email" FROM "users"`,
+		},
+	}
+
+	for _, tt := range cases {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			sqlText, args, err := tt.build(db).ToSQL()
+			if err != nil {
+				t.Fatalf("ToSQL returned error: %v", err)
+			}
+			if sqlText != tt.wantSQL {
+				t.Fatalf("unexpected SQL:\nwant: %s\ngot:  %s", tt.wantSQL, sqlText)
+			}
+			if len(args) != len(tt.wantArgs) {
+				t.Fatalf("unexpected arg count: want %d got %d (%#v)", len(tt.wantArgs), len(args), args)
+			}
+			for idx := range tt.wantArgs {
+				if args[idx] != tt.wantArgs[idx] {
+					t.Fatalf("unexpected arg[%d]: want %#v got %#v", idx, tt.wantArgs[idx], args[idx])
+				}
+			}
+		})
+	}
+}
+
 func TestSelectJoinsToSQL(t *testing.T) {
 	t.Parallel()
 
