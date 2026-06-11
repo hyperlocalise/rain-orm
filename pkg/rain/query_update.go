@@ -178,7 +178,7 @@ func (q *UpdateQuery) writeSQLInternal(ctx *compileContext, assignments []assign
 	ctx.writeTableName(q.table)
 	ctx.writeString(" SET ")
 
-	ctx.ensureArgsCapacity(len(assignments))
+	ctx.ensureArgsCapacity(len(assignments) + len(q.where))
 
 	for idx, item := range assignments {
 		if idx > 0 {

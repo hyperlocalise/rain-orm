@@ -203,13 +203,13 @@ func (c *compileContext) writeString(value string) {
 }
 
 func (c *compileContext) ensureArgsCapacity(n int) {
-	if cap(c.argPlan) < n {
-		newPlan := make([]compiledArg, len(c.argPlan), n)
+	if needed := len(c.argPlan) + n; cap(c.argPlan) < needed {
+		newPlan := make([]compiledArg, len(c.argPlan), needed)
 		copy(newPlan, c.argPlan)
 		c.argPlan = newPlan
 	}
-	if cap(c.args) < n {
-		newArgs := make([]any, len(c.args), n)
+	if needed := len(c.args) + n; cap(c.args) < needed {
+		newArgs := make([]any, len(c.args), needed)
 		copy(newArgs, c.args)
 		c.args = newArgs
 	}
