@@ -29,7 +29,7 @@ type joinClause struct {
 
 type assignment struct {
 	column schema.ColumnReference
-	value  schema.Expression
+	value  any // can be schema.Expression or raw literal
 }
 
 type returningClause struct {

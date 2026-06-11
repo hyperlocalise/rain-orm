@@ -80,13 +80,7 @@ type InsertConflictUpdateBuilder struct {
 
 // Set adds a custom assignment to the DO UPDATE SET clause.
 func (b *InsertConflictUpdateBuilder) Set(column schema.ColumnReference, value any) *InsertConflictUpdateBuilder {
-	var expr schema.Expression
-	if e, ok := value.(schema.Expression); ok {
-		expr = e
-	} else {
-		expr = schema.ValueExpr{Value: value}
-	}
-	b.query.conflict.updates = append(b.query.conflict.updates, assignment{column: column, value: expr})
+	b.query.conflict.updates = append(b.query.conflict.updates, assignment{column: column, value: value})
 	return b
 }
 
@@ -168,14 +162,7 @@ func (q *InsertQuery) Columns(cols ...schema.ColumnReference) *InsertQuery {
 
 // Set adds an explicit column assignment.
 func (q *InsertQuery) Set(column schema.ColumnReference, value any) *InsertQuery {
-	var expr schema.Expression
-	if e, ok := value.(schema.Expression); ok {
-		expr = e
-	} else {
-		expr = schema.ValueExpr{Value: value}
-	}
-
-	q.values = append(q.values, assignment{column: column, value: expr})
+	q.values = append(q.values, assignment{column: column, value: value})
 	return q
 }
 
@@ -318,6 +305,9 @@ func (q *InsertQuery) writeValuesSQL(ctx *compileContext) error {
 			ctx.writeQuotedIdentifier(item.column.ColumnDef().Name)
 		}
 		ctx.writeString(") VALUES ")
+
+		ctx.ensureArgsCapacity(len(rows) * len(rows[0]))
+
 		for rowIdx, row := range rows {
 			if rowIdx > 0 {
 				ctx.writeString(", ")
@@ -327,7 +317,7 @@ func (q *InsertQuery) writeValuesSQL(ctx *compileContext) error {
 				if idx > 0 {
 					ctx.writeString(", ")
 				}
-				if err := ctx.writeExpression(item.value); err != nil {
+				if err := ctx.writeAny(item.value); err != nil {
 					return err
 				}
 			}
@@ -579,13 +569,7 @@ func (q *InsertQuery) assignmentsFromRows() ([][]assignment, error) {
 
 		overrides := make([]assignment, 0, len(row))
 		for column, value := range row {
-			var expr schema.Expression
-			if e, ok := value.(schema.Expression); ok {
-				expr = e
-			} else {
-				expr = schema.ValueExpr{Value: value}
-			}
-			overrides = append(overrides, assignment{column: column, value: expr})
+			overrides = append(overrides, assignment{column: column, value: value})
 		}
 
 		assignments, err := mergeAssignments(q.table, nil, overrides)
@@ -667,7 +651,7 @@ func (q *InsertQuery) writeConflictClause(ctx *compileContext) error {
 				}
 				ctx.writeColumnName(item.column)
 				ctx.writeString(" = ")
-				if err := ctx.writeExpression(item.value); err != nil {
+				if err := ctx.writeAny(item.value); err != nil {
 					return err
 				}
 			}
@@ -721,7 +705,7 @@ func (q *InsertQuery) writeConflictClause(ctx *compileContext) error {
 			}
 			ctx.writeColumnName(item.column)
 			ctx.writeString(" = ")
-			if err := ctx.writeExpression(item.value); err != nil {
+			if err := ctx.writeAny(item.value); err != nil {
 				return err
 			}
 		}
