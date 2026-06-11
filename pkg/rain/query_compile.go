@@ -202,6 +202,19 @@ func (c *compileContext) writeString(value string) {
 	c.buffer.WriteString(value)
 }
 
+func (c *compileContext) ensureArgsCapacity(n int) {
+	if needed := len(c.argPlan) + n; cap(c.argPlan) < needed {
+		newPlan := make([]compiledArg, len(c.argPlan), needed)
+		copy(newPlan, c.argPlan)
+		c.argPlan = newPlan
+	}
+	if needed := len(c.args) + n; cap(c.args) < needed {
+		newArgs := make([]any, len(c.args), needed)
+		copy(newArgs, c.args)
+		c.args = newArgs
+	}
+}
+
 func (c *compileContext) writeQuotedIdentifier(name string) {
 	if c.quotedCache == nil {
 		// Fallback for custom or less common dialects that don't have a dedicated cache.
@@ -289,23 +302,32 @@ func (c *compileContext) writeSelectExpression(expr schema.Expression) error {
 	return c.writeExpressionInContext(expr, expressionContext{allowAlias: true})
 }
 
+func (c *compileContext) writeAny(val any) error {
+	if expr, ok := val.(schema.Expression); ok {
+		return c.writeExpression(expr)
+	}
+
+	if c.useLiterals {
+		sql, err := literalDDLSQL(c.dialect, val)
+		if err != nil {
+			return err
+		}
+		c.writeString(sql)
+	} else {
+		index := c.nextPlaceholderIndex()
+		c.argPlan = append(c.argPlan, compiledArg{kind: compiledArgLiteral, value: val})
+		c.args = append(c.args, val)
+		c.writeString(c.dialect.Placeholder(index))
+	}
+	return nil
+}
+
 func (c *compileContext) writeExpressionInContext(expr schema.Expression, context expressionContext) error {
 	switch value := expr.(type) {
 	case schema.ColumnReference:
 		c.writeColumn(value)
 	case schema.ValueExpr:
-		if c.useLiterals {
-			sql, err := literalDDLSQL(c.dialect, value.Value)
-			if err != nil {
-				return err
-			}
-			c.writeString(sql)
-		} else {
-			index := c.nextPlaceholderIndex()
-			c.argPlan = append(c.argPlan, compiledArg{kind: compiledArgLiteral, value: value.Value})
-			c.args = append(c.args, value.Value)
-			c.writeString(c.dialect.Placeholder(index))
-		}
+		return c.writeAny(value.Value)
 	case schema.PlaceholderExpr:
 		if strings.TrimSpace(value.Name) == "" {
 			return errors.New("rain: placeholder name cannot be empty")

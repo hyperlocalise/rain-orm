@@ -34,14 +34,7 @@ func (q *UpdateQuery) Table(table schema.TableReference) *UpdateQuery {
 
 // Set adds an explicit typed assignment.
 func (q *UpdateQuery) Set(column schema.ColumnReference, value any) *UpdateQuery {
-	var expr schema.Expression
-	if e, ok := value.(schema.Expression); ok {
-		expr = e
-	} else {
-		expr = schema.ValueExpr{Value: value}
-	}
-
-	q.values = append(q.values, assignment{column: column, value: expr})
+	q.values = append(q.values, assignment{column: column, value: value})
 	return q
 }
 
@@ -184,13 +177,16 @@ func (q *UpdateQuery) writeSQLInternal(ctx *compileContext, assignments []assign
 	ctx.writeString("UPDATE ")
 	ctx.writeTableName(q.table)
 	ctx.writeString(" SET ")
+
+	ctx.ensureArgsCapacity(len(assignments) + len(q.where))
+
 	for idx, item := range assignments {
 		if idx > 0 {
 			ctx.writeString(", ")
 		}
 		ctx.writeQuotedIdentifier(item.column.ColumnDef().Name)
 		ctx.writeString(" = ")
-		if err := ctx.writeExpression(item.value); err != nil {
+		if err := ctx.writeAny(item.value); err != nil {
 			return err
 		}
 	}
@@ -272,13 +268,7 @@ func (q *UpdateQuery) updateAssignments() ([]assignment, error) {
 	var rowAssignments []assignment
 	for _, row := range q.rows {
 		for column, value := range row {
-			var expr schema.Expression
-			if e, ok := value.(schema.Expression); ok {
-				expr = e
-			} else {
-				expr = schema.ValueExpr{Value: value}
-			}
-			rowAssignments = append(rowAssignments, assignment{column: column, value: expr})
+			rowAssignments = append(rowAssignments, assignment{column: column, value: value})
 		}
 	}
 
