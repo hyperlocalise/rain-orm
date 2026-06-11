@@ -19,6 +19,7 @@ type UpdateQuery struct {
 	values    []assignment
 	rows      []map[schema.ColumnReference]any
 	where     []schema.Predicate
+	from      []selectTableSource
 	order     []schema.OrderExpr
 	limit     *int
 	ctes      []cteDefinition
@@ -61,6 +62,21 @@ func (q *UpdateQuery) Where(predicate schema.Predicate) *UpdateQuery {
 // Returning adds RETURNING expressions when supported by the dialect.
 func (q *UpdateQuery) Returning(exprs ...schema.Expression) *UpdateQuery {
 	q.returning = append(q.returning, exprs...)
+	return q
+}
+
+// From appends additional table sources for the UPDATE ... FROM clause.
+// Supported by PostgreSQL and SQLite (3.33.0+).
+func (q *UpdateQuery) From(tables ...schema.TableReference) *UpdateQuery {
+	for _, table := range tables {
+		q.from = append(q.from, tableDefSource{table: table.TableDef()})
+	}
+	return q
+}
+
+// FromSubquery appends a subquery source for the UPDATE ... FROM clause.
+func (q *UpdateQuery) FromSubquery(query *SelectQuery, alias string) *UpdateQuery {
+	q.from = append(q.from, subqueryTableSource{query: query, alias: alias})
 	return q
 }
 
@@ -175,7 +191,7 @@ func (q *UpdateQuery) writeSQLInternal(ctx *compileContext, assignments []assign
 	}
 
 	ctx.writeString("UPDATE ")
-	ctx.writeTableName(q.table)
+	ctx.writeTable(q.table)
 	ctx.writeString(" SET ")
 
 	ctx.ensureArgsCapacity(len(assignments) + len(q.where))
@@ -188,6 +204,21 @@ func (q *UpdateQuery) writeSQLInternal(ctx *compileContext, assignments []assign
 		ctx.writeString(" = ")
 		if err := ctx.writeAny(item.value); err != nil {
 			return err
+		}
+	}
+
+	if len(q.from) > 0 {
+		if !dialect.HasFeature(ctx.dialect.Features(), dialect.FeatureUpdateFrom) {
+			return fmt.Errorf("rain: UPDATE ... FROM is not supported by %s dialect", ctx.dialect.Name())
+		}
+		ctx.writeString(" FROM ")
+		for idx, source := range q.from {
+			if idx > 0 {
+				ctx.writeString(", ")
+			}
+			if err := source.writeSQL(ctx); err != nil {
+				return err
+			}
 		}
 	}
 

@@ -135,7 +135,7 @@ func TestPostgresDialect(t *testing.T) {
 	if got := d.Name(); got != "postgres" {
 		t.Fatalf("unexpected name: %q", got)
 	}
-	if got := d.Features(); got != FeatureInsertReturning|FeatureUpdateReturning|FeatureDeleteReturning|FeatureOffset|FeatureUpsert|FeatureCTE|FeatureDefaultPlaceholder|FeatureSavepoint|FeatureSelectLocking|FeatureNullsOrder|FeatureSelectDistinctOn|FeatureUnlimited|FeaturePartialIndex {
+	if got := d.Features(); got != FeatureInsertReturning|FeatureUpdateReturning|FeatureDeleteReturning|FeatureOffset|FeatureUpsert|FeatureCTE|FeatureDefaultPlaceholder|FeatureSavepoint|FeatureSelectLocking|FeatureNullsOrder|FeatureSelectDistinctOn|FeatureUnlimited|FeaturePartialIndex|FeatureUpdateFrom|FeatureDeleteUsing {
 		t.Fatalf("unexpected features: %b", got)
 	}
 	if got := d.QuoteIdentifier(`user"name`); got != `"user""name"` {
@@ -317,7 +317,7 @@ func TestSQLiteDialect(t *testing.T) {
 	if got := d.Name(); got != "sqlite" {
 		t.Fatalf("unexpected name: %q", got)
 	}
-	if got := d.Features(); got != FeatureInsertReturning|FeatureUpdateReturning|FeatureDeleteReturning|FeatureOffset|FeatureUpsert|FeatureSavepoint|FeatureNullsOrder|FeatureCTE|FeatureUpdateOrder|FeatureUpdateLimit|FeatureDeleteOrder|FeatureDeleteLimit|FeatureUnlimited|FeaturePartialIndex {
+	if got := d.Features(); got != FeatureInsertReturning|FeatureUpdateReturning|FeatureDeleteReturning|FeatureOffset|FeatureUpsert|FeatureSavepoint|FeatureNullsOrder|FeatureCTE|FeatureUpdateOrder|FeatureUpdateLimit|FeatureDeleteOrder|FeatureDeleteLimit|FeatureUnlimited|FeaturePartialIndex|FeatureUpdateFrom {
 		t.Fatalf("unexpected features: %b", got)
 	}
 	if got := d.QuoteIdentifier(`user"name`); got != `"user""name"` {

@@ -21,6 +21,8 @@ const (
 	FeatureDeleteLimit
 	FeatureUnlimited
 	FeaturePartialIndex
+	FeatureUpdateFrom
+	FeatureDeleteUsing
 )
 
 // HasFeature reports whether a feature set includes the requested capability.
