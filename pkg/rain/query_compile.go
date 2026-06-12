@@ -594,8 +594,10 @@ func (c *compileContext) activateNamedPlaceholders() {
 	c.hasNames = true
 
 	// Ensure argPlan has enough capacity and set its length to match c.args.
-	if cap(c.argPlan) < len(c.args) {
-		c.argPlan = make([]compiledArg, len(c.args), max(cap(c.argPlan), len(c.args)))
+	// We use len(c.args)+1 to account for the named placeholder that is
+	// typically appended immediately after activation.
+	if cap(c.argPlan) < len(c.args)+1 {
+		c.argPlan = make([]compiledArg, len(c.args), max(cap(c.argPlan), len(c.args)+1))
 	} else {
 		c.argPlan = c.argPlan[:len(c.args)]
 	}
