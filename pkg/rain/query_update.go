@@ -211,6 +211,9 @@ func (q *UpdateQuery) writeSQLInternal(ctx *compileContext, assignments []assign
 		if !dialect.HasFeature(ctx.dialect.Features(), dialect.FeatureUpdateFrom) {
 			return fmt.Errorf("rain: UPDATE ... FROM is not supported by %s dialect", ctx.dialect.Name())
 		}
+		if ctx.dialect.Name() == "sqlite" && (len(q.order) > 0 || q.limit != nil) {
+			return errors.New("rain: SQLite does not support combining UPDATE ... FROM with ORDER BY or LIMIT")
+		}
 		ctx.writeString(" FROM ")
 		for idx, source := range q.from {
 			if idx > 0 {

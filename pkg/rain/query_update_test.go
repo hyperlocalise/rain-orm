@@ -163,6 +163,30 @@ func TestUpdateOrderLimitToSQL(t *testing.T) {
 			},
 			wantErr: "rain: UPDATE ... FROM is not supported by mysql dialect",
 		},
+		{
+			name:    "sqlite update from with order error",
+			dialect: "sqlite",
+			setup: func(q *rain.UpdateQuery) {
+				_, posts := defineTables()
+				q.From(posts).
+					Set(users.Name, "Alice").
+					Where(users.ID.Eq(int64(1))).
+					OrderBy(users.ID.Asc())
+			},
+			wantErr: "rain: SQLite does not support combining UPDATE ... FROM with ORDER BY or LIMIT",
+		},
+		{
+			name:    "sqlite update from with limit error",
+			dialect: "sqlite",
+			setup: func(q *rain.UpdateQuery) {
+				_, posts := defineTables()
+				q.From(posts).
+					Set(users.Name, "Alice").
+					Where(users.ID.Eq(int64(1))).
+					Limit(10)
+			},
+			wantErr: "rain: SQLite does not support combining UPDATE ... FROM with ORDER BY or LIMIT",
+		},
 	}
 
 	for _, tt := range tests {
