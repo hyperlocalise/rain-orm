@@ -16,6 +16,7 @@ type DeleteQuery struct {
 	dialect   dialect.Dialect
 	table     *schema.TableDef
 	where     []schema.Predicate
+	using     []selectTableSource
 	order     []schema.OrderExpr
 	limit     *int
 	ctes      []cteDefinition
@@ -38,6 +39,21 @@ func (q *DeleteQuery) Where(predicate schema.Predicate) *DeleteQuery {
 // Returning adds RETURNING expressions when supported by the dialect.
 func (q *DeleteQuery) Returning(exprs ...schema.Expression) *DeleteQuery {
 	q.returning = append(q.returning, exprs...)
+	return q
+}
+
+// Using appends additional table sources for the DELETE ... USING clause.
+// Supported by PostgreSQL.
+func (q *DeleteQuery) Using(tables ...schema.TableReference) *DeleteQuery {
+	for _, table := range tables {
+		q.using = append(q.using, tableDefSource{table: table.TableDef()})
+	}
+	return q
+}
+
+// UsingSubquery appends a subquery source for the DELETE ... USING clause.
+func (q *DeleteQuery) UsingSubquery(query *SelectQuery, alias string) *DeleteQuery {
+	q.using = append(q.using, subqueryTableSource{query: query, alias: alias})
 	return q
 }
 
@@ -135,7 +151,23 @@ func (q *DeleteQuery) writeSQL(ctx *compileContext) error {
 	}
 
 	ctx.writeString("DELETE FROM ")
-	ctx.writeTableName(q.table)
+	ctx.writeTable(q.table)
+
+	if len(q.using) > 0 {
+		if !dialect.HasFeature(ctx.dialect.Features(), dialect.FeatureDeleteUsing) {
+			return fmt.Errorf("rain: DELETE ... USING is not supported by %s dialect", ctx.dialect.Name())
+		}
+		ctx.writeString(" USING ")
+		for idx, source := range q.using {
+			if idx > 0 {
+				ctx.writeString(", ")
+			}
+			if err := source.writeSQL(ctx); err != nil {
+				return err
+			}
+		}
+	}
+
 	if len(q.where) > 0 {
 		ctx.writeString(" WHERE ")
 		if err := ctx.writePredicate(joinPredicates(q.where)); err != nil {

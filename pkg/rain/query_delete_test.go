@@ -85,6 +85,57 @@ func TestDeleteOrderLimitToSQL(t *testing.T) {
 			},
 			wantSQL: "WITH `inactive_users` AS (SELECT `users`.`id` FROM `users` WHERE `users`.`active` = ?) DELETE FROM `users` WHERE `users`.`id` IN (SELECT id FROM inactive_users)",
 		},
+		{
+			name:    "postgres delete with alias",
+			dialect: "postgres",
+			setup: func(q *rain.DeleteQuery) {
+				u := schema.Alias(users, "u")
+				q.Table(u).Where(u.ID.Eq(int64(1)))
+			},
+			wantSQL: `DELETE FROM "users" AS "u" WHERE "u"."id" = $1`,
+		},
+		{
+			name:    "postgres delete using",
+			dialect: "postgres",
+			setup: func(q *rain.DeleteQuery) {
+				_, posts := defineTables()
+				u := schema.Alias(users, "u")
+				p := schema.Alias(posts, "p")
+				q.Table(u).
+					Using(p).
+					Where(u.ID.EqCol(p.UserID)).
+					Where(p.ID.Eq(int64(10)))
+			},
+			wantSQL: `DELETE FROM "users" AS "u" USING "posts" AS "p" WHERE ("u"."id" = "p"."user_id" AND "p"."id" = $1)`,
+		},
+		{
+			name:    "postgres delete using subquery",
+			dialect: "postgres",
+			setup: func(q *rain.DeleteQuery) {
+				db, _ := rain.OpenDialect("postgres")
+				_, posts := defineTables()
+				u := schema.Alias(users, "u")
+				sub := db.Select().
+					Table(posts).
+					Column(posts.UserID, schema.Count().As("count")).
+					GroupBy(posts.UserID)
+
+				q.Table(u).
+					UsingSubquery(sub, "stats").
+					Where(u.ID.Eq(int64(1))).
+					Where(schema.Raw(`stats.count > 10`))
+			},
+			wantSQL: `DELETE FROM "users" AS "u" USING (SELECT "posts"."user_id", COUNT(*) AS "count" FROM "posts" GROUP BY "posts"."user_id") AS "stats" WHERE ("u"."id" = $1 AND stats.count > 10)`,
+		},
+		{
+			name:    "sqlite delete using error",
+			dialect: "sqlite",
+			setup: func(q *rain.DeleteQuery) {
+				_, posts := defineTables()
+				q.Using(posts).Where(users.ID.Eq(int64(1)))
+			},
+			wantErr: "rain: DELETE ... USING is not supported by sqlite dialect",
+		},
 	}
 
 	for _, tt := range tests {

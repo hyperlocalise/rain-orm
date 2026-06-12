@@ -165,7 +165,9 @@ func TestDialectFeatures(t *testing.T) {
 				dialect.FeatureNullsOrder |
 				dialect.FeatureSelectDistinctOn |
 				dialect.FeatureUnlimited |
-				dialect.FeaturePartialIndex,
+				dialect.FeaturePartialIndex |
+				dialect.FeatureUpdateFrom |
+				dialect.FeatureDeleteUsing,
 		},
 		{
 			name:    "mysql",
@@ -204,7 +206,8 @@ func TestDialectFeatures(t *testing.T) {
 				dialect.FeatureDeleteOrder |
 				dialect.FeatureDeleteLimit |
 				dialect.FeatureUnlimited |
-				dialect.FeaturePartialIndex,
+				dialect.FeaturePartialIndex |
+				dialect.FeatureUpdateFrom,
 			missing: []dialect.Feature{
 				dialect.FeatureDefaultPlaceholder,
 			},
