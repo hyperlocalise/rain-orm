@@ -191,7 +191,7 @@ func (c *compileContext) compiledQuery() compiledQuery {
 }
 
 func (c *compileContext) nextPlaceholderIndex() int {
-	return len(c.argPlan) + 1
+	return len(c.args) + 1
 }
 
 func (c *compileContext) writeByte(ch byte) {
@@ -203,10 +203,12 @@ func (c *compileContext) writeString(value string) {
 }
 
 func (c *compileContext) ensureArgsCapacity(n int) {
-	if needed := len(c.argPlan) + n; cap(c.argPlan) < needed {
-		newPlan := make([]compiledArg, len(c.argPlan), needed)
-		copy(newPlan, c.argPlan)
-		c.argPlan = newPlan
+	if c.hasNames {
+		if needed := len(c.argPlan) + n; cap(c.argPlan) < needed {
+			newPlan := make([]compiledArg, len(c.argPlan), needed)
+			copy(newPlan, c.argPlan)
+			c.argPlan = newPlan
+		}
 	}
 	if needed := len(c.args) + n; cap(c.args) < needed {
 		newArgs := make([]any, len(c.args), needed)
@@ -315,7 +317,9 @@ func (c *compileContext) writeAny(val any) error {
 		c.writeString(sql)
 	} else {
 		index := c.nextPlaceholderIndex()
-		c.argPlan = append(c.argPlan, compiledArg{kind: compiledArgLiteral, value: val})
+		if c.hasNames {
+			c.argPlan = append(c.argPlan, compiledArg{kind: compiledArgLiteral, value: val})
+		}
 		c.args = append(c.args, val)
 		c.writeString(c.dialect.Placeholder(index))
 	}
@@ -332,9 +336,9 @@ func (c *compileContext) writeExpressionInContext(expr schema.Expression, contex
 		if strings.TrimSpace(value.Name) == "" {
 			return errors.New("rain: placeholder name cannot be empty")
 		}
+		c.activateNamedPlaceholders()
 		index := c.nextPlaceholderIndex()
 		c.argPlan = append(c.argPlan, compiledArg{kind: compiledArgNamedPlaceholder, name: value.Name})
-		c.hasNames = true
 		c.args = append(c.args, nil)
 		c.writeString(c.dialect.Placeholder(index))
 	case schema.ComparisonExpr:
@@ -547,8 +551,11 @@ func (c *compileContext) writeRaw(raw schema.RawExpr) error {
 			return errors.New("rain: raw SQL placeholder count does not match args")
 		}
 		index := c.nextPlaceholderIndex()
-		c.argPlan = append(c.argPlan, compiledArg{kind: compiledArgLiteral, value: raw.Args[argIndex]})
-		c.args = append(c.args, raw.Args[argIndex])
+		val := raw.Args[argIndex]
+		if c.hasNames {
+			c.argPlan = append(c.argPlan, compiledArg{kind: compiledArgLiteral, value: val})
+		}
+		c.args = append(c.args, val)
 		c.writeString(c.dialect.Placeholder(index))
 		argIndex++
 	}
@@ -578,6 +585,24 @@ func (c *compileContext) writeColumn(column schema.ColumnReference) {
 	c.writeColumnInternal(def)
 	qualified := string(c.buffer.Bytes()[start:])
 	c.columnCache.Store(def, qualified)
+}
+
+func (c *compileContext) activateNamedPlaceholders() {
+	if c.hasNames {
+		return
+	}
+	c.hasNames = true
+
+	// Ensure argPlan has enough capacity and set its length to match c.args.
+	if cap(c.argPlan) < len(c.args) {
+		c.argPlan = make([]compiledArg, len(c.args), max(cap(c.argPlan), len(c.args)))
+	} else {
+		c.argPlan = c.argPlan[:len(c.args)]
+	}
+
+	for i, val := range c.args {
+		c.argPlan[i] = compiledArg{kind: compiledArgLiteral, value: val}
+	}
 }
 
 func (c *compileContext) writeColumnInternal(def *schema.ColumnDef) {
