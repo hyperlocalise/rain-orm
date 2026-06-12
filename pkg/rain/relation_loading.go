@@ -21,6 +21,7 @@ type typedKey struct {
 type relationLoadNode struct {
 	name     string
 	relation schema.RelationDef
+	config   RelationConfig
 	children map[string]*relationLoadNode
 }
 
@@ -41,7 +42,7 @@ func (q *SelectQuery) scanRowsWithRelations(ctx context.Context, rows *sql.Rows,
 		return fmt.Errorf("rain: relation loading requires a concrete table source")
 	}
 
-	relationTree, err := buildRelationLoadTree(tableSource.table, q.relationNames)
+	relationTree, err := buildRelationLoadTree(tableSource.table, q.relationNames, q.relationConfigs)
 	if err != nil {
 		return err
 	}
@@ -72,17 +73,23 @@ func (q *SelectQuery) scanRowsWithRelations(ctx context.Context, rows *sql.Rows,
 	return nil
 }
 
-func buildRelationLoadTree(table *schema.TableDef, relationNames []string) (map[string]*relationLoadNode, error) {
+func buildRelationLoadTree(table *schema.TableDef, relationNames []string, relationConfigs map[string]RelationConfig) (map[string]*relationLoadNode, error) {
 	tree := make(map[string]*relationLoadNode, len(relationNames))
 	for _, rawName := range relationNames {
 		parts := strings.Split(rawName, ".")
 		currentTable := table
 		currentLevel := tree
-		for _, part := range parts {
+		var currentPath strings.Builder
+		for idx, part := range parts {
 			part = strings.TrimSpace(part)
 			if part == "" {
 				return nil, fmt.Errorf("rain: relation path %q contains an empty segment", rawName)
 			}
+			if idx > 0 {
+				currentPath.WriteByte('.')
+			}
+			currentPath.WriteString(part)
+
 			relation, exists := currentTable.RelationByName(part)
 			if !exists {
 				return nil, fmt.Errorf("rain: unknown relation %q on table %q", part, currentTable.Name)
@@ -93,6 +100,9 @@ func buildRelationLoadTree(table *schema.TableDef, relationNames []string) (map[
 					name:     part,
 					relation: relation,
 					children: make(map[string]*relationLoadNode),
+				}
+				if relationConfigs != nil {
+					node.config = relationConfigs[currentPath.String()]
 				}
 				currentLevel[part] = node
 			}
@@ -162,13 +172,13 @@ func (q *SelectQuery) loadRelationNode(ctx context.Context, parents reflect.Valu
 
 	if node.relation.Type == schema.RelationTypeManyToMany {
 		var err error
-		relatedRows, relatedBySourceKey, err = q.loadRelatedManyToManyRows(ctx, parents, node.relation, orderedSourceKeys)
+		relatedRows, relatedBySourceKey, err = q.loadRelatedManyToManyRows(ctx, parents, node.relation, node.config, orderedSourceKeys)
 		if err != nil {
 			return err
 		}
 	} else {
 		var err error
-		relatedRows, err = q.loadRelatedRows(ctx, parents, node.relation, orderedSourceKeys)
+		relatedRows, err = q.loadRelatedRows(ctx, parents, node.relation, node.config, orderedSourceKeys)
 		if err != nil {
 			return err
 		}
@@ -221,6 +231,7 @@ func (q *SelectQuery) loadRelatedManyToManyRows(
 	ctx context.Context,
 	parents reflect.Value,
 	relation schema.RelationDef,
+	config RelationConfig,
 	sourceKeys []any,
 ) (reflect.Value, map[typedKey][]reflect.Value, error) {
 	parentStructType, err := sliceParentStructType(parents.Type())
@@ -282,6 +293,12 @@ func (q *SelectQuery) loadRelatedManyToManyRows(
 
 		batchDest := reflect.New(reflect.SliceOf(relatedElemType))
 		targetQuery := &SelectQuery{runner: q.runner, dialect: q.dialect, table: tableDefSource{table: relation.TargetTable}}
+		if config.Where != nil {
+			targetQuery.Where(config.Where)
+		}
+		if len(config.OrderBy) > 0 {
+			targetQuery.OrderBy(config.OrderBy...)
+		}
 		if err := targetQuery.
 			Where(schema.Ref(relation.TargetColumn).In(batchKeys...)).
 			Scan(ctx, batchDest.Interface()); err != nil {
@@ -323,6 +340,7 @@ func (q *SelectQuery) loadRelatedRows(
 	ctx context.Context,
 	parents reflect.Value,
 	relation schema.RelationDef,
+	config RelationConfig,
 	sourceKeys []any,
 ) (reflect.Value, error) {
 	parentStructType, err := sliceParentStructType(parents.Type())
@@ -339,6 +357,12 @@ func (q *SelectQuery) loadRelatedRows(
 		end := min(start+relationBatchSize, len(sourceKeys))
 		batchDest := reflect.New(reflect.SliceOf(relatedElemType))
 		query := &SelectQuery{runner: q.runner, dialect: q.dialect, table: tableDefSource{table: relation.TargetTable}}
+		if config.Where != nil {
+			query.Where(config.Where)
+		}
+		if len(config.OrderBy) > 0 {
+			query.OrderBy(config.OrderBy...)
+		}
 		if err := query.Where(schema.Ref(relation.TargetColumn).In(sourceKeys[start:end]...)).
 			Scan(ctx, batchDest.Interface()); err != nil {
 			if err == sql.ErrNoRows {

@@ -13,26 +13,27 @@ import (
 // SelectQuery builds typed SELECT statements.
 type SelectQuery struct {
 	schema.ExpressionMarker
-	runner        queryRunner
-	dialect       dialect.Dialect
-	cache         QueryCache
-	table         selectTableSource
-	cols          []schema.Expression
-	where         []schema.Predicate
-	joins         []joinClause
-	order         []schema.OrderExpr
-	groupBy       []schema.Expression
-	having        []schema.Predicate
-	ctes          []cteDefinition
-	firstOperand  *SelectQuery
-	setOps        []setOperation
-	distinct      bool
-	distinctOn    []schema.Expression
-	limit         *int
-	offset        *int
-	relationNames []string
-	cacheOptions  *queryCacheOptions
-	locking       *selectLocking
+	runner          queryRunner
+	dialect         dialect.Dialect
+	cache           QueryCache
+	table           selectTableSource
+	cols            []schema.Expression
+	where           []schema.Predicate
+	joins           []joinClause
+	order           []schema.OrderExpr
+	groupBy         []schema.Expression
+	having          []schema.Predicate
+	ctes            []cteDefinition
+	firstOperand    *SelectQuery
+	setOps          []setOperation
+	distinct        bool
+	distinctOn      []schema.Expression
+	limit           *int
+	offset          *int
+	relationNames   []string
+	relationConfigs map[string]RelationConfig
+	cacheOptions    *queryCacheOptions
+	locking         *selectLocking
 }
 
 // Table sets the table source for the query.
@@ -179,6 +180,34 @@ func (q *SelectQuery) WithRelations(names ...string) *SelectQuery {
 	return q
 }
 
+// RelationConfig provides optional filters and ordering for a relation.
+type RelationConfig struct {
+	Where   schema.Predicate
+	OrderBy []schema.OrderExpr
+}
+
+// Relation configures filters and ordering for a named relation.
+// It also adds the relation to the set of relations to be loaded.
+func (q *SelectQuery) Relation(name string, config RelationConfig) *SelectQuery {
+	if q.relationConfigs == nil {
+		q.relationConfigs = make(map[string]RelationConfig)
+	}
+	q.relationConfigs[name] = config
+
+	found := false
+	for _, n := range q.relationNames {
+		if n == name {
+			found = true
+			break
+		}
+	}
+	if !found {
+		q.relationNames = append(q.relationNames, name)
+	}
+
+	return q
+}
+
 // For applies a locking clause to the SELECT query.
 func (q *SelectQuery) For(mode LockMode, config ...LockConfig) *SelectQuery {
 	locking := &selectLocking{mode: mode}
@@ -290,6 +319,12 @@ func (q *SelectQuery) clone() *SelectQuery {
 	newQ.setOps = append([]setOperation(nil), q.setOps...)
 	newQ.distinctOn = append([]schema.Expression(nil), q.distinctOn...)
 	newQ.relationNames = append([]string(nil), q.relationNames...)
+	if q.relationConfigs != nil {
+		newQ.relationConfigs = make(map[string]RelationConfig, len(q.relationConfigs))
+		for k, v := range q.relationConfigs {
+			newQ.relationConfigs[k] = v
+		}
+	}
 	if q.limit != nil {
 		l := *q.limit
 		newQ.limit = &l
