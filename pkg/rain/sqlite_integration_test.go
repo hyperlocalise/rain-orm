@@ -1149,6 +1149,54 @@ func TestSQLiteIntegrationRichRelationsAndTransactions(t *testing.T) {
 			t.Fatalf("expected 2 groups, got %d", len(groupsWithUsers))
 		}
 
+		// Test many-to-many filtered relation
+		var editorsWithAliceOnly []sqliteRichGroupWithUsersRow
+		err := db.Select().
+			Table(fixture.groups).
+			Where(fixture.groups.Name.Eq("Editors")).
+			Relation("users", rain.RelationConfig{
+				Where: fixture.users.Email.Eq("alice@example.com"),
+			}).
+			Scan(ctx, &editorsWithAliceOnly)
+		if err != nil {
+			t.Fatalf("scan many-to-many filtered failed: %v", err)
+		}
+		if len(editorsWithAliceOnly) != 1 {
+			t.Fatalf("expected 1 group, got %d", len(editorsWithAliceOnly))
+		}
+		if len(editorsWithAliceOnly[0].Users) != 1 {
+			t.Fatalf("expected 1 filtered user in Editors, got %d", len(editorsWithAliceOnly[0].Users))
+		}
+		if editorsWithAliceOnly[0].Users[0].Email != "alice@example.com" {
+			t.Fatalf("expected Alice in Editors, got %q", editorsWithAliceOnly[0].Users[0].Email)
+		}
+
+		// Test many-to-many ordered relation
+		var editorsWithUsersDesc []sqliteRichGroupWithUsersRow
+		err = db.Select().
+			Table(fixture.groups).
+			Where(fixture.groups.Name.Eq("Editors")).
+			Relation("users", rain.RelationConfig{
+				OrderBy: []schema.OrderExpr{fixture.users.Email.Desc()},
+			}).
+			Scan(ctx, &editorsWithUsersDesc)
+		if err != nil {
+			t.Fatalf("scan many-to-many ordered failed: %v", err)
+		}
+		if len(editorsWithUsersDesc) != 1 {
+			t.Fatalf("expected 1 group, got %d", len(editorsWithUsersDesc))
+		}
+		if len(editorsWithUsersDesc[0].Users) != 2 {
+			t.Fatalf("expected 2 users in Editors, got %d", len(editorsWithUsersDesc[0].Users))
+		}
+		// bob@example.com should come before alice@example.com with DESC sort
+		if editorsWithUsersDesc[0].Users[0].Email != "bob@example.com" {
+			t.Fatalf("expected first user to be Bob, got %q", editorsWithUsersDesc[0].Users[0].Email)
+		}
+		if editorsWithUsersDesc[0].Users[1].Email != "alice@example.com" {
+			t.Fatalf("expected second user to be Alice, got %q", editorsWithUsersDesc[0].Users[1].Email)
+		}
+
 		// Admins (index 0) should have 1 user (Alice)
 		if groupsWithUsers[0].Name != "Admins" {
 			t.Fatalf("expected Admins at index 0, got %q", groupsWithUsers[0].Name)
@@ -1304,6 +1352,119 @@ func TestSQLiteIntegrationRichRelationsAndTransactions(t *testing.T) {
 	if nestedExists {
 		t.Fatalf("expected nested row to roll back to savepoint")
 	}
+
+	t.Run("FilteredAndOrderedRelations", func(t *testing.T) {
+		var usersWithPosts []sqliteRichUserWithPostsRow
+		err := db.Select().
+			Table(fixture.users).
+			Where(fixture.users.ID.Eq(seeded.AliceID)).
+			Relation("posts", rain.RelationConfig{
+				Where:   fixture.posts.Published.Eq(true),
+				OrderBy: []schema.OrderExpr{fixture.posts.Title.Desc()},
+			}).
+			Scan(ctx, &usersWithPosts)
+		if err != nil {
+			t.Fatalf("scan with filtered relations failed: %v", err)
+		}
+
+		if len(usersWithPosts) != 1 {
+			t.Fatalf("expected 1 user, got %d", len(usersWithPosts))
+		}
+
+		// Alice has 2 posts, but only 1 is published ("Launch Checklist").
+		if len(usersWithPosts[0].Posts) != 1 {
+			t.Fatalf("expected 1 published post for Alice, got %d", len(usersWithPosts[0].Posts))
+		}
+		if usersWithPosts[0].Posts[0].Title != "Launch Checklist" {
+			t.Fatalf("expected post 'Launch Checklist', got %q", usersWithPosts[0].Posts[0].Title)
+		}
+
+		// Test OrderBy
+		// Insert another published post for Alice to test ordering
+		_, err = db.Insert().
+			Table(fixture.posts).
+			Set(fixture.posts.UserID, seeded.AliceID).
+			Set(fixture.posts.Title, "Z Quick Note").
+			Set(fixture.posts.Body, "Quick body").
+			Set(fixture.posts.Published, true).
+			Set(fixture.posts.CreatedAt, time.Now()).
+			Exec(ctx)
+		if err != nil {
+			t.Fatalf("failed to insert second published post: %v", err)
+		}
+
+		err = db.Select().
+			Table(fixture.users).
+			Where(fixture.users.ID.Eq(seeded.AliceID)).
+			Relation("posts", rain.RelationConfig{
+				Where:   fixture.posts.Published.Eq(true),
+				OrderBy: []schema.OrderExpr{fixture.posts.Title.Desc()},
+			}).
+			Scan(ctx, &usersWithPosts)
+		if err != nil {
+			t.Fatalf("scan with ordered relations failed: %v", err)
+		}
+
+		if len(usersWithPosts[0].Posts) != 2 {
+			t.Fatalf("expected 2 published posts for Alice, got %d", len(usersWithPosts[0].Posts))
+		}
+		// Ordered by Title DESC, so "Z Quick Note" should be first.
+		if usersWithPosts[0].Posts[0].Title != "Z Quick Note" {
+			t.Fatalf("expected first post to be 'Z Quick Note', got %q", usersWithPosts[0].Posts[0].Title)
+		}
+		if usersWithPosts[0].Posts[1].Title != "Launch Checklist" {
+			t.Fatalf("expected second post to be 'Launch Checklist', got %q", usersWithPosts[0].Posts[1].Title)
+		}
+	})
+
+	t.Run("NestedFilteredRelations", func(t *testing.T) {
+		var usersWithPosts []sqliteRichUserWithPostsRow
+		err := db.Select().
+			Table(fixture.users).
+			Where(fixture.users.ID.Eq(seeded.AliceID)).
+			Relation("posts", rain.RelationConfig{
+				OrderBy: []schema.OrderExpr{fixture.posts.Title.Asc()},
+			}).
+			Relation("posts.author", rain.RelationConfig{
+				Where: fixture.users.Active.Eq(true),
+			}).
+			Scan(ctx, &usersWithPosts)
+		if err != nil {
+			t.Fatalf("scan with nested filtered relations failed: %v", err)
+		}
+
+		if len(usersWithPosts) != 1 || len(usersWithPosts[0].Posts) < 2 {
+			t.Fatalf("unexpected users with posts: %#v", usersWithPosts)
+		}
+		// Alice's author should be loaded because they are active.
+		for _, post := range usersWithPosts[0].Posts {
+			if post.Author.ID == 0 {
+				t.Fatalf("expected author to be loaded for post %q", post.Title)
+			}
+		}
+
+		// Now filter out the author by making them inactive in the config
+		err = db.Select().
+			Table(fixture.users).
+			Where(fixture.users.ID.Eq(seeded.AliceID)).
+			Relation("posts.author", rain.RelationConfig{
+				Where: fixture.users.Active.Eq(false),
+			}).
+			Scan(ctx, &usersWithPosts)
+		if err != nil {
+			t.Fatalf("scan with nested filtered (excluded) authors failed: %v", err)
+		}
+
+		if len(usersWithPosts) != 1 {
+			t.Fatalf("expected 1 user")
+		}
+		// Authors should NOT be loaded because Alice is active but we requested active=false.
+		for _, post := range usersWithPosts[0].Posts {
+			if post.Author.ID != 0 {
+				t.Fatalf("expected author NOT to be loaded for post %q because of filter, got ID %d", post.Title, post.Author.ID)
+			}
+		}
+	})
 }
 
 func TestSQLiteIntegrationRichCreateIndexesSQL(t *testing.T) {
