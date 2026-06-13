@@ -16,7 +16,7 @@ func TestSelectiveRelationLoading(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	type UsersTable struct {
 		schema.TableModel
@@ -62,18 +62,25 @@ func TestSelectiveRelationLoading(t *testing.T) {
 
 	createUsersSQL, _ := db.CreateTableSQL(Users)
 	createPostsSQL, _ := db.CreateTableSQL(Posts)
-	db.Exec(ctx, createUsersSQL)
-	db.Exec(ctx, createPostsSQL)
+	if _, err := db.Exec(ctx, createUsersSQL); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(ctx, createPostsSQL); err != nil {
+		t.Fatal(err)
+	}
 
-	db.Insert().Table(Users).Set(Users.Name, "Alice").Set(Users.Email, "alice@example.com").Exec(ctx)
-	db.Insert().Table(Posts).Set(Posts.UserID, int64(1)).Set(Posts.Title, "Hello").Set(Posts.Body, "World").Exec(ctx)
+	if _, err := db.Insert().Table(Users).Set(Users.Name, "Alice").Set(Users.Email, "alice@example.com").Exec(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Insert().Table(Posts).Set(Posts.UserID, int64(1)).Set(Posts.Title, "Hello").Set(Posts.Body, "World").Exec(ctx); err != nil {
+		t.Fatal(err)
+	}
 
 	// Test selective loading
 	var posts []Post
 	err = db.Select().From(Posts).Relation("author", rain.RelationConfig{
 		Columns: []schema.Expression{Users.Name},
 	}).Scan(ctx, &posts)
-
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}

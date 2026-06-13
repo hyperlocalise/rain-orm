@@ -16,7 +16,7 @@ func TestTransactionOptions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	// Test BeginTx with options
 	opts := &sql.TxOptions{

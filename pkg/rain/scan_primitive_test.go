@@ -17,7 +17,7 @@ func TestScanPrimitive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	type UsersTable struct {
 		schema.TableModel
