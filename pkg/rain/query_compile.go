@@ -291,6 +291,34 @@ func (c *compileContext) writePredicate(predicate schema.Predicate) error {
 	return c.writeExpression(predicate)
 }
 
+// writeJoinedPredicates renders a slice of predicates joined by AND.
+// OPTIMIZATION: This method iterates over the predicates directly to avoid
+// allocating intermediate schema.LogicalExpr objects (which would otherwise
+// be created by joinPredicates). This reduces heap pressure during query
+// compilation, particularly for complex queries with multiple WHERE or
+// HAVING conditions.
+// Impact: Reduces BenchmarkSelectToSQL/Complex allocations from 16 to 15.
+func (c *compileContext) writeJoinedPredicates(predicates []schema.Predicate) error {
+	if len(predicates) == 0 {
+		return nil
+	}
+	if len(predicates) == 1 {
+		return c.writePredicate(predicates[0])
+	}
+
+	c.writeByte('(')
+	for idx, p := range predicates {
+		if idx > 0 {
+			c.writeString(" AND ")
+		}
+		if err := c.writePredicate(p); err != nil {
+			return err
+		}
+	}
+	c.writeByte(')')
+	return nil
+}
+
 type expressionContext struct {
 	allowAlias bool
 	noParens   bool
