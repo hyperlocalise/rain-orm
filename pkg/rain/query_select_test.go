@@ -2,6 +2,7 @@ package rain_test
 
 import (
 	"context"
+	"database/sql"
 	"reflect"
 	"strings"
 	"testing"
@@ -114,6 +115,55 @@ func TestSelectErgonomicsToSQL(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestSelectFirst(t *testing.T) {
+	ctx := context.Background()
+	db, err := rain.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	users, _ := defineTables()
+	createSQL, _ := db.CreateTableSQL(users)
+	if _, err := db.Exec(ctx, createSQL); err != nil {
+		t.Fatal(err)
+	}
+
+	// Test First on empty table
+	var dummy int64
+	err = db.Select(users.ID).From(users).First(ctx, &dummy)
+	if err != sql.ErrNoRows {
+		t.Errorf("expected sql.ErrNoRows, got %v", err)
+	}
+
+	// Insert some data
+	_, err = db.Insert().Table(users).Set(users.Name, "Alice").Set(users.Email, "alice@example.com").Set(users.Active, true).Exec(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.Insert().Table(users).Set(users.Name, "Bob").Set(users.Email, "bob@example.com").Set(users.Active, true).Exec(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Test First returns the first record
+	var email string
+	err = db.Select(users.Email).From(users).OrderBy(users.ID.Asc()).First(ctx, &email)
+	if err != nil {
+		t.Errorf("expected no error, got %v", err)
+	}
+	if email != "alice@example.com" {
+		t.Errorf("expected alice@example.com, got %s", email)
+	}
+
+	// Verify LIMIT 1 was applied by checking SQL
+	// We can check ToSQL on a query where we manually added Limit(1)
+	sqlText, _, _ := db.Select(users.Email).From(users).Limit(1).ToSQL()
+	if !strings.Contains(sqlText, "LIMIT 1") {
+		t.Errorf("expected SQL to contain LIMIT 1, got %s", sqlText)
 	}
 }
 

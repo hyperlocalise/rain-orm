@@ -280,90 +280,120 @@ func scanRowsAgainstTableDirect(rows *sql.Rows, dest any, table *schema.TableDef
 		return scanDirectRowAddr(target.Addr().UnsafePointer(), targetVal, plan, scratch)
 	case reflect.Slice:
 		elemType := target.Type().Elem()
-		structType, pointerElems, err := sliceElementStructType(elemType)
-		if err != nil {
-			return err
-		}
-		plan, err := newRowScanPlanForColumns(cols, structType, table)
-		if err != nil {
-			return err
-		}
-
-		scratch := plan.pool.Get().(*rowScanScratch)
-		defer plan.pool.Put(scratch)
-
-		zeroElem := reflect.Zero(elemType)
-
-		// Use a local slice header to grow the result set. If rows.Scan fails,
-		// the original target slice remains unmodified (atomic-like behavior).
-		// We use an addressable local to allow for SetLen optimizations.
-		items := reflect.New(target.Type()).Elem()
-		items.Set(target.Slice(0, 0))
-
-		elemSize := elemType.Size()
-
-		for rows.Next() {
-			// OPTIMIZATION: Removed redundant clearing of scratch.scanned here.
-			// Generic scanned values (for non-direct columns) are overwritten by
-			// rows.Scan, and direct columns use separate scratch buffers.
-
-			if err := rows.Scan(scratch.scanTargets...); err != nil {
+		structType, pointerElems, structErr := sliceElementStructType(elemType)
+		if structErr == nil {
+			plan, err := newRowScanPlanForColumns(cols, structType, table)
+			if err != nil {
 				return err
 			}
 
-			// Grow the slice efficiently. Use SetLen if capacity is available to
-			// avoid the heap allocations associated with reflect.Append.
-			n := items.Len()
-			if n < items.Cap() {
-				items.SetLen(n + 1)
-			} else {
-				items.Set(reflect.Append(items, zeroElem))
-			}
+			scratch := plan.pool.Get().(*rowScanScratch)
+			defer plan.pool.Put(scratch)
 
-			// OPTIMIZATION: Derive element address directly from slice base pointer
-			// to avoid Index(n) and Addr() overhead.
-			ptr := unsafe.Add(unsafe.Pointer(items.Pointer()), uintptr(n)*elemSize)
+			zeroElem := reflect.Zero(elemType)
 
-			if pointerElems {
-				newStruct := reflect.New(structType)
-				reflect.NewAt(elemType, ptr).Elem().Set(newStruct)
+			// Use a local slice header to grow the result set. If rows.Scan fails,
+			// the original target slice remains unmodified (atomic-like behavior).
+			// We use an addressable local to allow for SetLen optimizations.
+			items := reflect.New(target.Type()).Elem()
+			items.Set(target.Slice(0, 0))
 
-				var targetVal reflect.Value
-				if plan.needsTargetValue {
-					targetVal = newStruct.Elem()
-				}
-				if err := scanDirectRowAddr(newStruct.UnsafePointer(), targetVal, plan, scratch); err != nil {
+			elemSize := elemType.Size()
+
+			for rows.Next() {
+				// OPTIMIZATION: Removed redundant clearing of scratch.scanned here.
+				// Generic scanned values (for non-direct columns) are overwritten by
+				// rows.Scan, and direct columns use separate scratch buffers.
+
+				if err := rows.Scan(scratch.scanTargets...); err != nil {
 					return err
 				}
-			} else {
-				var targetVal reflect.Value
-				if plan.needsTargetValue {
-					// Re-derive a reflect.Value for the element to reset it and handle non-offset columns.
-					targetVal = reflect.NewAt(elemType, ptr).Elem()
 
-					// OPTIMIZATION: Skip zeroing existing elements if the plan is a full scan.
-					// This allows us to reuse existing pointer allocations in the struct fields.
-					if !plan.isFullScan {
-						// Reset existing element to its zero state before reuse to avoid data carry-over.
-						targetVal.Set(zeroElem)
+				// Grow the slice efficiently. Use SetLen if capacity is available to
+				// avoid the heap allocations associated with reflect.Append.
+				n := items.Len()
+				if n < items.Cap() {
+					items.SetLen(n + 1)
+				} else {
+					items.Set(reflect.Append(items, zeroElem))
+				}
+
+				// OPTIMIZATION: Derive element address directly from slice base pointer
+				// to avoid Index(n) and Addr() overhead.
+				ptr := unsafe.Add(unsafe.Pointer(items.Pointer()), uintptr(n)*elemSize)
+
+				if pointerElems {
+					newStruct := reflect.New(structType)
+					reflect.NewAt(elemType, ptr).Elem().Set(newStruct)
+
+					var targetVal reflect.Value
+					if plan.needsTargetValue {
+						targetVal = newStruct.Elem()
 					}
-				} else if !plan.isFullScan {
-					// Even if we don't need a reflect.Value for assignments, we still need it to zero the struct
-					// if this isn't a full scan to avoid data carry-over from previous rows.
-					reflect.NewAt(elemType, ptr).Elem().Set(zeroElem)
-				}
+					if err := scanDirectRowAddr(newStruct.UnsafePointer(), targetVal, plan, scratch); err != nil {
+						return err
+					}
+				} else {
+					var targetVal reflect.Value
+					if plan.needsTargetValue {
+						// Re-derive a reflect.Value for the element to reset it and handle non-offset columns.
+						targetVal = reflect.NewAt(elemType, ptr).Elem()
 
-				if err := scanDirectRowAddr(ptr, targetVal, plan, scratch); err != nil {
-					return err
+						// OPTIMIZATION: Skip zeroing existing elements if the plan is a full scan.
+						// This allows us to reuse existing pointer allocations in the struct fields.
+						if !plan.isFullScan {
+							// Reset existing element to its zero state before reuse to avoid data carry-over.
+							targetVal.Set(zeroElem)
+						}
+					} else if !plan.isFullScan {
+						// Even if we don't need a reflect.Value for assignments, we still need it to zero the struct
+						// if this isn't a full scan to avoid data carry-over from previous rows.
+						reflect.NewAt(elemType, ptr).Elem().Set(zeroElem)
+					}
+
+					if err := scanDirectRowAddr(ptr, targetVal, plan, scratch); err != nil {
+						return err
+					}
 				}
 			}
+			if err := rows.Err(); err != nil {
+				return err
+			}
+			target.Set(items)
+			return nil
+		}
+
+		// Fallback: Scan single column into primitive slice
+		if len(cols) != 1 {
+			return structErr
+		}
+
+		items := reflect.New(target.Type()).Elem()
+		items.Set(target.Slice(0, 0))
+
+		for rows.Next() {
+			item := reflect.New(elemType)
+			if err := rows.Scan(item.Interface()); err != nil {
+				return err
+			}
+			items.Set(reflect.Append(items, item.Elem()))
 		}
 		if err := rows.Err(); err != nil {
 			return err
 		}
 		target.Set(items)
 		return nil
+
 	default:
+		if len(cols) == 1 {
+			if !rows.Next() {
+				if err := rows.Err(); err != nil {
+					return err
+				}
+				return sql.ErrNoRows
+			}
+			return rows.Scan(dest)
+		}
 		return fmt.Errorf("rain: destination must point to a struct or slice")
 	}
 }
@@ -1025,35 +1055,57 @@ func scanCachedRowsAgainstTable(result *cachedSelectRows, dest any, table *schem
 		return nil
 	case reflect.Slice:
 		elemType := target.Type().Elem()
-		structType, pointerElems, err := sliceElementStructType(elemType)
-		if err != nil {
-			return err
+		structType, pointerElems, structErr := sliceElementStructType(elemType)
+		if structErr == nil {
+			plan, err := newRowScanPlanForColumns(result.Columns, structType, table)
+			if err != nil {
+				return err
+			}
+
+			items := reflect.MakeSlice(target.Type(), 0, len(result.Rows))
+			for _, row := range result.Rows {
+				var item reflect.Value
+				var scanTarget reflect.Value
+				if pointerElems {
+					item = reflect.New(structType)
+					scanTarget = item.Elem()
+				} else {
+					item = reflect.New(structType).Elem()
+					scanTarget = item
+				}
+
+				if err := scanCachedRowWithPlan(row, scanTarget, plan); err != nil {
+					return err
+				}
+				items = reflect.Append(items, item)
+			}
+			target.Set(items)
+			return nil
 		}
-		plan, err := newRowScanPlanForColumns(result.Columns, structType, table)
-		if err != nil {
-			return err
+
+		// Fallback: Scan single column into primitive slice
+		if len(result.Columns) != 1 {
+			return structErr
 		}
 
 		items := reflect.MakeSlice(target.Type(), 0, len(result.Rows))
 		for _, row := range result.Rows {
-			var item reflect.Value
-			var scanTarget reflect.Value
-			if pointerElems {
-				item = reflect.New(structType)
-				scanTarget = item.Elem()
-			} else {
-				item = reflect.New(structType).Elem()
-				scanTarget = item
-			}
-
-			if err := scanCachedRowWithPlan(row, scanTarget, plan); err != nil {
+			item := reflect.New(elemType).Elem()
+			if err := assignCachedValueToField(item, row[0], nil); err != nil {
 				return err
 			}
 			items = reflect.Append(items, item)
 		}
 		target.Set(items)
 		return nil
+
 	default:
+		if len(result.Columns) == 1 {
+			if len(result.Rows) == 0 {
+				return sql.ErrNoRows
+			}
+			return assignCachedValueToField(target, result.Rows[0][0], nil)
+		}
 		return fmt.Errorf("rain: destination must point to a struct or slice")
 	}
 }

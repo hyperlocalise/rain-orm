@@ -295,6 +295,21 @@ func (q *SelectQuery) loadRelatedManyToManyRows(
 
 		batchDest := reflect.New(reflect.SliceOf(relatedElemType))
 		targetQuery := &SelectQuery{runner: q.runner, dialect: q.dialect, table: tableDefSource{table: relation.TargetTable}}
+		if len(config.Columns) > 0 {
+			targetQuery.Column(config.Columns...)
+			// Ensure target column is included for mapping.
+			found := false
+			targetColName := relation.TargetColumn.Name
+			for _, col := range config.Columns {
+				if cr, ok := col.(schema.ColumnReference); ok && cr.ColumnDef().Name == targetColName {
+					found = true
+					break
+				}
+			}
+			if !found {
+				targetQuery.Column(schema.Ref(relation.TargetColumn))
+			}
+		}
 		if config.Where != nil {
 			targetQuery.Where(config.Where)
 		}
@@ -376,6 +391,21 @@ func (q *SelectQuery) loadRelatedRows(
 		end := min(start+relationBatchSize, len(sourceKeys))
 		batchDest := reflect.New(reflect.SliceOf(relatedElemType))
 		query := &SelectQuery{runner: q.runner, dialect: q.dialect, table: tableDefSource{table: relation.TargetTable}}
+		if len(config.Columns) > 0 {
+			query.Column(config.Columns...)
+			// Ensure target column is included for mapping.
+			found := false
+			targetColName := relation.TargetColumn.Name
+			for _, col := range config.Columns {
+				if cr, ok := col.(schema.ColumnReference); ok && cr.ColumnDef().Name == targetColName {
+					found = true
+					break
+				}
+			}
+			if !found {
+				query.Column(schema.Ref(relation.TargetColumn))
+			}
+		}
 		if config.Where != nil {
 			query.Where(config.Where)
 		}
