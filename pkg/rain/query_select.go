@@ -503,7 +503,7 @@ func (q *SelectQuery) writeSQL(ctx *compileContext) error {
 
 	if len(q.where) > 0 {
 		ctx.writeString(" WHERE ")
-		if err := ctx.writePredicate(joinPredicates(q.where)); err != nil {
+		if err := ctx.writeJoinedPredicates(q.where); err != nil {
 			return err
 		}
 	}
@@ -522,7 +522,7 @@ func (q *SelectQuery) writeSQL(ctx *compileContext) error {
 
 	if len(q.having) > 0 {
 		ctx.writeString(" HAVING ")
-		if err := ctx.writePredicate(joinPredicates(q.having)); err != nil {
+		if err := ctx.writeJoinedPredicates(q.having); err != nil {
 			return err
 		}
 	}
@@ -949,7 +949,7 @@ func (q *SelectQuery) compileAggregate(selection string) (compiledQuery, error) 
 
 	if len(q.where) > 0 {
 		ctx.writeString(" WHERE ")
-		if err := ctx.writePredicate(joinPredicates(q.where)); err != nil {
+		if err := ctx.writeJoinedPredicates(q.where); err != nil {
 			return compiledQuery{}, err
 		}
 	}

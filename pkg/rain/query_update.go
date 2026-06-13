@@ -227,7 +227,7 @@ func (q *UpdateQuery) writeSQLInternal(ctx *compileContext, assignments []assign
 
 	if len(q.where) > 0 {
 		ctx.writeString(" WHERE ")
-		if err := ctx.writePredicate(joinPredicates(q.where)); err != nil {
+		if err := ctx.writeJoinedPredicates(q.where); err != nil {
 			return err
 		}
 	}

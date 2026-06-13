@@ -264,12 +264,37 @@ func TestCompileContextAndAssignmentsHelpers(t *testing.T) {
 		t.Fatalf("expected unknown column assignment error, got %v", err)
 	}
 
-	if got := joinPredicates([]schema.Predicate{users.Active.Eq(true)}); got != users.Active.Eq(true) {
-		t.Fatalf("expected single predicate to pass through")
-	}
-	if _, ok := joinPredicates([]schema.Predicate{users.Active.Eq(true), users.Email.Eq("alice@example.com")}).(schema.LogicalExpr); !ok {
-		t.Fatalf("expected multiple predicates to produce logical expression")
-	}
+	t.Run("writeJoinedPredicates", func(t *testing.T) {
+		ctx := newCompileContext(dialectForTest(t, "postgres"))
+		defer releaseCompileContext(ctx)
+
+		// Empty
+		ctx.reset(dialectForTest(t, "postgres"))
+		if err := ctx.writeJoinedPredicates(nil); err != nil {
+			t.Fatalf("empty writeJoinedPredicates failed: %v", err)
+		}
+		if ctx.String() != "" {
+			t.Fatalf("expected empty SQL for empty predicates, got %q", ctx.String())
+		}
+
+		// Single
+		ctx.reset(dialectForTest(t, "postgres"))
+		if err := ctx.writeJoinedPredicates([]schema.Predicate{users.Active.Eq(true)}); err != nil {
+			t.Fatalf("single writeJoinedPredicates failed: %v", err)
+		}
+		if ctx.String() != `"users"."active" = $1` {
+			t.Fatalf("unexpected single predicate SQL: %s", ctx.String())
+		}
+
+		// Multiple
+		ctx.reset(dialectForTest(t, "postgres"))
+		if err := ctx.writeJoinedPredicates([]schema.Predicate{users.Active.Eq(true), users.Email.Eq("alice@example.com")}); err != nil {
+			t.Fatalf("multiple writeJoinedPredicates failed: %v", err)
+		}
+		if ctx.String() != `("users"."active" = $1 AND "users"."email" = $2)` {
+			t.Fatalf("unexpected multiple predicates SQL: %s", ctx.String())
+		}
+	})
 }
 
 func TestCompiledQueryBindValidation(t *testing.T) {
