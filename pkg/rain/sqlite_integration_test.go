@@ -1171,6 +1171,32 @@ func TestSQLiteIntegrationRichRelationsAndTransactions(t *testing.T) {
 			t.Fatalf("expected Alice in Editors, got %q", editorsWithAliceOnly[0].Users[0].Email)
 		}
 
+		// Test many-to-many ordered relation
+		var editorsWithUsersDesc []sqliteRichGroupWithUsersRow
+		err = db.Select().
+			Table(fixture.groups).
+			Where(fixture.groups.Name.Eq("Editors")).
+			Relation("users", rain.RelationConfig{
+				OrderBy: []schema.OrderExpr{fixture.users.Email.Desc()},
+			}).
+			Scan(ctx, &editorsWithUsersDesc)
+		if err != nil {
+			t.Fatalf("scan many-to-many ordered failed: %v", err)
+		}
+		if len(editorsWithUsersDesc) != 1 {
+			t.Fatalf("expected 1 group, got %d", len(editorsWithUsersDesc))
+		}
+		if len(editorsWithUsersDesc[0].Users) != 2 {
+			t.Fatalf("expected 2 users in Editors, got %d", len(editorsWithUsersDesc[0].Users))
+		}
+		// bob@example.com should come before alice@example.com with DESC sort
+		if editorsWithUsersDesc[0].Users[0].Email != "bob@example.com" {
+			t.Fatalf("expected first user to be Bob, got %q", editorsWithUsersDesc[0].Users[0].Email)
+		}
+		if editorsWithUsersDesc[0].Users[1].Email != "alice@example.com" {
+			t.Fatalf("expected second user to be Alice, got %q", editorsWithUsersDesc[0].Users[1].Email)
+		}
+
 		// Admins (index 0) should have 1 user (Alice)
 		if groupsWithUsers[0].Name != "Admins" {
 			t.Fatalf("expected Admins at index 0, got %q", groupsWithUsers[0].Name)

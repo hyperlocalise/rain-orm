@@ -101,10 +101,12 @@ func buildRelationLoadTree(table *schema.TableDef, relationNames []string, relat
 					relation: relation,
 					children: make(map[string]*relationLoadNode),
 				}
-				if relationConfigs != nil {
-					node.config = relationConfigs[currentPath.String()]
-				}
 				currentLevel[part] = node
+			}
+			if relationConfigs != nil {
+				if cfg, ok := relationConfigs[currentPath.String()]; ok {
+					node.config = cfg
+				}
 			}
 			currentTable = relation.TargetTable
 			currentLevel = node.children
@@ -323,12 +325,29 @@ func (q *SelectQuery) loadRelatedManyToManyRows(
 		relatedRows = reflect.AppendSlice(relatedRows, batchDestElem)
 	}
 
-	// Step 4: Map source keys to target rows
+	// Step 4: Map source keys to target rows, preserving the order of relatedRows.
 	relatedBySourceKey := make(map[typedKey][]reflect.Value)
+
+	// Map target key to slice of source keys from allPairs.
+	sourceKeysByTargetKey := make(map[typedKey][]typedKey)
 	for _, p := range allPairs {
 		sKey := toTypedKey(p.S)
 		tKey := toTypedKey(p.T)
-		if row, ok := targetRowsMap[tKey]; ok {
+		sourceKeysByTargetKey[tKey] = append(sourceKeysByTargetKey[tKey], sKey)
+	}
+
+	for rowIdx := 0; rowIdx < relatedRows.Len(); rowIdx++ {
+		row := relatedRows.Index(rowIdx)
+		deref := dereferenceModelValue(row)
+		tVal, ok, err := relationColumnValue(deref, relation.TargetColumn.Name)
+		if err != nil {
+			return reflect.Value{}, nil, err
+		}
+		if !ok {
+			continue
+		}
+		tKey := toTypedKey(tVal)
+		for _, sKey := range sourceKeysByTargetKey[tKey] {
 			relatedBySourceKey[sKey] = append(relatedBySourceKey[sKey], row)
 		}
 	}

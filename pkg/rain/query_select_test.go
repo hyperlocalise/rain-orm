@@ -1004,45 +1004,6 @@ func TestSelectInPredicateToSQL(t *testing.T) {
 	}
 }
 
-func TestSelectFilteredRelationsToSQL(t *testing.T) {
-	t.Parallel()
-
-	db, err := rain.OpenDialect("postgres")
-	if err != nil {
-		t.Fatalf("OpenDialect returned error: %v", err)
-	}
-	users, posts := defineTables()
-
-	users.HasMany("posts", users.ID, posts.UserID)
-
-	// Test filtered and ordered relation
-	q := db.Select().
-		Table(users).
-		Relation("posts", rain.RelationConfig{
-			Where:   posts.Title.Eq("hello"),
-			OrderBy: []schema.OrderExpr{posts.ID.Desc()},
-		})
-
-	// ToSQL only compiles the base query. The relation queries are compiled during Scan.
-	// However, we want to verify that RelationConfig is stored correctly.
-	// Since there's no easy way to inspect RelationConfig from outside without exporting it or adding a helper,
-	// I'll rely on the integration test for end-to-end verification and maybe a small internal test if needed.
-	// Actually, I can't easily test the subquery generation without calling a private method or running a Scan.
-
-	sqlText, args, err := q.ToSQL()
-	if err != nil {
-		t.Fatalf("ToSQL returned error: %v", err)
-	}
-
-	wantSQL := `SELECT * FROM "users"`
-	if sqlText != wantSQL {
-		t.Fatalf("unexpected SQL:\nwant: %s\ngot:  %s", wantSQL, sqlText)
-	}
-	if len(args) != 0 {
-		t.Fatalf("unexpected args: %#v", args)
-	}
-}
-
 func TestSelectLockingToSQL(t *testing.T) {
 	t.Parallel()
 
