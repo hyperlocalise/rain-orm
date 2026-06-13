@@ -646,4 +646,3 @@ func (c *compileContext) writeColumnInternal(def *schema.ColumnDef) {
 	c.writeByte('.')
 	c.writeQuotedIdentifier(def.Name)
 }
-
