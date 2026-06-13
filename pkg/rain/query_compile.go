@@ -647,10 +647,3 @@ func (c *compileContext) writeColumnInternal(def *schema.ColumnDef) {
 	c.writeQuotedIdentifier(def.Name)
 }
 
-func joinPredicates(predicates []schema.Predicate) schema.Predicate {
-	if len(predicates) == 1 {
-		return predicates[0]
-	}
-
-	return schema.And(predicates...)
-}
