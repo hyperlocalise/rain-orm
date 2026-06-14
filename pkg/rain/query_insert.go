@@ -344,9 +344,11 @@ func (q *InsertQuery) writeModelsSQL(ctx *compileContext) error {
 	// We establish the set of columns from the first model.
 	// NOTE: We only include columns that are actually present in the model
 	// (determined by lookupModelAssignmentPlan) and not skipped by fieldValueForInsert.
-	firstModel := value.Index(0).Interface()
-	firstModelVal := reflect.ValueOf(firstModel)
+	firstModelVal := value.Index(0)
 	for firstModelVal.Kind() == reflect.Pointer {
+		if firstModelVal.IsNil() {
+			return errors.New("rain: insert model pointer cannot be nil")
+		}
 		firstModelVal = firstModelVal.Elem()
 	}
 
@@ -358,7 +360,7 @@ func (q *InsertQuery) writeModelsSQL(ctx *compileContext) error {
 	for _, f := range plan.fields {
 		fieldValue := firstModelVal.FieldByIndex(f.index)
 		if _, include := fieldValueForInsert(f.column, fieldValue, true); include {
-			activeFields = append(activeFields, activeField{column: f.column, index: f.index})
+			activeFields = append(activeFields, activeField(f))
 		}
 	}
 
@@ -381,11 +383,16 @@ func (q *InsertQuery) writeModelsSQL(ctx *compileContext) error {
 		if i > 0 {
 			ctx.writeString(", ")
 		}
-		ctx.writeByte('(')
+
 		rowVal := value.Index(i)
 		for rowVal.Kind() == reflect.Pointer {
+			if rowVal.IsNil() {
+				return fmt.Errorf("rain: insert row %d model pointer cannot be nil", i+1)
+			}
 			rowVal = rowVal.Elem()
 		}
+
+		ctx.writeByte('(')
 		rowActiveCount := 0
 		for _, f := range plan.fields {
 			fieldVal := rowVal.FieldByIndex(f.index)
@@ -404,8 +411,6 @@ func (q *InsertQuery) writeModelsSQL(ctx *compileContext) error {
 			fieldVal := rowVal.FieldByIndex(f.index)
 			resolved, include := fieldValueForInsert(f.column, fieldVal, true)
 			if !include {
-				// This should be unreachable due to rowActiveCount check above,
-				// but we check it for safety to maintain SQL shape.
 				return fmt.Errorf("rain: insert row %d is missing column %q", i+1, f.column.Name)
 			}
 			if err := ctx.writeAny(resolved); err != nil {
@@ -480,9 +485,32 @@ func (q *InsertQuery) writeMapRowsSQL(ctx *compileContext) error {
 	return nil
 }
 
+func (q *InsertQuery) assignmentsFromModelAndSet() ([]assignment, error) {
+	var (
+		modelAssignments []assignment
+		err              error
+	)
+	if q.model != nil {
+		modelAssignments, err = assignmentsFromModel(q.table, q.model, true)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	assignments, err := mergeAssignments(q.table, modelAssignments, q.values)
+	if err != nil {
+		return nil, err
+	}
+	if len(assignments) == 0 {
+		return nil, errors.New("rain: insert query produced no values")
+	}
+
+	return assignments, nil
+}
+
 func (q *InsertQuery) writeSingleRowSQL(ctx *compileContext) error {
 	// Single row might be from a model and/or explicit .Set() values.
-	// We use the existing assignmentsFromModelAndSet which is already
+	// We use assignmentsFromModelAndSet which is already
 	// relatively efficient for a single row.
 	row, err := q.assignmentsFromModelAndSet()
 	if err != nil {
@@ -644,145 +672,6 @@ func (q *InsertQuery) validateSources() error {
 	}
 	if sources > 1 {
 		return errors.New("rain: insert query requires exactly one data source: Model/Set, Models, Values, Select, or DefaultValues")
-	}
-
-	return nil
-}
-
-func (q *InsertQuery) insertAssignments() ([][]assignment, error) {
-	if err := q.validateSources(); err != nil {
-		return nil, err
-	}
-
-	var rows [][]assignment
-	if q.models != nil {
-		modelRows, err := q.assignmentsFromModels()
-		if err != nil {
-			return nil, err
-		}
-		rows = append(rows, modelRows...)
-	}
-	if len(q.rows) > 0 {
-		valueRows, err := q.assignmentsFromRows()
-		if err != nil {
-			return nil, err
-		}
-		rows = append(rows, valueRows...)
-	}
-	if q.model != nil || len(q.values) > 0 {
-		singleRow, err := q.assignmentsFromModelAndSet()
-		if err != nil {
-			return nil, err
-		}
-		rows = append(rows, singleRow)
-	}
-
-	if len(rows) == 0 {
-		return nil, errors.New("rain: insert query produced no values")
-	}
-
-	if err := validateInsertRowShape(rows); err != nil {
-		return nil, err
-	}
-
-	return rows, nil
-}
-
-func (q *InsertQuery) assignmentsFromModelAndSet() ([]assignment, error) {
-	var (
-		modelAssignments []assignment
-		err              error
-	)
-	if q.model != nil {
-		modelAssignments, err = assignmentsFromModel(q.table, q.model, true)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	assignments, err := mergeAssignments(q.table, modelAssignments, q.values)
-	if err != nil {
-		return nil, err
-	}
-	if len(assignments) == 0 {
-		return nil, errors.New("rain: insert query produced no values")
-	}
-
-	return assignments, nil
-}
-
-func (q *InsertQuery) assignmentsFromModels() ([][]assignment, error) {
-	value := reflect.ValueOf(q.models)
-	for value.Kind() == reflect.Pointer {
-		if value.IsNil() {
-			return nil, errors.New("rain: insert models cannot be nil")
-		}
-		value = value.Elem()
-	}
-	if value.Kind() != reflect.Slice && value.Kind() != reflect.Array {
-		return nil, errors.New("rain: Models expects a slice or array")
-	}
-	if value.Len() == 0 {
-		return nil, errors.New("rain: Models expects at least one model")
-	}
-
-	rows := make([][]assignment, 0, value.Len())
-	for idx := range value.Len() {
-		assignments, err := assignmentsFromModel(q.table, value.Index(idx).Interface(), true)
-		if err != nil {
-			return nil, err
-		}
-		if len(assignments) == 0 {
-			return nil, fmt.Errorf("rain: insert row %d produced no values", idx+1)
-		}
-		rows = append(rows, assignments)
-	}
-
-	return rows, nil
-}
-
-func (q *InsertQuery) assignmentsFromRows() ([][]assignment, error) {
-	rows := make([][]assignment, 0, len(q.rows))
-	for idx, row := range q.rows {
-		if len(row) == 0 {
-			return nil, fmt.Errorf("rain: insert row %d has no values", idx+1)
-		}
-
-		overrides := make([]assignment, 0, len(row))
-		for column, value := range row {
-			overrides = append(overrides, assignment{column: column, value: value})
-		}
-
-		assignments, err := mergeAssignments(q.table, nil, overrides)
-		if err != nil {
-			return nil, err
-		}
-		if len(assignments) == 0 {
-			return nil, fmt.Errorf("rain: insert row %d produced no values", idx+1)
-		}
-		rows = append(rows, assignments)
-	}
-
-	return rows, nil
-}
-
-func validateInsertRowShape(rows [][]assignment) error {
-	want := rows[0]
-	wantColumns := make([]string, 0, len(want))
-	for _, item := range want {
-		wantColumns = append(wantColumns, item.column.ColumnDef().Name)
-	}
-
-	for rowIdx := 1; rowIdx < len(rows); rowIdx++ {
-		row := rows[rowIdx]
-		if len(row) != len(want) {
-			return fmt.Errorf("rain: insert row %d targets %d columns, expected %d", rowIdx+1, len(row), len(want))
-		}
-		for colIdx := range row {
-			if row[colIdx].column.ColumnDef().Name != wantColumns[colIdx] {
-				return fmt.Errorf("rain: insert row %d column mismatch at position %d: got %q, expected %q", rowIdx+1, colIdx+1, row[colIdx].column.ColumnDef().Name, wantColumns[colIdx])
-			}
-		}
 	}
 
 	return nil
