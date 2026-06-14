@@ -295,20 +295,7 @@ func (q *SelectQuery) loadRelatedManyToManyRows(
 
 		batchDest := reflect.New(reflect.SliceOf(relatedElemType))
 		targetQuery := &SelectQuery{runner: q.runner, dialect: q.dialect, table: tableDefSource{table: relation.TargetTable}}
-		if len(config.Columns) > 0 {
-			targetQuery.Column(config.Columns...)
-			// Ensure mapping target column is selected.
-			found := false
-			for _, col := range config.Columns {
-				if cr, ok := col.(schema.ColumnReference); ok && cr.ColumnDef() == relation.TargetColumn {
-					found = true
-					break
-				}
-			}
-			if !found {
-				targetQuery.Column(schema.Ref(relation.TargetColumn))
-			}
-		}
+		ensureTargetColumnSelected(targetQuery, config.Columns, relation.TargetColumn)
 		if config.Where != nil {
 			targetQuery.Where(config.Where)
 		}
@@ -390,20 +377,7 @@ func (q *SelectQuery) loadRelatedRows(
 		end := min(start+relationBatchSize, len(sourceKeys))
 		batchDest := reflect.New(reflect.SliceOf(relatedElemType))
 		query := &SelectQuery{runner: q.runner, dialect: q.dialect, table: tableDefSource{table: relation.TargetTable}}
-		if len(config.Columns) > 0 {
-			query.Column(config.Columns...)
-			// Ensure mapping target column is selected.
-			found := false
-			for _, col := range config.Columns {
-				if cr, ok := col.(schema.ColumnReference); ok && cr.ColumnDef() == relation.TargetColumn {
-					found = true
-					break
-				}
-			}
-			if !found {
-				query.Column(schema.Ref(relation.TargetColumn))
-			}
-		}
+		ensureTargetColumnSelected(query, config.Columns, relation.TargetColumn)
 		if config.Where != nil {
 			query.Where(config.Where)
 		}
@@ -569,6 +543,26 @@ func setRelationValue(parent reflect.Value, relationName string, relationType sc
 		return nil
 	default:
 		return fmt.Errorf("rain: unsupported relation type %q", relationType)
+	}
+}
+
+func ensureTargetColumnSelected(query *SelectQuery, columns []schema.Expression, targetCol *schema.ColumnDef) {
+	if len(columns) == 0 {
+		return
+	}
+
+	query.Column(columns...)
+
+	// Ensure mapping target column is selected.
+	found := false
+	for _, col := range columns {
+		if cr, ok := col.(schema.ColumnReference); ok && cr.ColumnDef() == targetCol {
+			found = true
+			break
+		}
+	}
+	if !found {
+		query.Column(schema.Ref(targetCol))
 	}
 }
 
