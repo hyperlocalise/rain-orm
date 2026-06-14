@@ -290,38 +290,26 @@ func (q *InsertQuery) writeValuesSQL(ctx *compileContext) error {
 			ctx.writeString(" DEFAULT VALUES")
 		}
 	} else {
-		rows, err := q.insertAssignments()
-		if err != nil {
+		if err := q.validateSources(); err != nil {
 			return err
 		}
 
 		ctx.writeString("INSERT INTO ")
 		ctx.writeTableName(q.table)
-		ctx.writeString(" (")
-		for idx, item := range rows[0] {
-			if idx > 0 {
-				ctx.writeString(", ")
-			}
-			ctx.writeQuotedIdentifier(item.column.ColumnDef().Name)
-		}
-		ctx.writeString(") VALUES ")
 
-		ctx.ensureArgsCapacity(len(rows) * len(rows[0]))
-
-		for rowIdx, row := range rows {
-			if rowIdx > 0 {
-				ctx.writeString(", ")
+		if q.models != nil {
+			if err := q.writeModelsSQL(ctx); err != nil {
+				return err
 			}
-			ctx.writeByte('(')
-			for idx, item := range row {
-				if idx > 0 {
-					ctx.writeString(", ")
-				}
-				if err := ctx.writeAny(item.value); err != nil {
-					return err
-				}
+		} else if len(q.rows) > 0 {
+			if err := q.writeMapRowsSQL(ctx); err != nil {
+				return err
 			}
-			ctx.writeByte(')')
+		} else {
+			// Single model and/or explicit .Set() values.
+			if err := q.writeSingleRowSQL(ctx); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -330,6 +318,199 @@ func (q *InsertQuery) writeValuesSQL(ctx *compileContext) error {
 	}
 
 	return ctx.writeReturning(q.returning, q.returningClause())
+}
+
+func (q *InsertQuery) writeModelsSQL(ctx *compileContext) error {
+	value := reflect.ValueOf(q.models)
+	for value.Kind() == reflect.Pointer {
+		if value.IsNil() {
+			return errors.New("rain: insert models cannot be nil")
+		}
+		value = value.Elem()
+	}
+	if value.Kind() != reflect.Slice && value.Kind() != reflect.Array {
+		return errors.New("rain: Models expects a slice or array")
+	}
+	if value.Len() == 0 {
+		return errors.New("rain: Models expects at least one model")
+	}
+
+	modelType := value.Type().Elem()
+	plan, err := lookupModelAssignmentPlan(q.table, modelType)
+	if err != nil {
+		return err
+	}
+
+	// We establish the set of columns from the first model.
+	// NOTE: We only include columns that are actually present in the model
+	// (determined by lookupModelAssignmentPlan) and not skipped by fieldValueForInsert.
+	firstModel := value.Index(0).Interface()
+	firstModelVal := reflect.ValueOf(firstModel)
+	for firstModelVal.Kind() == reflect.Pointer {
+		firstModelVal = firstModelVal.Elem()
+	}
+
+	type activeField struct {
+		column *schema.ColumnDef
+		index  []int
+	}
+	activeFields := make([]activeField, 0, len(plan.fields))
+	for _, f := range plan.fields {
+		fieldValue := firstModelVal.FieldByIndex(f.index)
+		if _, include := fieldValueForInsert(f.column, fieldValue, true); include {
+			activeFields = append(activeFields, activeField{column: f.column, index: f.index})
+		}
+	}
+
+	if len(activeFields) == 0 {
+		return errors.New("rain: insert models produced no values")
+	}
+
+	ctx.writeString(" (")
+	for idx, f := range activeFields {
+		if idx > 0 {
+			ctx.writeString(", ")
+		}
+		ctx.writeQuotedIdentifier(f.column.Name)
+	}
+	ctx.writeString(") VALUES ")
+
+	ctx.ensureArgsCapacity(value.Len() * len(activeFields))
+
+	for i := 0; i < value.Len(); i++ {
+		if i > 0 {
+			ctx.writeString(", ")
+		}
+		ctx.writeByte('(')
+		rowVal := value.Index(i)
+		for rowVal.Kind() == reflect.Pointer {
+			rowVal = rowVal.Elem()
+		}
+		rowActiveCount := 0
+		for _, f := range plan.fields {
+			fieldVal := rowVal.FieldByIndex(f.index)
+			if _, include := fieldValueForInsert(f.column, fieldVal, true); include {
+				rowActiveCount++
+			}
+		}
+		if rowActiveCount != len(activeFields) {
+			return fmt.Errorf("rain: insert row %d targets %d columns, expected %d", i+1, rowActiveCount, len(activeFields))
+		}
+
+		for j, f := range activeFields {
+			if j > 0 {
+				ctx.writeString(", ")
+			}
+			fieldVal := rowVal.FieldByIndex(f.index)
+			resolved, include := fieldValueForInsert(f.column, fieldVal, true)
+			if !include {
+				// This should be unreachable due to rowActiveCount check above,
+				// but we check it for safety to maintain SQL shape.
+				return fmt.Errorf("rain: insert row %d is missing column %q", i+1, f.column.Name)
+			}
+			if err := ctx.writeAny(resolved); err != nil {
+				return err
+			}
+		}
+		ctx.writeByte(')')
+	}
+
+	return nil
+}
+
+func (q *InsertQuery) writeMapRowsSQL(ctx *compileContext) error {
+	if len(q.rows) == 0 {
+		return errors.New("rain: insert values produced no rows")
+	}
+
+	// Establish columns from the first map row.
+	firstRow := q.rows[0]
+	if len(firstRow) == 0 {
+		return errors.New("rain: insert row 1 has no values")
+	}
+
+	// We use mergeAssignments (with base=nil) to get the ordered set of columns
+	// from the first row's map.
+	overrides := make([]assignment, 0, len(firstRow))
+	for column, value := range firstRow {
+		overrides = append(overrides, assignment{column: column, value: value})
+	}
+	firstAssignments, err := mergeAssignments(q.table, nil, overrides)
+	if err != nil {
+		return err
+	}
+
+	ctx.writeString(" (")
+	for idx, item := range firstAssignments {
+		if idx > 0 {
+			ctx.writeString(", ")
+		}
+		ctx.writeQuotedIdentifier(item.column.ColumnDef().Name)
+	}
+	ctx.writeString(") VALUES ")
+
+	ctx.ensureArgsCapacity(len(q.rows) * len(firstAssignments))
+
+	for rowIdx, row := range q.rows {
+		if rowIdx > 0 {
+			ctx.writeString(", ")
+		}
+
+		if len(row) != len(firstAssignments) {
+			return fmt.Errorf("rain: insert row %d targets %d columns, expected %d", rowIdx+1, len(row), len(firstAssignments))
+		}
+
+		ctx.writeByte('(')
+		for idx, item := range firstAssignments {
+			if idx > 0 {
+				ctx.writeString(", ")
+			}
+			col := item.column
+			val, ok := row[col]
+			if !ok {
+				return fmt.Errorf("rain: insert row %d column mismatch: missing %q", rowIdx+1, col.ColumnDef().Name)
+			}
+			if err := ctx.writeAny(val); err != nil {
+				return err
+			}
+		}
+		ctx.writeByte(')')
+	}
+
+	return nil
+}
+
+func (q *InsertQuery) writeSingleRowSQL(ctx *compileContext) error {
+	// Single row might be from a model and/or explicit .Set() values.
+	// We use the existing assignmentsFromModelAndSet which is already
+	// relatively efficient for a single row.
+	row, err := q.assignmentsFromModelAndSet()
+	if err != nil {
+		return err
+	}
+
+	ctx.writeString(" (")
+	for idx, item := range row {
+		if idx > 0 {
+			ctx.writeString(", ")
+		}
+		ctx.writeQuotedIdentifier(item.column.ColumnDef().Name)
+	}
+	ctx.writeString(") VALUES (")
+
+	ctx.ensureArgsCapacity(len(row))
+
+	for idx, item := range row {
+		if idx > 0 {
+			ctx.writeString(", ")
+		}
+		if err := ctx.writeAny(item.value); err != nil {
+			return err
+		}
+	}
+	ctx.writeByte(')')
+
+	return nil
 }
 
 func (q *InsertQuery) writeSelectSQL(ctx *compileContext) error {
