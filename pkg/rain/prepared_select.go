@@ -87,6 +87,12 @@ func (q *SelectQuery) Prepare(ctx context.Context) (*PreparedSelectQuery, error)
 	return prepared, nil
 }
 
+// First executes the prepared SELECT query and scans the first row into dest.
+// Returns sql.ErrNoRows if no result is found.
+func (p *PreparedSelectQuery) First(ctx context.Context, args PreparedArgs, dest any) error {
+	return p.Scan(ctx, args, dest)
+}
+
 // Scan executes the prepared SELECT query and scans results into dest.
 func (p *PreparedSelectQuery) Scan(ctx context.Context, args PreparedArgs, dest any) error {
 	bound, err := p.selectQuery.bind(args)

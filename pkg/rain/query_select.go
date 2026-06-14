@@ -184,6 +184,7 @@ func (q *SelectQuery) WithRelations(names ...string) *SelectQuery {
 type RelationConfig struct {
 	Where   schema.Predicate
 	OrderBy []schema.OrderExpr
+	Columns []schema.Expression
 }
 
 // Relation configures filters and ordering for a named relation.
@@ -627,6 +628,12 @@ func (q *SelectQuery) writeJoins(ctx *compileContext) error {
 		}
 	}
 	return nil
+}
+
+// First executes the SELECT query with an implicit LIMIT 1 and scans the first row into dest.
+// Returns sql.ErrNoRows if no result is found.
+func (q *SelectQuery) First(ctx context.Context, dest any) error {
+	return q.clone().Limit(1).Scan(ctx, dest)
 }
 
 // Scan executes the SELECT query and scans results into dest.
