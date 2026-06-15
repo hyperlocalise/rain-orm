@@ -127,9 +127,9 @@ func TestSelectFirst(t *testing.T) {
 	users, _ := defineTables()
 
 	// First uses a clone with LIMIT 1, verify SQL rendering
-	sqlText, _, err := db.Select().Table(users).Column(users.ID, users.Email).Where(users.ID.Eq(int64(1))).FirstToSQL()
+	sqlText, _, err := db.Select().Table(users).Column(users.ID, users.Email).Where(users.ID.Eq(int64(1))).Limit(1).ToSQL()
 	if err != nil {
-		t.Fatalf("FirstToSQL returned error: %v", err)
+		t.Fatalf("ToSQL returned error: %v", err)
 	}
 
 	wantSQL := `SELECT "users"."id", "users"."email" FROM "users" WHERE "users"."id" = $1 LIMIT 1`
