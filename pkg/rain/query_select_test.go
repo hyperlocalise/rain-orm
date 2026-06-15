@@ -126,11 +126,6 @@ func TestSelectFirst(t *testing.T) {
 	}
 	users, _ := defineTables()
 
-	type User struct {
-		ID    int64  `db:"id"`
-		Email string `db:"email"`
-	}
-
 	// First uses a clone with LIMIT 1, verify SQL rendering
 	sqlText, _, err := db.Select().Table(users).Column(users.ID, users.Email).Where(users.ID.Eq(int64(1))).FirstToSQL()
 	if err != nil {
@@ -142,7 +137,6 @@ func TestSelectFirst(t *testing.T) {
 		t.Fatalf("unexpected SQL:\nwant: %s\ngot:  %s", wantSQL, sqlText)
 	}
 }
-
 
 func TestSelectJoinsToSQL(t *testing.T) {
 	t.Parallel()

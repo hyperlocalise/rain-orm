@@ -1932,7 +1932,6 @@ func TestSQLiteIntegrationSelectiveRelationColumns(t *testing.T) {
 			OrderBy: []schema.OrderExpr{fixture.posts.ID.Asc()},
 		}).
 		Scan(ctx, &results)
-
 	if err != nil {
 		t.Fatalf("scan with selective relation columns failed: %v", err)
 	}
@@ -1969,7 +1968,6 @@ func TestSQLiteIntegrationFirst(t *testing.T) {
 		Table(fixture.users).
 		OrderBy(fixture.users.ID.Asc()).
 		First(ctx, &user)
-
 	if err != nil {
 		t.Fatalf("First failed: %v", err)
 	}
