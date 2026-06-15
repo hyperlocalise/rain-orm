@@ -1901,3 +1901,91 @@ func TestSQLiteIntegrationUpsertFilters(t *testing.T) {
 		t.Fatalf("expected Name to be Custom Updated, got %q", row.Name)
 	}
 }
+
+func TestSQLiteIntegrationSelectiveRelationColumns(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db := openSQLiteTestDB(t)
+	fixture := defineSQLiteRichTables()
+	createSQLiteRichSchema(t, ctx, db, fixture)
+	seeded := seedSQLiteRichFixture(t, ctx, db, fixture)
+
+	type postSubset struct {
+		ID     int64  `db:"id"`
+		Title  string `db:"title"`
+		UserID int64  `db:"user_id"`
+	}
+
+	type userWithPostSubset struct {
+		ID    int64        `db:"id"`
+		Email string       `db:"email"`
+		Posts []postSubset `rain:"relation:posts"`
+	}
+
+	var results []userWithPostSubset
+	err := db.Select().
+		Table(fixture.users).
+		Where(fixture.users.ID.Eq(seeded.AliceID)).
+		Relation("posts", rain.RelationConfig{
+			Columns: []schema.Expression{fixture.posts.ID, fixture.posts.Title},
+			OrderBy: []schema.OrderExpr{fixture.posts.ID.Asc()},
+		}).
+		Scan(ctx, &results)
+
+	if err != nil {
+		t.Fatalf("scan with selective relation columns failed: %v", err)
+	}
+
+	if len(results) != 1 {
+		t.Fatalf("expected 1 user, got %d", len(results))
+	}
+
+	alice := results[0]
+	if len(alice.Posts) != 2 {
+		t.Fatalf("expected 2 posts for Alice, got %d", len(alice.Posts))
+	}
+
+	// Verify that the selective columns were loaded.
+	// Since we're using a subset struct, only those fields are present.
+	// The mapping relies on UserID, which we didn't explicitly request in RelationConfig.Columns,
+	// but the ORM should have included it automatically.
+	if alice.Posts[0].Title == "" {
+		t.Fatalf("expected post title to be populated")
+	}
+}
+
+func TestSQLiteIntegrationFirst(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db := openSQLiteTestDB(t)
+	fixture := defineSQLiteRichTables()
+	createSQLiteRichSchema(t, ctx, db, fixture)
+	_ = seedSQLiteRichFixture(t, ctx, db, fixture)
+
+	var user sqliteRichAuthorRow
+	err := db.Select().
+		Table(fixture.users).
+		OrderBy(fixture.users.ID.Asc()).
+		First(ctx, &user)
+
+	if err != nil {
+		t.Fatalf("First failed: %v", err)
+	}
+
+	if user.Email != "alice@example.com" {
+		t.Fatalf("expected alice@example.com, got %q", user.Email)
+	}
+
+	// Test ErrNoRows
+	var none sqliteRichAuthorRow
+	err = db.Select().
+		Table(fixture.users).
+		Where(fixture.users.ID.Eq(int64(99999))).
+		First(ctx, &none)
+
+	if !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("expected sql.ErrNoRows, got %v", err)
+	}
+}

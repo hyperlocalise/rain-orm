@@ -117,6 +117,33 @@ func TestSelectErgonomicsToSQL(t *testing.T) {
 	}
 }
 
+func TestSelectFirst(t *testing.T) {
+	t.Parallel()
+
+	db, err := rain.OpenDialect("postgres")
+	if err != nil {
+		t.Fatalf("OpenDialect returned error: %v", err)
+	}
+	users, _ := defineTables()
+
+	type User struct {
+		ID    int64  `db:"id"`
+		Email string `db:"email"`
+	}
+
+	// First uses a clone with LIMIT 1, verify SQL rendering
+	sqlText, _, err := db.Select().Table(users).Column(users.ID, users.Email).Where(users.ID.Eq(int64(1))).FirstToSQL()
+	if err != nil {
+		t.Fatalf("FirstToSQL returned error: %v", err)
+	}
+
+	wantSQL := `SELECT "users"."id", "users"."email" FROM "users" WHERE "users"."id" = $1 LIMIT 1`
+	if sqlText != wantSQL {
+		t.Fatalf("unexpected SQL:\nwant: %s\ngot:  %s", wantSQL, sqlText)
+	}
+}
+
+
 func TestSelectJoinsToSQL(t *testing.T) {
 	t.Parallel()
 

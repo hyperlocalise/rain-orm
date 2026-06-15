@@ -295,6 +295,10 @@ func (q *SelectQuery) loadRelatedManyToManyRows(
 
 		batchDest := reflect.New(reflect.SliceOf(relatedElemType))
 		targetQuery := &SelectQuery{runner: q.runner, dialect: q.dialect, table: tableDefSource{table: relation.TargetTable}}
+		if len(config.Columns) > 0 {
+			targetQuery.Column(config.Columns...)
+			ensureTargetColumnSelected(targetQuery, relation.TargetColumn)
+		}
 		if config.Where != nil {
 			targetQuery.Where(config.Where)
 		}
@@ -376,6 +380,10 @@ func (q *SelectQuery) loadRelatedRows(
 		end := min(start+relationBatchSize, len(sourceKeys))
 		batchDest := reflect.New(reflect.SliceOf(relatedElemType))
 		query := &SelectQuery{runner: q.runner, dialect: q.dialect, table: tableDefSource{table: relation.TargetTable}}
+		if len(config.Columns) > 0 {
+			query.Column(config.Columns...)
+			ensureTargetColumnSelected(query, relation.TargetColumn)
+		}
 		if config.Where != nil {
 			query.Where(config.Where)
 		}
@@ -542,6 +550,20 @@ func setRelationValue(parent reflect.Value, relationName string, relationType sc
 	default:
 		return fmt.Errorf("rain: unsupported relation type %q", relationType)
 	}
+}
+
+func ensureTargetColumnSelected(q *SelectQuery, targetColumn *schema.ColumnDef) {
+	if len(q.cols) == 0 {
+		return
+	}
+
+	for _, col := range q.cols {
+		if ref, ok := col.(schema.ColumnReference); ok && ref.ColumnDef().Name == targetColumn.Name && ref.ColumnDef().Table.Name == targetColumn.Table.Name {
+			return
+		}
+	}
+
+	q.Column(schema.Ref(targetColumn))
 }
 
 func dereferenceModelValue(value reflect.Value) reflect.Value {
