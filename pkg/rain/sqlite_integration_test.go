@@ -1901,3 +1901,46 @@ func TestSQLiteIntegrationUpsertFilters(t *testing.T) {
 		t.Fatalf("expected Name to be Custom Updated, got %q", row.Name)
 	}
 }
+
+func TestSQLiteIntegrationFirst(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db := openSQLiteTestDB(t)
+	users, _, _ := defineSQLiteTables()
+	createSQLiteSchema(t, ctx, db)
+
+	// Seed data
+	if _, err := db.Insert().Table(users).Values(
+		map[schema.ColumnReference]any{users.ID: 1, users.Email: "alice@example.com", users.Name: "Alice", users.Active: true},
+		map[schema.ColumnReference]any{users.ID: 2, users.Email: "bob@example.com", users.Name: "Bob", users.Active: true},
+	).Exec(ctx); err != nil {
+		t.Fatalf("seed data failed: %v", err)
+	}
+
+	t.Run("ScanFirst", func(t *testing.T) {
+		var row sqliteUserRow
+		if err := db.Select().
+			Table(users).
+			OrderBy(users.Email.Desc()).
+			First(ctx, &row); err != nil {
+			t.Fatalf("First failed: %v", err)
+		}
+
+		if row.Email != "bob@example.com" {
+			t.Fatalf("expected bob@example.com, got %q", row.Email)
+		}
+	})
+
+	t.Run("ErrNoRows", func(t *testing.T) {
+		var row sqliteUserRow
+		err := db.Select().
+			Table(users).
+			Where(users.Email.Eq("missing@example.com")).
+			First(ctx, &row)
+
+		if !errors.Is(err, sql.ErrNoRows) {
+			t.Fatalf("expected sql.ErrNoRows, got %v", err)
+		}
+	})
+}

@@ -431,6 +431,11 @@ func (q *SelectQuery) ToSQL() (string, []any, error) {
 	return compiled.sql, args, nil
 }
 
+// FirstToSQL compiles the query with an implicit LIMIT 1 into SQL and args.
+func (q *SelectQuery) FirstToSQL() (string, []any, error) {
+	return q.clone().Limit(1).ToSQL()
+}
+
 func (q *SelectQuery) writeSQL(ctx *compileContext) error {
 	if err := writeCTEs(ctx, q.ctes, "select"); err != nil {
 		return err
@@ -604,6 +609,12 @@ func (q *SelectQuery) writeCompoundOperandSQL(ctx *compileContext) error {
 		ctx.writeByte(')')
 	}
 	return nil
+}
+
+// First executes the SELECT query with an implicit LIMIT 1 and scans the result into dest.
+// Returns sql.ErrNoRows if the result set is empty.
+func (q *SelectQuery) First(ctx context.Context, dest any) error {
+	return q.clone().Limit(1).Scan(ctx, dest)
 }
 
 func (q *SelectQuery) writeJoins(ctx *compileContext) error {
