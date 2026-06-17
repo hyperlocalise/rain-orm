@@ -37,12 +37,11 @@ func (q *SelectQuery) scanRowsWithRelations(ctx context.Context, rows *sql.Rows,
 		return fmt.Errorf("rain: destination must point to a struct or slice")
 	}
 
-	tableSource, ok := q.table.(tableDefSource)
-	if !ok {
+	if q.table == nil {
 		return fmt.Errorf("rain: relation loading requires a concrete table source")
 	}
 
-	relationTree, err := buildRelationLoadTree(tableSource.table, q.relationNames, q.relationConfigs)
+	relationTree, err := buildRelationLoadTree(q.table, q.relationNames, q.relationConfigs)
 	if err != nil {
 		return err
 	}
@@ -54,7 +53,7 @@ func (q *SelectQuery) scanRowsWithRelations(ctx context.Context, rows *sql.Rows,
 		containerPtr = slicePtr.Interface()
 	}
 
-	if err := scanRowsAgainstTable(rows, containerPtr, tableSource.table); err != nil {
+	if err := scanRowsAgainstTable(rows, containerPtr, q.table); err != nil {
 		return err
 	}
 
@@ -257,7 +256,7 @@ func (q *SelectQuery) loadRelatedManyToManyRows(
 		batchKeys := sourceKeys[start:end]
 
 		var batchPairs []pair
-		joinQuery := &SelectQuery{runner: q.runner, dialect: q.dialect, table: tableDefSource{table: relation.JoinTable}}
+		joinQuery := &SelectQuery{runner: q.runner, dialect: q.dialect, table: relation.JoinTable}
 		if err := joinQuery.
 			Column(schema.Ref(relation.JoinSourceColumn).As("s"), schema.Ref(relation.JoinTargetColumn).As("t")).
 			Where(schema.Ref(relation.JoinSourceColumn).In(batchKeys...)).
@@ -294,7 +293,7 @@ func (q *SelectQuery) loadRelatedManyToManyRows(
 		batchKeys := uniqueTargetKeys[start:end]
 
 		batchDest := reflect.New(reflect.SliceOf(relatedElemType))
-		targetQuery := &SelectQuery{runner: q.runner, dialect: q.dialect, table: tableDefSource{table: relation.TargetTable}}
+		targetQuery := &SelectQuery{runner: q.runner, dialect: q.dialect, table: relation.TargetTable}
 		if config.Where != nil {
 			targetQuery.Where(config.Where)
 		}
@@ -375,7 +374,7 @@ func (q *SelectQuery) loadRelatedRows(
 	for start := 0; start < len(sourceKeys); start += relationBatchSize {
 		end := min(start+relationBatchSize, len(sourceKeys))
 		batchDest := reflect.New(reflect.SliceOf(relatedElemType))
-		query := &SelectQuery{runner: q.runner, dialect: q.dialect, table: tableDefSource{table: relation.TargetTable}}
+		query := &SelectQuery{runner: q.runner, dialect: q.dialect, table: relation.TargetTable}
 		if config.Where != nil {
 			query.Where(config.Where)
 		}
