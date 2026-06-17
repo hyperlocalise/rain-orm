@@ -1943,4 +1943,15 @@ func TestSQLiteIntegrationFirst(t *testing.T) {
 			t.Fatalf("expected sql.ErrNoRows, got %v", err)
 		}
 	})
+
+	t.Run("RejectSlice", func(t *testing.T) {
+		var rows []sqliteUserRow
+		err := db.Select().
+			Table(users).
+			First(ctx, &rows)
+
+		if err == nil || !strings.Contains(err.Error(), "First destination must be a non-nil pointer to a struct") {
+			t.Fatalf("expected error rejecting slice, got %v", err)
+		}
+	})
 }
