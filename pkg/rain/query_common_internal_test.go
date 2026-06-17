@@ -19,17 +19,10 @@ func TestQueryCommonHelpers(t *testing.T) {
 
 	users, _ := defineInternalQueryTables()
 
-	if got := tableDefFromSelectSource(tableDefSource{table: users.TableDef()}); got != users.TableDef() {
-		t.Fatalf("expected tableDefFromSelectSource to return the table, got %#v", got)
-	}
-	if got := tableDefFromSelectSource(subqueryTableSource{}); got != nil {
-		t.Fatalf("expected non-table select source to return nil, got %#v", got)
-	}
-
 	t.Run("SubqueryAliasValidation", func(t *testing.T) {
 		ctx := newCompileContext(dialectForTest(t, "postgres"))
 		defer releaseCompileContext(ctx)
-		if err := (subqueryTableSource{alias: "   ", query: &SelectQuery{dialect: ctx.dialect, table: tableDefSource{table: users.TableDef()}}}).writeSQL(ctx); err == nil || !strings.Contains(err.Error(), "non-empty alias") {
+		if err := (subqueryTableSource{alias: "   ", query: &SelectQuery{dialect: ctx.dialect, table: users.TableDef()}}).writeSQL(ctx); err == nil || !strings.Contains(err.Error(), "non-empty alias") {
 			t.Fatalf("expected empty alias error, got %v", err)
 		}
 	})
@@ -49,7 +42,7 @@ func TestQueryCommonHelpers(t *testing.T) {
 			alias: "u",
 			query: &SelectQuery{
 				dialect: ctx.dialect,
-				table:   tableDefSource{table: users.TableDef()},
+				table:   users.TableDef(),
 				cols:    []schema.Expression{users.ID},
 			},
 		}).writeSQL(ctx)

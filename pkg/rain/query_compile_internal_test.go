@@ -24,14 +24,14 @@ func TestQueryBuilderAndHelperErrors(t *testing.T) {
 	if _, _, err := db.Select().ToSQL(); err == nil || !strings.Contains(err.Error(), "requires a table") {
 		t.Fatalf("expected select table error, got %v", err)
 	}
-	selectNoRunner := &SelectQuery{dialect: db.Dialect(), table: tableDefSource{table: users.TableDef()}}
+	selectNoRunner := &SelectQuery{dialect: db.Dialect(), table: users.TableDef()}
 	if err := selectNoRunner.Scan(context.Background(), &internalUserRow{}); !errors.Is(err, ErrNoConnection) {
 		t.Fatalf("expected select scan ErrNoConnection, got %v", err)
 	}
 	if _, err := selectNoRunner.Prepare(context.Background()); !errors.Is(err, ErrNoConnection) {
 		t.Fatalf("expected select prepare ErrNoConnection, got %v", err)
 	}
-	selectUnsupportedPrepare := &SelectQuery{runner: &countingRunner{}, dialect: db.Dialect(), table: tableDefSource{table: users.TableDef()}}
+	selectUnsupportedPrepare := &SelectQuery{runner: &countingRunner{}, dialect: db.Dialect(), table: users.TableDef()}
 	if _, err := selectUnsupportedPrepare.Prepare(context.Background()); !errors.Is(err, ErrPrepareNotSupported) {
 		t.Fatalf("expected select prepare ErrPrepareNotSupported, got %v", err)
 	}
@@ -303,7 +303,7 @@ func TestCompiledQueryBindValidation(t *testing.T) {
 	users, _ := defineInternalQueryTables()
 	compiled, err := (&SelectQuery{
 		dialect: dialectForTest(t, "postgres"),
-		table:   tableDefSource{table: users.TableDef()},
+		table:   users.TableDef(),
 		where: []schema.Predicate{
 			schema.And(
 				users.Email.EqExpr(schema.Placeholder("email")),
@@ -468,7 +468,7 @@ func TestNewOperatorsSQL(t *testing.T) {
 			name: "Exists",
 			expr: schema.Exists(&SelectQuery{
 				dialect: d,
-				table:   tableDefSource{table: users.TableDef()},
+				table:   users.TableDef(),
 				where:   []schema.Predicate{users.ID.Eq(1)},
 			}),
 			wantSQL:  `EXISTS (SELECT * FROM "users" WHERE "users"."id" = $1)`,
@@ -478,7 +478,7 @@ func TestNewOperatorsSQL(t *testing.T) {
 			name: "NotExists",
 			expr: schema.NotExists(&SelectQuery{
 				dialect: d,
-				table:   tableDefSource{table: users.TableDef()},
+				table:   users.TableDef(),
 				where:   []schema.Predicate{users.ID.Eq(1)},
 			}),
 			wantSQL:  `NOT EXISTS (SELECT * FROM "users" WHERE "users"."id" = $1)`,
@@ -515,10 +515,10 @@ func TestCompoundQueryInternals(t *testing.T) {
 	t.Run("cacheOptions preserved in non-flattening wrapSetOp", func(t *testing.T) {
 		q1 := &SelectQuery{
 			dialect:      d,
-			table:        tableDefSource{table: users.TableDef()},
+			table:        users.TableDef(),
 			cacheOptions: &queryCacheOptions{ttl: 5 * time.Minute},
 		}
-		q2 := &SelectQuery{dialect: d, table: tableDefSource{table: users.TableDef()}}
+		q2 := &SelectQuery{dialect: d, table: users.TableDef()}
 		union := q1.Union(q2)
 		if union.cacheOptions == nil || union.cacheOptions.ttl != 5*time.Minute {
 			t.Fatalf("expected cacheOptions to propagate, got %#v", union.cacheOptions)
@@ -526,9 +526,9 @@ func TestCompoundQueryInternals(t *testing.T) {
 	})
 
 	t.Run("cacheOptions preserved in flattening wrapSetOp", func(t *testing.T) {
-		q1 := &SelectQuery{dialect: d, table: tableDefSource{table: users.TableDef()}}
-		q2 := &SelectQuery{dialect: d, table: tableDefSource{table: users.TableDef()}}
-		q3 := &SelectQuery{dialect: d, table: tableDefSource{table: users.TableDef()}}
+		q1 := &SelectQuery{dialect: d, table: users.TableDef()}
+		q2 := &SelectQuery{dialect: d, table: users.TableDef()}
+		q3 := &SelectQuery{dialect: d, table: users.TableDef()}
 		base := q1.Union(q2)
 		base.cacheOptions = &queryCacheOptions{ttl: 5 * time.Minute}
 		union := base.Union(q3)
@@ -540,12 +540,12 @@ func TestCompoundQueryInternals(t *testing.T) {
 	t.Run("compileExists on compound query", func(t *testing.T) {
 		q1 := &SelectQuery{
 			dialect: d,
-			table:   tableDefSource{table: users.TableDef()},
+			table:   users.TableDef(),
 			where:   []schema.Predicate{users.ID.Eq(1)},
 		}
 		q2 := &SelectQuery{
 			dialect: d,
-			table:   tableDefSource{table: users.TableDef()},
+			table:   users.TableDef(),
 			where:   []schema.Predicate{users.ID.Eq(2)},
 		}
 		union := q1.Union(q2)
@@ -560,7 +560,7 @@ func TestCompoundQueryInternals(t *testing.T) {
 	})
 
 	t.Run("isBareCompound", func(t *testing.T) {
-		op := &SelectQuery{dialect: d, table: tableDefSource{table: users.TableDef()}}
+		op := &SelectQuery{dialect: d, table: users.TableDef()}
 		bare := &SelectQuery{dialect: d, firstOperand: op}
 		if !bare.isBareCompound() {
 			t.Fatalf("expected bare compound")

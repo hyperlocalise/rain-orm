@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 
 	"github.com/hyperlocalise/rain-orm/pkg/dialect"
 	"github.com/hyperlocalise/rain-orm/pkg/schema"
@@ -17,7 +18,9 @@ type SelectQuery struct {
 	runner          queryRunner
 	dialect         dialect.Dialect
 	cache           QueryCache
-	table           selectTableSource
+	table           *schema.TableDef
+	tableSubquery   *SelectQuery
+	tableAlias      string
 	cols            []schema.Expression
 	where           []schema.Predicate
 	joins           []joinClause
@@ -29,8 +32,10 @@ type SelectQuery struct {
 	setOps          []setOperation
 	distinct        bool
 	distinctOn      []schema.Expression
-	limit           *int
-	offset          *int
+	limit           int
+	hasLimit        bool
+	offset          int
+	hasOffset       bool
 	relationNames   []string
 	relationConfigs map[string]RelationConfig
 	cacheOptions    *queryCacheOptions
@@ -39,7 +44,9 @@ type SelectQuery struct {
 
 // Table sets the table source for the query.
 func (q *SelectQuery) Table(table schema.TableReference) *SelectQuery {
-	q.table = tableDefSource{table: table.TableDef()}
+	q.table = table.TableDef()
+	q.tableSubquery = nil
+	q.tableAlias = ""
 	return q
 }
 
@@ -50,7 +57,9 @@ func (q *SelectQuery) From(table schema.TableReference) *SelectQuery {
 
 // TableSubquery sets a subquery source for the query's FROM clause.
 func (q *SelectQuery) TableSubquery(query *SelectQuery, alias string) *SelectQuery {
-	q.table = subqueryTableSource{query: query, alias: alias}
+	q.tableSubquery = query
+	q.tableAlias = alias
+	q.table = nil
 	return q
 }
 
@@ -165,13 +174,15 @@ func (q *SelectQuery) OrderBy(order ...schema.OrderExpr) *SelectQuery {
 
 // Limit sets the LIMIT clause.
 func (q *SelectQuery) Limit(limit int) *SelectQuery {
-	q.limit = &limit
+	q.limit = limit
+	q.hasLimit = true
 	return q
 }
 
 // Offset sets the OFFSET clause.
 func (q *SelectQuery) Offset(offset int) *SelectQuery {
-	q.offset = &offset
+	q.offset = offset
+	q.hasOffset = true
 	return q
 }
 
@@ -310,6 +321,9 @@ func (q *SelectQuery) CloneForTable(table *schema.TableDef) any {
 
 func (q *SelectQuery) clone() *SelectQuery {
 	newQ := *q
+	if q.tableSubquery != nil {
+		newQ.tableSubquery = q.tableSubquery.clone()
+	}
 	newQ.cols = append([]schema.Expression(nil), q.cols...)
 	newQ.where = append([]schema.Predicate(nil), q.where...)
 	newQ.joins = append([]joinClause(nil), q.joins...)
@@ -325,14 +339,6 @@ func (q *SelectQuery) clone() *SelectQuery {
 		for k, v := range q.relationConfigs {
 			newQ.relationConfigs[k] = v
 		}
-	}
-	if q.limit != nil {
-		l := *q.limit
-		newQ.limit = &l
-	}
-	if q.offset != nil {
-		o := *q.offset
-		newQ.offset = &o
 	}
 	if q.locking != nil {
 		copyLocking := *q.locking
@@ -385,8 +391,9 @@ func (q *SelectQuery) withSQLiteInsertSelectConflictWhereChanged() (*SelectQuery
 
 func (q *SelectQuery) isBareCompound() bool {
 	return q.firstOperand != nil &&
-		len(q.order) == 0 && q.limit == nil && q.offset == nil &&
-		!q.distinct && len(q.distinctOn) == 0 && len(q.cols) == 0 && q.table == nil &&
+		len(q.order) == 0 && !q.hasLimit && !q.hasOffset &&
+		!q.distinct && len(q.distinctOn) == 0 && len(q.cols) == 0 &&
+		q.table == nil && q.tableSubquery == nil &&
 		len(q.where) == 0 && len(q.joins) == 0 &&
 		len(q.groupBy) == 0 && len(q.having) == 0 &&
 		len(q.relationNames) == 0 && len(q.ctes) == 0 &&
@@ -469,13 +476,16 @@ func (q *SelectQuery) writeSQL(ctx *compileContext) error {
 				return err
 			}
 		}
-		if err := writeOrderLimit(ctx, q.order, q.limit, q.offset, dialect.FeatureUnlimited, dialect.FeatureUnlimited); err != nil {
+		if err := writeOrderLimit(ctx, q.order, q.limit, q.hasLimit, q.offset, q.hasOffset, dialect.FeatureUnlimited, dialect.FeatureUnlimited); err != nil {
 			return err
 		}
 		return q.writeLocking(ctx)
 	}
 
-	if q.table == nil {
+	if q.table == nil && q.tableSubquery == nil {
+		if q.tableAlias != "" {
+			return errors.New("rain: subquery table source requires a non-nil query")
+		}
 		return errors.New("rain: select query requires a table")
 	}
 
@@ -511,7 +521,7 @@ func (q *SelectQuery) writeSQL(ctx *compileContext) error {
 	}
 
 	ctx.writeString(" FROM ")
-	if err := q.table.writeSQL(ctx); err != nil {
+	if err := q.writeTableSourceSQL(ctx); err != nil {
 		return err
 	}
 
@@ -545,7 +555,7 @@ func (q *SelectQuery) writeSQL(ctx *compileContext) error {
 		}
 	}
 
-	if err := writeOrderLimit(ctx, q.order, q.limit, q.offset, dialect.FeatureUnlimited, dialect.FeatureUnlimited); err != nil {
+	if err := writeOrderLimit(ctx, q.order, q.limit, q.hasLimit, q.offset, q.hasOffset, dialect.FeatureUnlimited, dialect.FeatureUnlimited); err != nil {
 		return err
 	}
 
@@ -605,7 +615,7 @@ func (q *SelectQuery) writeCompoundOperandSQL(ctx *compileContext) error {
 	}
 	// Use parentheses if the operand has its own ORDER BY, LIMIT, locking, or is itself a compound query.
 	// Flattening is handled during builder chaining in wrapSetOp.
-	useParens := len(q.order) > 0 || q.limit != nil || q.offset != nil || q.locking != nil || q.firstOperand != nil
+	useParens := len(q.order) > 0 || q.hasLimit || q.hasOffset || q.locking != nil || q.firstOperand != nil
 	if useParens {
 		ctx.writeByte('(')
 	}
@@ -837,7 +847,7 @@ func (q *SelectQuery) scanValidationTable() *schema.TableDef {
 	if len(q.joins) > 0 {
 		return nil
 	}
-	return tableDefFromSelectSource(q.table)
+	return q.table
 }
 
 func (q *SelectQuery) writeCachedSelectResult(ctx context.Context, key string, options *queryCacheOptions, value *cachedSelectRows) error {
@@ -886,7 +896,10 @@ func (q *SelectQuery) toAggregateSQL(selection string) (string, []any, error) {
 }
 
 func (q *SelectQuery) compile() (compiledQuery, error) {
-	if q.table == nil && q.firstOperand == nil {
+	if q.table == nil && q.tableSubquery == nil && q.firstOperand == nil {
+		if q.tableAlias != "" {
+			return compiledQuery{}, errors.New("rain: subquery table source requires a non-nil query")
+		}
 		return compiledQuery{}, errors.New("rain: select query requires a table")
 	}
 
@@ -904,7 +917,7 @@ func (q *SelectQuery) compile() (compiledQuery, error) {
 		if len(q.cols) > 0 {
 			return compiledQuery{}, errors.New("rain: compound queries do not support Column()")
 		}
-		if q.table != nil {
+		if q.table != nil || q.tableSubquery != nil {
 			return compiledQuery{}, errors.New("rain: compound queries do not support Table() (already has operands)")
 		}
 		if len(q.where) > 0 {
@@ -939,7 +952,10 @@ func (q *SelectQuery) compileAggregate(selection string) (compiledQuery, error) 
 	if q.firstOperand != nil {
 		return compiledQuery{}, errors.New("rain: aggregate helpers do not support compound queries (UNION, etc.); use TableSubquery as a workaround")
 	}
-	if q.table == nil {
+	if q.table == nil && q.tableSubquery == nil {
+		if q.tableAlias != "" {
+			return compiledQuery{}, errors.New("rain: subquery table source requires a non-nil query")
+		}
 		return compiledQuery{}, errors.New("rain: select query requires a table")
 	}
 	if len(q.ctes) > 0 {
@@ -957,7 +973,7 @@ func (q *SelectQuery) compileAggregate(selection string) (compiledQuery, error) 
 	ctx.writeString("SELECT ")
 	ctx.writeString(selection)
 	ctx.writeString(" FROM ")
-	if err := q.table.writeSQL(ctx); err != nil {
+	if err := q.writeTableSourceSQL(ctx); err != nil {
 		return compiledQuery{}, err
 	}
 
@@ -984,6 +1000,26 @@ func (q *SelectQuery) compileExists() (compiledQuery, error) {
 		return compiledQuery{}, err
 	}
 	return wrapExistsCompiled(compiled)
+}
+
+func (q *SelectQuery) writeTableSourceSQL(ctx *compileContext) error {
+	if q.table != nil {
+		ctx.writeTable(q.table)
+		return nil
+	}
+	if strings.TrimSpace(q.tableAlias) == "" {
+		return errors.New("rain: subquery table source requires a non-empty alias")
+	}
+	if q.tableSubquery == nil {
+		return errors.New("rain: subquery table source requires a non-nil query")
+	}
+	ctx.writeByte('(')
+	if err := q.tableSubquery.writeSQL(ctx); err != nil {
+		return err
+	}
+	ctx.writeString(") AS ")
+	ctx.writeQuotedIdentifier(q.tableAlias)
+	return nil
 }
 
 func wrapExistsCompiled(compiled compiledQuery) (compiledQuery, error) {

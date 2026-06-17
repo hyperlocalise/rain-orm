@@ -45,13 +45,6 @@ type tableDefSource struct {
 	table *schema.TableDef
 }
 
-func tableDefFromSelectSource(source selectTableSource) *schema.TableDef {
-	if table, ok := source.(tableDefSource); ok {
-		return table.table
-	}
-	return nil
-}
-
 func (s tableDefSource) writeSQL(ctx *compileContext) error {
 	ctx.writeTable(s.table)
 	return nil
@@ -121,7 +114,7 @@ func writeCTEs(ctx *compileContext, ctes []cteDefinition, label string) error {
 	return nil
 }
 
-func writeOrderLimit(ctx *compileContext, order []schema.OrderExpr, limit *int, offset *int, featureOrder, featureLimit dialect.Feature) error {
+func writeOrderLimit(ctx *compileContext, order []schema.OrderExpr, limit int, hasLimit bool, offset int, hasOffset bool, featureOrder, featureLimit dialect.Feature) error {
 	if len(order) > 0 {
 		if featureOrder != dialect.FeatureUnlimited && !dialect.HasFeature(ctx.dialect.Features(), featureOrder) {
 			return fmt.Errorf("rain: ORDER BY is not supported for this query type in %s dialect", ctx.dialect.Name())
@@ -146,20 +139,20 @@ func writeOrderLimit(ctx *compileContext, order []schema.OrderExpr, limit *int, 
 		}
 	}
 
-	if limit != nil || (offset != nil && *offset > 0) {
+	if hasLimit || hasOffset {
 		if featureLimit != dialect.FeatureUnlimited && !dialect.HasFeature(ctx.dialect.Features(), featureLimit) {
 			return fmt.Errorf("rain: LIMIT/OFFSET is not supported for this query type in %s dialect", ctx.dialect.Name())
 		}
 		l := -1
-		if limit != nil {
-			l = *limit
+		if hasLimit {
+			l = limit
 			if l < 0 {
 				return errors.New("rain: LIMIT must be non-negative")
 			}
 		}
 		o := 0
-		if offset != nil {
-			o = *offset
+		if hasOffset {
+			o = offset
 			if o < 0 {
 				return errors.New("rain: OFFSET must be non-negative")
 			}

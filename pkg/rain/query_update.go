@@ -21,7 +21,10 @@ type UpdateQuery struct {
 	where     []schema.Predicate
 	from      []selectTableSource
 	order     []schema.OrderExpr
-	limit     *int
+	limit     int
+	hasLimit  bool
+	offset    int
+	hasOffset bool
 	ctes      []cteDefinition
 	returning []schema.Expression
 	unbounded bool
@@ -96,7 +99,8 @@ func (q *UpdateQuery) OrderBy(order ...schema.OrderExpr) *UpdateQuery {
 // Limit sets the LIMIT clause.
 // Supported by MySQL and SQLite.
 func (q *UpdateQuery) Limit(limit int) *UpdateQuery {
-	q.limit = &limit
+	q.limit = limit
+	q.hasLimit = true
 	return q
 }
 
@@ -211,7 +215,7 @@ func (q *UpdateQuery) writeSQLInternal(ctx *compileContext, assignments []assign
 		if !dialect.HasFeature(ctx.dialect.Features(), dialect.FeatureUpdateFrom) {
 			return fmt.Errorf("rain: UPDATE ... FROM is not supported by %s dialect", ctx.dialect.Name())
 		}
-		if ctx.dialect.Name() == "sqlite" && (len(q.order) > 0 || q.limit != nil) {
+		if ctx.dialect.Name() == "sqlite" && (len(q.order) > 0 || q.hasLimit) {
 			return errors.New("rain: SQLite does not support combining UPDATE ... FROM with ORDER BY or LIMIT")
 		}
 		ctx.writeString(" FROM ")
@@ -232,7 +236,7 @@ func (q *UpdateQuery) writeSQLInternal(ctx *compileContext, assignments []assign
 		}
 	}
 
-	if err := writeOrderLimit(ctx, q.order, q.limit, nil, dialect.FeatureUpdateOrder, dialect.FeatureUpdateLimit); err != nil {
+	if err := writeOrderLimit(ctx, q.order, q.limit, q.hasLimit, q.offset, q.hasOffset, dialect.FeatureUpdateOrder, dialect.FeatureUpdateLimit); err != nil {
 		return err
 	}
 

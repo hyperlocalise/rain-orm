@@ -18,7 +18,10 @@ type DeleteQuery struct {
 	where     []schema.Predicate
 	using     []selectTableSource
 	order     []schema.OrderExpr
-	limit     *int
+	limit     int
+	hasLimit  bool
+	offset    int
+	hasOffset bool
 	ctes      []cteDefinition
 	returning []schema.Expression
 	unbounded bool
@@ -73,7 +76,8 @@ func (q *DeleteQuery) OrderBy(order ...schema.OrderExpr) *DeleteQuery {
 // Limit sets the LIMIT clause.
 // Supported by MySQL and SQLite.
 func (q *DeleteQuery) Limit(limit int) *DeleteQuery {
-	q.limit = &limit
+	q.limit = limit
+	q.hasLimit = true
 	return q
 }
 
@@ -175,7 +179,7 @@ func (q *DeleteQuery) writeSQL(ctx *compileContext) error {
 		}
 	}
 
-	if err := writeOrderLimit(ctx, q.order, q.limit, nil, dialect.FeatureDeleteOrder, dialect.FeatureDeleteLimit); err != nil {
+	if err := writeOrderLimit(ctx, q.order, q.limit, q.hasLimit, q.offset, q.hasOffset, dialect.FeatureDeleteOrder, dialect.FeatureDeleteLimit); err != nil {
 		return err
 	}
 
