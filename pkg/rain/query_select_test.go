@@ -43,6 +43,33 @@ func TestSelectToSQL(t *testing.T) {
 	}
 }
 
+func TestSelectFirstToSQL(t *testing.T) {
+	t.Parallel()
+
+	db, err := rain.OpenDialect("postgres")
+	if err != nil {
+		t.Fatalf("OpenDialect returned error: %v", err)
+	}
+	users, _ := defineTables()
+
+	sqlText, args, err := db.Select().
+		Table(users).
+		Where(users.Active.Eq(true)).
+		OrderBy(users.ID.Asc()).
+		FirstToSQL()
+	if err != nil {
+		t.Fatalf("FirstToSQL returned error: %v", err)
+	}
+
+	wantSQL := `SELECT * FROM "users" WHERE "users"."active" = $1 ORDER BY "users"."id" ASC LIMIT 1`
+	if sqlText != wantSQL {
+		t.Fatalf("unexpected SQL:\nwant: %s\ngot:  %s", wantSQL, sqlText)
+	}
+	if len(args) != 1 || args[0] != true {
+		t.Fatalf("unexpected args: %#v", args)
+	}
+}
+
 func TestSelectErgonomicsToSQL(t *testing.T) {
 	t.Parallel()
 

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"reflect"
 
 	"github.com/hyperlocalise/rain-orm/pkg/dialect"
 	"github.com/hyperlocalise/rain-orm/pkg/schema"
@@ -429,6 +430,23 @@ func (q *SelectQuery) ToSQL() (string, []any, error) {
 		return "", nil, err
 	}
 	return compiled.sql, args, nil
+}
+
+// FirstToSQL compiles the query with an implicit LIMIT 1 into SQL and args.
+func (q *SelectQuery) FirstToSQL() (string, []any, error) {
+	return q.clone().Limit(1).ToSQL()
+}
+
+// First executes the SELECT query with an implicit LIMIT 1 and scans the result into dest.
+// Returns sql.ErrNoRows if the result set is empty.
+// Destination must be a pointer to a struct.
+func (q *SelectQuery) First(ctx context.Context, dest any) error {
+	v := reflect.ValueOf(dest)
+	if v.Kind() != reflect.Pointer || v.IsNil() || v.Elem().Kind() != reflect.Struct {
+		return errors.New("rain: First destination must be a non-nil pointer to a struct")
+	}
+
+	return q.clone().Limit(1).Scan(ctx, dest)
 }
 
 func (q *SelectQuery) writeSQL(ctx *compileContext) error {
