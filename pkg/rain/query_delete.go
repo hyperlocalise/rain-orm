@@ -20,6 +20,8 @@ type DeleteQuery struct {
 	order     []schema.OrderExpr
 	limit     int
 	hasLimit  bool
+	offset    int
+	hasOffset bool
 	ctes      []cteDefinition
 	returning []schema.Expression
 	unbounded bool
@@ -177,7 +179,7 @@ func (q *DeleteQuery) writeSQL(ctx *compileContext) error {
 		}
 	}
 
-	if err := writeOrderLimit(ctx, q.order, q.limit, q.hasLimit, 0, dialect.FeatureDeleteOrder, dialect.FeatureDeleteLimit); err != nil {
+	if err := writeOrderLimit(ctx, q.order, q.limit, q.hasLimit, q.offset, q.hasOffset, dialect.FeatureDeleteOrder, dialect.FeatureDeleteLimit); err != nil {
 		return err
 	}
 

@@ -23,6 +23,8 @@ type UpdateQuery struct {
 	order     []schema.OrderExpr
 	limit     int
 	hasLimit  bool
+	offset    int
+	hasOffset bool
 	ctes      []cteDefinition
 	returning []schema.Expression
 	unbounded bool
@@ -234,7 +236,7 @@ func (q *UpdateQuery) writeSQLInternal(ctx *compileContext, assignments []assign
 		}
 	}
 
-	if err := writeOrderLimit(ctx, q.order, q.limit, q.hasLimit, 0, dialect.FeatureUpdateOrder, dialect.FeatureUpdateLimit); err != nil {
+	if err := writeOrderLimit(ctx, q.order, q.limit, q.hasLimit, q.offset, q.hasOffset, dialect.FeatureUpdateOrder, dialect.FeatureUpdateLimit); err != nil {
 		return err
 	}
 

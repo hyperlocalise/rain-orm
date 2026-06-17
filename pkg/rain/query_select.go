@@ -35,6 +35,7 @@ type SelectQuery struct {
 	limit           int
 	hasLimit        bool
 	offset          int
+	hasOffset       bool
 	relationNames   []string
 	relationConfigs map[string]RelationConfig
 	cacheOptions    *queryCacheOptions
@@ -181,6 +182,7 @@ func (q *SelectQuery) Limit(limit int) *SelectQuery {
 // Offset sets the OFFSET clause.
 func (q *SelectQuery) Offset(offset int) *SelectQuery {
 	q.offset = offset
+	q.hasOffset = true
 	return q
 }
 
@@ -389,7 +391,7 @@ func (q *SelectQuery) withSQLiteInsertSelectConflictWhereChanged() (*SelectQuery
 
 func (q *SelectQuery) isBareCompound() bool {
 	return q.firstOperand != nil &&
-		len(q.order) == 0 && !q.hasLimit && q.offset == 0 &&
+		len(q.order) == 0 && !q.hasLimit && !q.hasOffset &&
 		!q.distinct && len(q.distinctOn) == 0 && len(q.cols) == 0 &&
 		q.table == nil && q.tableSubquery == nil &&
 		len(q.where) == 0 && len(q.joins) == 0 &&
@@ -474,7 +476,7 @@ func (q *SelectQuery) writeSQL(ctx *compileContext) error {
 				return err
 			}
 		}
-		if err := writeOrderLimit(ctx, q.order, q.limit, q.hasLimit, q.offset, dialect.FeatureUnlimited, dialect.FeatureUnlimited); err != nil {
+		if err := writeOrderLimit(ctx, q.order, q.limit, q.hasLimit, q.offset, q.hasOffset, dialect.FeatureUnlimited, dialect.FeatureUnlimited); err != nil {
 			return err
 		}
 		return q.writeLocking(ctx)
@@ -519,18 +521,8 @@ func (q *SelectQuery) writeSQL(ctx *compileContext) error {
 	}
 
 	ctx.writeString(" FROM ")
-	if q.table != nil {
-		ctx.writeTable(q.table)
-	} else {
-		if strings.TrimSpace(q.tableAlias) == "" {
-			return errors.New("rain: subquery table source requires a non-empty alias")
-		}
-		ctx.writeByte('(')
-		if err := q.tableSubquery.writeSQL(ctx); err != nil {
-			return err
-		}
-		ctx.writeString(") AS ")
-		ctx.writeQuotedIdentifier(q.tableAlias)
+	if err := q.writeTableSourceSQL(ctx); err != nil {
+		return err
 	}
 
 	if err := q.writeJoins(ctx); err != nil {
@@ -563,7 +555,7 @@ func (q *SelectQuery) writeSQL(ctx *compileContext) error {
 		}
 	}
 
-	if err := writeOrderLimit(ctx, q.order, q.limit, q.hasLimit, q.offset, dialect.FeatureUnlimited, dialect.FeatureUnlimited); err != nil {
+	if err := writeOrderLimit(ctx, q.order, q.limit, q.hasLimit, q.offset, q.hasOffset, dialect.FeatureUnlimited, dialect.FeatureUnlimited); err != nil {
 		return err
 	}
 
@@ -623,7 +615,7 @@ func (q *SelectQuery) writeCompoundOperandSQL(ctx *compileContext) error {
 	}
 	// Use parentheses if the operand has its own ORDER BY, LIMIT, locking, or is itself a compound query.
 	// Flattening is handled during builder chaining in wrapSetOp.
-	useParens := len(q.order) > 0 || q.hasLimit || q.offset > 0 || q.locking != nil || q.firstOperand != nil
+	useParens := len(q.order) > 0 || q.hasLimit || q.hasOffset || q.locking != nil || q.firstOperand != nil
 	if useParens {
 		ctx.writeByte('(')
 	}
@@ -981,18 +973,8 @@ func (q *SelectQuery) compileAggregate(selection string) (compiledQuery, error) 
 	ctx.writeString("SELECT ")
 	ctx.writeString(selection)
 	ctx.writeString(" FROM ")
-	if q.table != nil {
-		ctx.writeTable(q.table)
-	} else {
-		if strings.TrimSpace(q.tableAlias) == "" {
-			return compiledQuery{}, errors.New("rain: subquery table source requires a non-empty alias")
-		}
-		ctx.writeByte('(')
-		if err := q.tableSubquery.writeSQL(ctx); err != nil {
-			return compiledQuery{}, err
-		}
-		ctx.writeString(") AS ")
-		ctx.writeQuotedIdentifier(q.tableAlias)
+	if err := q.writeTableSourceSQL(ctx); err != nil {
+		return compiledQuery{}, err
 	}
 
 	if err := q.writeJoins(ctx); err != nil {
@@ -1018,6 +1000,26 @@ func (q *SelectQuery) compileExists() (compiledQuery, error) {
 		return compiledQuery{}, err
 	}
 	return wrapExistsCompiled(compiled)
+}
+
+func (q *SelectQuery) writeTableSourceSQL(ctx *compileContext) error {
+	if q.table != nil {
+		ctx.writeTable(q.table)
+		return nil
+	}
+	if strings.TrimSpace(q.tableAlias) == "" {
+		return errors.New("rain: subquery table source requires a non-empty alias")
+	}
+	if q.tableSubquery == nil {
+		return errors.New("rain: subquery table source requires a non-nil query")
+	}
+	ctx.writeByte('(')
+	if err := q.tableSubquery.writeSQL(ctx); err != nil {
+		return err
+	}
+	ctx.writeString(") AS ")
+	ctx.writeQuotedIdentifier(q.tableAlias)
+	return nil
 }
 
 func wrapExistsCompiled(compiled compiledQuery) (compiledQuery, error) {

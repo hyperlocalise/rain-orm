@@ -114,7 +114,7 @@ func writeCTEs(ctx *compileContext, ctes []cteDefinition, label string) error {
 	return nil
 }
 
-func writeOrderLimit(ctx *compileContext, order []schema.OrderExpr, limit int, hasLimit bool, offset int, featureOrder, featureLimit dialect.Feature) error {
+func writeOrderLimit(ctx *compileContext, order []schema.OrderExpr, limit int, hasLimit bool, offset int, hasOffset bool, featureOrder, featureLimit dialect.Feature) error {
 	if len(order) > 0 {
 		if featureOrder != dialect.FeatureUnlimited && !dialect.HasFeature(ctx.dialect.Features(), featureOrder) {
 			return fmt.Errorf("rain: ORDER BY is not supported for this query type in %s dialect", ctx.dialect.Name())
@@ -139,7 +139,7 @@ func writeOrderLimit(ctx *compileContext, order []schema.OrderExpr, limit int, h
 		}
 	}
 
-	if hasLimit || offset > 0 {
+	if hasLimit || hasOffset {
 		if featureLimit != dialect.FeatureUnlimited && !dialect.HasFeature(ctx.dialect.Features(), featureLimit) {
 			return fmt.Errorf("rain: LIMIT/OFFSET is not supported for this query type in %s dialect", ctx.dialect.Name())
 		}
@@ -150,10 +150,14 @@ func writeOrderLimit(ctx *compileContext, order []schema.OrderExpr, limit int, h
 				return errors.New("rain: LIMIT must be non-negative")
 			}
 		}
-		if offset < 0 {
-			return errors.New("rain: OFFSET must be non-negative")
+		o := 0
+		if hasOffset {
+			o = offset
+			if o < 0 {
+				return errors.New("rain: OFFSET must be non-negative")
+			}
 		}
-		if clause := ctx.dialect.LimitOffset(l, offset); clause != "" {
+		if clause := ctx.dialect.LimitOffset(l, o); clause != "" {
 			ctx.writeByte(' ')
 			ctx.writeString(clause)
 		}
