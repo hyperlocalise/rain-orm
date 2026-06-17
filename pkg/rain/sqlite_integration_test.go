@@ -1931,6 +1931,59 @@ func TestSQLiteIntegrationFirst(t *testing.T) {
 			t.Fatalf("expected bob@example.com, got %q", row.Email)
 		}
 	})
+}
+
+func TestSQLiteIntegrationArithmeticAndConcat(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db := openSQLiteTestDB(t)
+	users, _, _ := defineSQLiteTables()
+	createSQLiteSchema(t, ctx, db)
+
+	// Seed data
+	if _, err := db.Insert().Table(users).Values(
+		map[schema.ColumnReference]any{users.ID: 1, users.Email: "alice@example.com", users.Name: "Alice", users.Active: true},
+	).Exec(ctx); err != nil {
+		t.Fatalf("seed data failed: %v", err)
+	}
+
+	t.Run("Arithmetic", func(t *testing.T) {
+		var results []struct {
+			Val int64 `db:"val"`
+		}
+		if err := db.Select(users.ID.Add(int64(10)).As("val")).From(users).Scan(ctx, &results); err != nil {
+			t.Fatalf("Add failed: %v", err)
+		}
+		if len(results) == 0 || results[0].Val != 11 {
+			t.Fatalf("expected 11, got %+v", results)
+		}
+
+		results = nil
+		if err := db.Select(users.ID.Add(int64(10)).Mul(int64(2)).As("val")).From(users).Scan(ctx, &results); err != nil {
+			t.Fatalf("Nested arithmetic failed: %v", err)
+		}
+		if len(results) == 0 || results[0].Val != 22 {
+			t.Fatalf("expected 22, got %+v", results)
+		}
+	})
+
+	t.Run("Concat", func(t *testing.T) {
+		var results []struct {
+			Val string `db:"val"`
+		}
+		if err := db.Select(schema.Concat(users.Name, " (", users.Email, ")").As("val")).From(users).Scan(ctx, &results); err != nil {
+			t.Fatalf("Concat failed: %v", err)
+		}
+		if len(results) == 0 {
+			t.Fatalf("no results for concat")
+		}
+		result := results[0].Val
+		expected := "Alice (alice@example.com)"
+		if result != expected {
+			t.Fatalf("expected %q, got %q", expected, result)
+		}
+	})
 
 	t.Run("ErrNoRows", func(t *testing.T) {
 		var row sqliteUserRow

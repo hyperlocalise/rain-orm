@@ -379,6 +379,48 @@ func (c *compileContext) writeExpressionInContext(expr schema.Expression, contex
 		if err := c.writeExpression(value.Right); err != nil {
 			return err
 		}
+	case schema.BinaryExpr:
+		c.writeByte('(')
+		if err := c.writeExpression(value.Left); err != nil {
+			return err
+		}
+		c.writeByte(' ')
+		c.writeString(value.Operator)
+		c.writeByte(' ')
+		if err := c.writeExpression(value.Right); err != nil {
+			return err
+		}
+		c.writeByte(')')
+	case schema.ConcatExpr:
+		if len(value.Exprs) < 2 {
+			return errors.New("rain: CONCAT requires at least two expressions")
+		}
+		switch c.dialect.Name() {
+		case "postgres", "sqlite":
+			c.writeByte('(')
+			for idx, expr := range value.Exprs {
+				if idx > 0 {
+					c.writeString(" || ")
+				}
+				if err := c.writeExpression(expr); err != nil {
+					return err
+				}
+			}
+			c.writeByte(')')
+		case "mysql":
+			c.writeString("CONCAT(")
+			for idx, expr := range value.Exprs {
+				if idx > 0 {
+					c.writeString(", ")
+				}
+				if err := c.writeExpression(expr); err != nil {
+					return err
+				}
+			}
+			c.writeByte(')')
+		default:
+			return fmt.Errorf("rain: CONCAT is not implemented for %s dialect", c.dialect.Name())
+		}
 	case schema.InExpr:
 		if len(value.Values) == 0 {
 			return errors.New("rain: IN predicate requires at least one value")
