@@ -370,6 +370,12 @@ func (c *compileContext) writeExpressionInContext(expr schema.Expression, contex
 		c.args = append(c.args, nil)
 		c.writeString(c.dialect.Placeholder(index))
 	case schema.ComparisonExpr:
+		switch value.Operator {
+		case "=", "<>", ">", ">=", "<", "<=", "LIKE", "NOT LIKE", "ILIKE", "NOT ILIKE":
+			// ok
+		default:
+			return fmt.Errorf("rain: invalid comparison operator %q", value.Operator)
+		}
 		if err := c.writeExpression(value.Left); err != nil {
 			return err
 		}
@@ -380,6 +386,12 @@ func (c *compileContext) writeExpressionInContext(expr schema.Expression, contex
 			return err
 		}
 	case schema.BinaryExpr:
+		switch value.Operator {
+		case "+", "-", "*", "/", "%":
+			// ok
+		default:
+			return fmt.Errorf("rain: invalid binary operator %q", value.Operator)
+		}
 		c.writeByte('(')
 		if err := c.writeExpression(value.Left); err != nil {
 			return err
