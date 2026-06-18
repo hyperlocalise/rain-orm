@@ -173,13 +173,13 @@ func (q *SelectQuery) loadRelationNode(ctx context.Context, parents reflect.Valu
 
 	if node.relation.Type == schema.RelationTypeManyToMany {
 		var err error
-		relatedRows, relatedBySourceKey, err = q.loadRelatedManyToManyRows(ctx, parents, node.relation, node.config, orderedSourceKeys)
+		relatedRows, relatedBySourceKey, err = q.loadRelatedManyToManyRows(ctx, parents, node.relation, node.config, orderedSourceKeys, node)
 		if err != nil {
 			return err
 		}
 	} else {
 		var err error
-		relatedRows, err = q.loadRelatedRows(ctx, parents, node.relation, node.config, orderedSourceKeys)
+		relatedRows, err = q.loadRelatedRows(ctx, parents, node.relation, node.config, orderedSourceKeys, node)
 		if err != nil {
 			return err
 		}
@@ -234,6 +234,7 @@ func (q *SelectQuery) loadRelatedManyToManyRows(
 	relation schema.RelationDef,
 	config RelationConfig,
 	sourceKeys []any,
+	node *relationLoadNode,
 ) (reflect.Value, map[typedKey][]reflect.Value, error) {
 	parentStructType, err := sliceParentStructType(parents.Type())
 	if err != nil {
@@ -297,6 +298,9 @@ func (q *SelectQuery) loadRelatedManyToManyRows(
 		if len(config.Columns) > 0 {
 			targetQuery.Column(config.Columns...)
 			ensureTargetColumnSelected(targetQuery, relation.TargetColumn)
+			for _, child := range node.children {
+				ensureTargetColumnSelected(targetQuery, child.relation.SourceColumn)
+			}
 		}
 		if config.Where != nil {
 			targetQuery.Where(config.Where)
@@ -364,6 +368,7 @@ func (q *SelectQuery) loadRelatedRows(
 	relation schema.RelationDef,
 	config RelationConfig,
 	sourceKeys []any,
+	node *relationLoadNode,
 ) (reflect.Value, error) {
 	parentStructType, err := sliceParentStructType(parents.Type())
 	if err != nil {
@@ -382,6 +387,9 @@ func (q *SelectQuery) loadRelatedRows(
 		if len(config.Columns) > 0 {
 			query.Column(config.Columns...)
 			ensureTargetColumnSelected(query, relation.TargetColumn)
+			for _, child := range node.children {
+				ensureTargetColumnSelected(query, child.relation.SourceColumn)
+			}
 		}
 		if config.Where != nil {
 			query.Where(config.Where)
