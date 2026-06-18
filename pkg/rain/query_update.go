@@ -159,23 +159,15 @@ func (q *UpdateQuery) compile() (compiledQuery, error) {
 		return compiledQuery{}, fmt.Errorf("rain: cannot update view %q", q.table.Name)
 	}
 
-	assignments, err := q.updateAssignments()
-	if err != nil {
+	ctx := newCompileContext(q.dialect)
+	defer releaseCompileContext(ctx)
+
+	if err := q.writeSQL(ctx); err != nil {
 		return compiledQuery{}, err
-	}
-	if len(assignments) == 0 {
-		return compiledQuery{}, errors.New("rain: update query requires at least one assignment")
 	}
 
 	if len(q.where) == 0 && !q.unbounded {
 		return compiledQuery{}, errors.New("rain: update query requires at least one WHERE predicate; call Unbounded() to allow all rows")
-	}
-
-	ctx := newCompileContext(q.dialect)
-	defer releaseCompileContext(ctx)
-
-	if err := q.writeSQLInternal(ctx, assignments); err != nil {
-		return compiledQuery{}, err
 	}
 
 	return ctx.compiledQuery(), ctx.err
@@ -190,6 +182,10 @@ func (q *UpdateQuery) writeSQL(ctx *compileContext) error {
 }
 
 func (q *UpdateQuery) writeSQLInternal(ctx *compileContext, assignments []assignment) error {
+	if len(assignments) == 0 {
+		return errors.New("rain: update query requires at least one assignment")
+	}
+
 	if err := writeCTEs(ctx, q.ctes, "update"); err != nil {
 		return err
 	}
