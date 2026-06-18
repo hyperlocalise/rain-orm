@@ -3,6 +3,7 @@ package rain_test
 import (
 	"context"
 	"database/sql"
+	"strings"
 	"testing"
 
 	"github.com/hyperlocalise/rain-orm/pkg/rain"
@@ -23,13 +24,12 @@ func TestDBTransactionOptions(t *testing.T) {
 		}
 		defer func() { _ = tx.Rollback() }()
 
-		// Verify it's a real transaction
+		// Verify it's a real transaction by attempting an operation.
+		// SQLite with modernc.org driver might not strictly enforce ReadOnly via sql.TxOptions,
+		// but we verify that the transaction is functional.
 		_, err = tx.Insert().Table(users).Set(users.Email, "txopts@example.com").Exec(ctx)
-		// SQLite might not strictly enforce ReadOnly via sql.TxOptions depending on the driver implementation,
-		// but we want to verify the call path works.
-		if err != nil && !testing.Short() {
-			// If it's really read-only, this might fail, which is also fine.
-			t.Logf("Insert in read-only tx failed (expected if enforced): %v", err)
+		if err != nil && !strings.Contains(err.Error(), "read-only") {
+			t.Fatalf("Insert in BeginTx failed: %v", err)
 		}
 	})
 

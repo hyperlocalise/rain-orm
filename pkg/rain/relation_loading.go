@@ -593,6 +593,18 @@ func ensureTargetColumnSelected(q *SelectQuery, targetCol *schema.ColumnDef) {
 				return
 			}
 		}
+
+		// Also check for aliased expressions or raw SQL that might already provide the column name.
+		var name string
+		switch v := colExpr.(type) {
+		case schema.AliasExpr:
+			name = v.Alias
+		case schema.RawExpr:
+			name = v.SQL
+		}
+		if name == targetCol.Name || name == "\""+targetCol.Name+"\"" {
+			return
+		}
 	}
 
 	q.Column(schema.Ref(targetCol))
