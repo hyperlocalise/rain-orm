@@ -294,6 +294,10 @@ func (q *SelectQuery) loadRelatedManyToManyRows(
 
 		batchDest := reflect.New(reflect.SliceOf(relatedElemType))
 		targetQuery := &SelectQuery{runner: q.runner, dialect: q.dialect, table: relation.TargetTable}
+		if len(config.Columns) > 0 {
+			targetQuery.Column(config.Columns...)
+			ensureTargetColumnSelected(targetQuery, relation.TargetColumn)
+		}
 		if config.Where != nil {
 			targetQuery.Where(config.Where)
 		}
@@ -375,6 +379,10 @@ func (q *SelectQuery) loadRelatedRows(
 		end := min(start+relationBatchSize, len(sourceKeys))
 		batchDest := reflect.New(reflect.SliceOf(relatedElemType))
 		query := &SelectQuery{runner: q.runner, dialect: q.dialect, table: relation.TargetTable}
+		if len(config.Columns) > 0 {
+			query.Column(config.Columns...)
+			ensureTargetColumnSelected(query, relation.TargetColumn)
+		}
 		if config.Where != nil {
 			query.Where(config.Where)
 		}
@@ -572,4 +580,20 @@ func normalizeTypedKeyValue(value any) any {
 	// Fallback for uncommon non-comparable key types. Primary/foreign key values are
 	// expected to be comparable primitives or []byte in normal ORM usage.
 	return strconv.Quote(fmt.Sprintf("%#v", value))
+}
+
+func ensureTargetColumnSelected(q *SelectQuery, targetCol *schema.ColumnDef) {
+	if len(q.cols) == 0 {
+		return
+	}
+
+	for _, colExpr := range q.cols {
+		if colRef, ok := colExpr.(schema.ColumnReference); ok {
+			if colRef.ColumnDef() == targetCol {
+				return
+			}
+		}
+	}
+
+	q.Column(schema.Ref(targetCol))
 }

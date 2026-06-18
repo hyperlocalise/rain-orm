@@ -2042,3 +2042,79 @@ func TestSQLiteIntegrationArithmeticAndConcat(t *testing.T) {
 		}
 	})
 }
+
+func TestSQLiteIntegrationRelationConfigColumns(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db := openSQLiteTestDB(t)
+	fixture := defineSQLiteRichTables()
+	createSQLiteRichSchema(t, ctx, db, fixture)
+	seeded := seedSQLiteRichFixture(t, ctx, db, fixture)
+
+	t.Run("SelectiveColumns", func(t *testing.T) {
+		var usersWithPosts []sqliteRichUserWithPostsRow
+		err := db.Select().
+			Table(fixture.users).
+			Where(fixture.users.ID.Eq(seeded.AliceID)).
+			Relation("posts", rain.RelationConfig{
+				Columns: []schema.Expression{fixture.posts.Title},
+			}).
+			Scan(ctx, &usersWithPosts)
+		if err != nil {
+			t.Fatalf("scan with relation columns failed: %v", err)
+		}
+
+		if len(usersWithPosts) != 1 {
+			t.Fatalf("expected 1 user, got %d", len(usersWithPosts))
+		}
+		if len(usersWithPosts[0].Posts) != 2 {
+			t.Fatalf("expected 2 posts for Alice, got %d", len(usersWithPosts[0].Posts))
+		}
+		for _, post := range usersWithPosts[0].Posts {
+			if post.Title == "" {
+				t.Fatalf("expected title to be populated")
+			}
+			// Published should be false (zero value) because it wasn't selected
+			if post.Published {
+				t.Fatalf("expected published to be zero value because it was not selected, got %v", post.Published)
+			}
+		}
+	})
+
+	t.Run("NestedSelectiveColumns", func(t *testing.T) {
+		var usersWithPosts []sqliteRichUserWithPostsRow
+		err := db.Select().
+			Table(fixture.users).
+			Where(fixture.users.ID.Eq(seeded.AliceID)).
+			Relation("posts", rain.RelationConfig{
+				Columns: []schema.Expression{fixture.posts.Title, fixture.posts.UserID},
+			}).
+			Relation("posts.author", rain.RelationConfig{
+				Columns: []schema.Expression{fixture.users.Email},
+			}).
+			Scan(ctx, &usersWithPosts)
+		if err != nil {
+			t.Fatalf("scan with nested relation columns failed: %v", err)
+		}
+
+		if len(usersWithPosts) != 1 {
+			t.Fatalf("expected 1 user")
+		}
+		if len(usersWithPosts[0].Posts) == 0 {
+			t.Fatalf("expected posts to be loaded")
+		}
+		for _, post := range usersWithPosts[0].Posts {
+			if post.Author.Email == "" {
+				t.Fatalf("expected nested author email to be populated")
+			}
+			if post.Author.Name != "" {
+				t.Fatalf("expected nested author name to be zero value, got %q", post.Author.Name)
+			}
+			// Author.ID should be populated because ensureTargetColumnSelected added it
+			if post.Author.ID == 0 {
+				t.Fatalf("expected nested author ID to be populated for mapping")
+			}
+		}
+	})
+}
