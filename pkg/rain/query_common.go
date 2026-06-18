@@ -22,8 +22,10 @@ type preparingQueryRunner interface {
 }
 
 type joinClause struct {
-	kind  string
-	table selectTableSource
+	kind string
+	// OPTIMIZATION: table is a concrete struct instead of an interface to avoid
+	// interface boxing allocations during query construction and join operations.
+	table tableSource
 	on    schema.Predicate
 }
 
@@ -37,33 +39,28 @@ type returningClause struct {
 	label   string
 }
 
-type selectTableSource interface {
-	writeSQL(*compileContext) error
+// tableSource represents a source for a query (either a table or a subquery).
+// OPTIMIZATION: This is a concrete struct instead of an interface to avoid
+// interface boxing allocations when used in slices (e.g., joins, FROM, USING).
+type tableSource struct {
+	table    *schema.TableDef
+	subquery *SelectQuery
+	alias    string
 }
 
-type tableDefSource struct {
-	table *schema.TableDef
-}
-
-func (s tableDefSource) writeSQL(ctx *compileContext) error {
-	ctx.writeTable(s.table)
-	return nil
-}
-
-type subqueryTableSource struct {
-	query *SelectQuery
-	alias string
-}
-
-func (s subqueryTableSource) writeSQL(ctx *compileContext) error {
+func (s tableSource) writeSQL(ctx *compileContext) error {
+	if s.table != nil {
+		ctx.writeTable(s.table)
+		return nil
+	}
 	if strings.TrimSpace(s.alias) == "" {
 		return errors.New("rain: subquery table source requires a non-empty alias")
 	}
-	if s.query == nil {
+	if s.subquery == nil {
 		return fmt.Errorf("rain: subquery table source %q requires a non-nil query", s.alias)
 	}
 	ctx.writeByte('(')
-	if err := s.query.writeSQL(ctx); err != nil {
+	if err := s.subquery.writeSQL(ctx); err != nil {
 		return err
 	}
 	ctx.writeString(") AS ")
