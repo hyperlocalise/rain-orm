@@ -609,6 +609,31 @@ func (c *AnyColumn) InSubquery(subquery Expression) InExpr {
 	return InExpr{Left: c, Values: []Expression{subquery}}
 }
 
+// Add adds a value or expression to this column.
+func (c *AnyColumn) Add(value any) BinaryExpr {
+	return BinaryExpr{Left: c, Operator: "+", Right: wrapValue(value)}
+}
+
+// Sub subtracts a value or expression from this column.
+func (c *AnyColumn) Sub(value any) BinaryExpr {
+	return BinaryExpr{Left: c, Operator: "-", Right: wrapValue(value)}
+}
+
+// Mul multiplies this column by a value or expression.
+func (c *AnyColumn) Mul(value any) BinaryExpr {
+	return BinaryExpr{Left: c, Operator: "*", Right: wrapValue(value)}
+}
+
+// Div divides this column by a value or expression.
+func (c *AnyColumn) Div(value any) BinaryExpr {
+	return BinaryExpr{Left: c, Operator: "/", Right: wrapValue(value)}
+}
+
+// Mod calculates the remainder of this column divided by a value or expression.
+func (c *AnyColumn) Mod(value any) BinaryExpr {
+	return BinaryExpr{Left: c, Operator: "%", Right: wrapValue(value)}
+}
+
 // NotInSubquery compares this column to the result of a subquery.
 func (c *AnyColumn) NotInSubquery(subquery Expression) InExpr {
 	return InExpr{Left: c, Values: []Expression{subquery}, Negated: true}
@@ -861,6 +886,56 @@ func (c *Column[T]) InSubquery(subquery Expression) InExpr {
 	return InExpr{Left: c, Values: []Expression{subquery}}
 }
 
+// Add adds a value to this column.
+func (c *Column[T]) Add(value T) BinaryExpr {
+	return BinaryExpr{Left: c, Operator: "+", Right: ValueExpr{Value: value}}
+}
+
+// AddExpr adds a SQL expression to this column.
+func (c *Column[T]) AddExpr(expr Expression) BinaryExpr {
+	return BinaryExpr{Left: c, Operator: "+", Right: expr}
+}
+
+// Sub subtracts a value from this column.
+func (c *Column[T]) Sub(value T) BinaryExpr {
+	return BinaryExpr{Left: c, Operator: "-", Right: ValueExpr{Value: value}}
+}
+
+// SubExpr subtracts a SQL expression from this column.
+func (c *Column[T]) SubExpr(expr Expression) BinaryExpr {
+	return BinaryExpr{Left: c, Operator: "-", Right: expr}
+}
+
+// Mul multiplies this column by a value.
+func (c *Column[T]) Mul(value T) BinaryExpr {
+	return BinaryExpr{Left: c, Operator: "*", Right: ValueExpr{Value: value}}
+}
+
+// MulExpr multiplies this column by a SQL expression.
+func (c *Column[T]) MulExpr(expr Expression) BinaryExpr {
+	return BinaryExpr{Left: c, Operator: "*", Right: expr}
+}
+
+// Div divides this column by a value.
+func (c *Column[T]) Div(value T) BinaryExpr {
+	return BinaryExpr{Left: c, Operator: "/", Right: ValueExpr{Value: value}}
+}
+
+// DivExpr divides this column by a SQL expression.
+func (c *Column[T]) DivExpr(expr Expression) BinaryExpr {
+	return BinaryExpr{Left: c, Operator: "/", Right: expr}
+}
+
+// Mod calculates the remainder of this column divided by a value.
+func (c *Column[T]) Mod(value T) BinaryExpr {
+	return BinaryExpr{Left: c, Operator: "%", Right: ValueExpr{Value: value}}
+}
+
+// ModExpr calculates the remainder of this column divided by a SQL expression.
+func (c *Column[T]) ModExpr(expr Expression) BinaryExpr {
+	return BinaryExpr{Left: c, Operator: "%", Right: expr}
+}
+
 // NotInSubquery compares this column to the result of a subquery.
 func (c *Column[T]) NotInSubquery(subquery Expression) InExpr {
 	return InExpr{Left: c, Values: []Expression{subquery}, Negated: true}
@@ -973,6 +1048,57 @@ type NullCheckExpr struct {
 
 func (NullCheckExpr) isExpression() {}
 func (NullCheckExpr) isPredicate()  {}
+
+// BinaryExpr represents an arithmetic operation.
+type BinaryExpr struct {
+	Left     Expression
+	Operator string
+	Right    Expression
+}
+
+func (BinaryExpr) isExpression() {}
+
+// As aliases this binary expression in a SELECT list.
+func (b BinaryExpr) As(alias string) AliasExpr {
+	return As(b, alias)
+}
+
+// Add adds a value or expression to this binary expression.
+func (b BinaryExpr) Add(value any) BinaryExpr {
+	return BinaryExpr{Left: b, Operator: "+", Right: wrapValue(value)}
+}
+
+// Sub subtracts a value or expression from this binary expression.
+func (b BinaryExpr) Sub(value any) BinaryExpr {
+	return BinaryExpr{Left: b, Operator: "-", Right: wrapValue(value)}
+}
+
+// Mul multiplies this binary expression by a value or expression.
+func (b BinaryExpr) Mul(value any) BinaryExpr {
+	return BinaryExpr{Left: b, Operator: "*", Right: wrapValue(value)}
+}
+
+// Div divides this binary expression by a value or expression.
+func (b BinaryExpr) Div(value any) BinaryExpr {
+	return BinaryExpr{Left: b, Operator: "/", Right: wrapValue(value)}
+}
+
+// Mod calculates the remainder of this binary expression divided by a value or expression.
+func (b BinaryExpr) Mod(value any) BinaryExpr {
+	return BinaryExpr{Left: b, Operator: "%", Right: wrapValue(value)}
+}
+
+// ConcatExpr represents a SQL concatenation.
+type ConcatExpr struct {
+	Exprs []Expression
+}
+
+func (ConcatExpr) isExpression() {}
+
+// As aliases this concatenation expression in a SELECT list.
+func (c ConcatExpr) As(alias string) AliasExpr {
+	return As(c, alias)
+}
 
 // LogicalExpr groups predicates with AND or OR.
 type LogicalExpr struct {
@@ -1302,6 +1428,25 @@ func Exists(subquery Expression) ExistsExpr {
 // NotExists checks if a subquery returns no rows.
 func NotExists(subquery Expression) ExistsExpr {
 	return ExistsExpr{Subquery: subquery, Negated: true}
+}
+
+// Concat renders a SQL concatenation of multiple expressions or values.
+func Concat(values ...any) ConcatExpr {
+	if len(values) < 2 {
+		panic("schema: Concat requires at least two values")
+	}
+	exprs := make([]Expression, 0, len(values))
+	for _, v := range values {
+		exprs = append(exprs, wrapValue(v))
+	}
+	return ConcatExpr{Exprs: exprs}
+}
+
+func wrapValue(v any) Expression {
+	if expr, ok := v.(Expression); ok {
+		return expr
+	}
+	return ValueExpr{Value: v}
 }
 
 // IndexBuilder configures a table index.
@@ -1654,6 +1799,20 @@ func cloneExpressionForTable(expr Expression, table *TableDef) Expression {
 		return cloned
 	case AliasExpr:
 		return AliasExpr{Expr: cloneExpressionForTable(value.Expr, table), Alias: value.Alias}
+	case BinaryExpr:
+		return BinaryExpr{
+			Left:     cloneExpressionForTable(value.Left, table),
+			Operator: value.Operator,
+			Right:    cloneExpressionForTable(value.Right, table),
+		}
+	case ConcatExpr:
+		cloned := ConcatExpr{
+			Exprs: make([]Expression, 0, len(value.Exprs)),
+		}
+		for _, expr := range value.Exprs {
+			cloned.Exprs = append(cloned.Exprs, cloneExpressionForTable(expr, table))
+		}
+		return cloned
 	case RawExpr:
 		cloned := RawExpr{SQL: value.SQL, Args: make([]any, 0, len(value.Args))}
 		for _, arg := range value.Args {
