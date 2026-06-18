@@ -58,7 +58,7 @@ func TestQueryCommonHelpers(t *testing.T) {
 		ctx := newCompileContext(dialectForTest(t, "postgres"))
 		defer releaseCompileContext(ctx)
 		if err := (tableSource{
-			alias: "broken",
+			alias:    "broken",
 			subquery: &SelectQuery{dialect: ctx.dialect},
 		}).writeSQL(ctx); err == nil || !strings.Contains(err.Error(), "requires a table") {
 			t.Fatalf("expected nested query error, got %v", err)
