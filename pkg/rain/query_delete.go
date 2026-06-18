@@ -16,7 +16,7 @@ type DeleteQuery struct {
 	dialect   dialect.Dialect
 	table     *schema.TableDef
 	where     []schema.Predicate
-	using     []selectTableSource
+	using     []tableSource
 	order     []schema.OrderExpr
 	limit     int
 	hasLimit  bool
@@ -49,14 +49,14 @@ func (q *DeleteQuery) Returning(exprs ...schema.Expression) *DeleteQuery {
 // Supported by PostgreSQL.
 func (q *DeleteQuery) Using(tables ...schema.TableReference) *DeleteQuery {
 	for _, table := range tables {
-		q.using = append(q.using, tableDefSource{table: table.TableDef()})
+		q.using = append(q.using, tableSource{table: table.TableDef()})
 	}
 	return q
 }
 
 // UsingSubquery appends a subquery source for the DELETE ... USING clause.
 func (q *DeleteQuery) UsingSubquery(query *SelectQuery, alias string) *DeleteQuery {
-	q.using = append(q.using, subqueryTableSource{query: query, alias: alias})
+	q.using = append(q.using, tableSource{subquery: query, alias: alias})
 	return q
 }
 

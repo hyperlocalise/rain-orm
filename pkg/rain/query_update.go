@@ -19,7 +19,7 @@ type UpdateQuery struct {
 	values    []assignment
 	rows      []map[schema.ColumnReference]any
 	where     []schema.Predicate
-	from      []selectTableSource
+	from      []tableSource
 	order     []schema.OrderExpr
 	limit     int
 	hasLimit  bool
@@ -72,14 +72,14 @@ func (q *UpdateQuery) Returning(exprs ...schema.Expression) *UpdateQuery {
 // Supported by PostgreSQL and SQLite (3.33.0+).
 func (q *UpdateQuery) From(tables ...schema.TableReference) *UpdateQuery {
 	for _, table := range tables {
-		q.from = append(q.from, tableDefSource{table: table.TableDef()})
+		q.from = append(q.from, tableSource{table: table.TableDef()})
 	}
 	return q
 }
 
 // FromSubquery appends a subquery source for the UPDATE ... FROM clause.
 func (q *UpdateQuery) FromSubquery(query *SelectQuery, alias string) *UpdateQuery {
-	q.from = append(q.from, subqueryTableSource{query: query, alias: alias})
+	q.from = append(q.from, tableSource{subquery: query, alias: alias})
 	return q
 }
 
