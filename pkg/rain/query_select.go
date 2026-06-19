@@ -483,6 +483,10 @@ func (q *SelectQuery) writeSQL(ctx *compileContext) error {
 		return q.writeLocking(ctx)
 	}
 
+	if q.table == nil && q.tableSubquery == nil && len(q.cols) == 0 {
+		return errors.New("rain: select query requires a table or at least one column")
+	}
+
 	ctx.writeString("SELECT ")
 	if q.distinct {
 		ctx.writeString("DISTINCT ")

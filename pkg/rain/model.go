@@ -1654,6 +1654,7 @@ func scanSingleColumn(rows *sql.Rows, target reflect.Value) error {
 	isSlice := t.Kind() == reflect.Slice && !isBytesType(t)
 
 	if isSlice {
+		target.Set(target.Slice(0, 0))
 		elemType := t.Elem()
 		for rows.Next() {
 			elem := reflect.New(elemType).Elem()
