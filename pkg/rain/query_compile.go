@@ -292,13 +292,15 @@ func (c *compileContext) writePredicate(predicate schema.Predicate) error {
 }
 
 // writeJoinedPredicates renders a slice of predicates joined by AND.
+// If wrap is true and there are multiple predicates, they are wrapped in
+// parentheses.
 // OPTIMIZATION: This method iterates over the predicates directly to avoid
 // allocating intermediate schema.LogicalExpr objects (which would otherwise
 // be created by joinPredicates). This reduces heap pressure during query
 // compilation, particularly for complex queries with multiple WHERE or
 // HAVING conditions.
-// Impact: Reduces BenchmarkSelectToSQL/Complex allocations from 16 to 15.
-func (c *compileContext) writeJoinedPredicates(predicates []schema.Predicate) error {
+// Top-level clauses (WHERE, HAVING) use wrap=false to avoid redundant parentheses.
+func (c *compileContext) writeJoinedPredicates(predicates []schema.Predicate, wrap bool) error {
 	if len(predicates) == 0 {
 		return nil
 	}
@@ -306,7 +308,9 @@ func (c *compileContext) writeJoinedPredicates(predicates []schema.Predicate) er
 		return c.writePredicate(predicates[0])
 	}
 
-	c.writeByte('(')
+	if wrap {
+		c.writeByte('(')
+	}
 	for idx, p := range predicates {
 		if idx > 0 {
 			c.writeString(" AND ")
@@ -315,7 +319,9 @@ func (c *compileContext) writeJoinedPredicates(predicates []schema.Predicate) er
 			return err
 		}
 	}
-	c.writeByte(')')
+	if wrap {
+		c.writeByte(')')
+	}
 	return nil
 }
 

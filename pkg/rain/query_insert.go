@@ -753,7 +753,7 @@ func (q *InsertQuery) writeConflictClause(ctx *compileContext) error {
 
 	if len(q.conflict.targetWhere) > 0 {
 		ctx.writeString(" WHERE ")
-		if err := ctx.writeJoinedPredicates(q.conflict.targetWhere); err != nil {
+		if err := ctx.writeJoinedPredicates(q.conflict.targetWhere, true); err != nil {
 			return err
 		}
 	}
@@ -781,7 +781,7 @@ func (q *InsertQuery) writeConflictClause(ctx *compileContext) error {
 		}
 		if len(q.conflict.updateWhere) > 0 {
 			ctx.writeString(" WHERE ")
-			if err := ctx.writeJoinedPredicates(q.conflict.updateWhere); err != nil {
+			if err := ctx.writeJoinedPredicates(q.conflict.updateWhere, true); err != nil {
 				return err
 			}
 		}

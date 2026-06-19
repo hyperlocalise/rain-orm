@@ -270,7 +270,7 @@ func TestCompileContextAndAssignmentsHelpers(t *testing.T) {
 
 		// Empty
 		ctx.reset(dialectForTest(t, "postgres"))
-		if err := ctx.writeJoinedPredicates(nil); err != nil {
+		if err := ctx.writeJoinedPredicates(nil, true); err != nil {
 			t.Fatalf("empty writeJoinedPredicates failed: %v", err)
 		}
 		if ctx.String() != "" {
@@ -279,20 +279,29 @@ func TestCompileContextAndAssignmentsHelpers(t *testing.T) {
 
 		// Single
 		ctx.reset(dialectForTest(t, "postgres"))
-		if err := ctx.writeJoinedPredicates([]schema.Predicate{users.Active.Eq(true)}); err != nil {
+		if err := ctx.writeJoinedPredicates([]schema.Predicate{users.Active.Eq(true)}, true); err != nil {
 			t.Fatalf("single writeJoinedPredicates failed: %v", err)
 		}
 		if ctx.String() != `"users"."active" = $1` {
 			t.Fatalf("unexpected single predicate SQL: %s", ctx.String())
 		}
 
-		// Multiple
+		// Multiple (with wrap)
 		ctx.reset(dialectForTest(t, "postgres"))
-		if err := ctx.writeJoinedPredicates([]schema.Predicate{users.Active.Eq(true), users.Email.Eq("alice@example.com")}); err != nil {
+		if err := ctx.writeJoinedPredicates([]schema.Predicate{users.Active.Eq(true), users.Email.Eq("alice@example.com")}, true); err != nil {
 			t.Fatalf("multiple writeJoinedPredicates failed: %v", err)
 		}
 		if ctx.String() != `("users"."active" = $1 AND "users"."email" = $2)` {
-			t.Fatalf("unexpected multiple predicates SQL: %s", ctx.String())
+			t.Fatalf("unexpected multiple predicates SQL (wrapped): %s", ctx.String())
+		}
+
+		// Multiple (without wrap)
+		ctx.reset(dialectForTest(t, "postgres"))
+		if err := ctx.writeJoinedPredicates([]schema.Predicate{users.Active.Eq(true), users.Email.Eq("alice@example.com")}, false); err != nil {
+			t.Fatalf("multiple writeJoinedPredicates failed: %v", err)
+		}
+		if ctx.String() != `"users"."active" = $1 AND "users"."email" = $2` {
+			t.Fatalf("unexpected multiple predicates SQL (unwrapped): %s", ctx.String())
 		}
 	})
 }
