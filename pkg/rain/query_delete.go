@@ -150,6 +150,8 @@ func (q *DeleteQuery) compile() (compiledQuery, error) {
 }
 
 func (q *DeleteQuery) writeSQL(ctx *compileContext) error {
+	ctx.ensureArgsCapacity(len(q.where))
+
 	if err := writeCTEs(ctx, q.ctes, "delete"); err != nil {
 		return err
 	}
@@ -174,7 +176,7 @@ func (q *DeleteQuery) writeSQL(ctx *compileContext) error {
 
 	if len(q.where) > 0 {
 		ctx.writeString(" WHERE ")
-		if err := ctx.writeJoinedPredicates(q.where); err != nil {
+		if err := ctx.writeJoinedPredicates(q.where, false); err != nil {
 			return err
 		}
 	}

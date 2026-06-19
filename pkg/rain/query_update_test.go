@@ -115,7 +115,7 @@ func TestUpdateOrderLimitToSQL(t *testing.T) {
 					Where(u.ID.EqCol(p.UserID)).
 					Where(p.ID.Eq(int64(10)))
 			},
-			wantSQL: `UPDATE "users" AS "u" SET "name" = $1 FROM "posts" AS "p" WHERE ("u"."id" = "p"."user_id" AND "p"."id" = $2)`,
+			wantSQL: `UPDATE "users" AS "u" SET "name" = $1 FROM "posts" AS "p" WHERE "u"."id" = "p"."user_id" AND "p"."id" = $2`,
 		},
 		{
 			name:    "sqlite update from",
@@ -130,7 +130,7 @@ func TestUpdateOrderLimitToSQL(t *testing.T) {
 					Where(u.ID.EqCol(p.UserID)).
 					Where(p.ID.Eq(int64(10)))
 			},
-			wantSQL: `UPDATE "users" AS "u" SET "name" = ? FROM "posts" AS "p" WHERE ("u"."id" = "p"."user_id" AND "p"."id" = ?)`,
+			wantSQL: `UPDATE "users" AS "u" SET "name" = ? FROM "posts" AS "p" WHERE "u"."id" = "p"."user_id" AND "p"."id" = ?`,
 		},
 		{
 			name:    "postgres update from subquery",
@@ -150,7 +150,7 @@ func TestUpdateOrderLimitToSQL(t *testing.T) {
 					Where(u.ID.Eq(int64(1))).
 					Where(schema.Raw(`stats.count > 10`))
 			},
-			wantSQL: `UPDATE "users" AS "u" SET "active" = $1 FROM (SELECT "posts"."user_id", COUNT(*) AS "count" FROM "posts" GROUP BY "posts"."user_id") AS "stats" WHERE ("u"."id" = $2 AND stats.count > 10)`,
+			wantSQL: `UPDATE "users" AS "u" SET "active" = $1 FROM (SELECT "posts"."user_id", COUNT(*) AS "count" FROM "posts" GROUP BY "posts"."user_id") AS "stats" WHERE "u"."id" = $2 AND stats.count > 10`,
 		},
 		{
 			name:    "mysql update from error",

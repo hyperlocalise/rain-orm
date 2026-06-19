@@ -106,7 +106,7 @@ func TestDeleteOrderLimitToSQL(t *testing.T) {
 					Where(u.ID.EqCol(p.UserID)).
 					Where(p.ID.Eq(int64(10)))
 			},
-			wantSQL: `DELETE FROM "users" AS "u" USING "posts" AS "p" WHERE ("u"."id" = "p"."user_id" AND "p"."id" = $1)`,
+			wantSQL: `DELETE FROM "users" AS "u" USING "posts" AS "p" WHERE "u"."id" = "p"."user_id" AND "p"."id" = $1`,
 		},
 		{
 			name:    "postgres delete using subquery",
@@ -125,7 +125,7 @@ func TestDeleteOrderLimitToSQL(t *testing.T) {
 					Where(u.ID.Eq(int64(1))).
 					Where(schema.Raw(`stats.count > 10`))
 			},
-			wantSQL: `DELETE FROM "users" AS "u" USING (SELECT "posts"."user_id", COUNT(*) AS "count" FROM "posts" GROUP BY "posts"."user_id") AS "stats" WHERE ("u"."id" = $1 AND stats.count > 10)`,
+			wantSQL: `DELETE FROM "users" AS "u" USING (SELECT "posts"."user_id", COUNT(*) AS "count" FROM "posts" GROUP BY "posts"."user_id") AS "stats" WHERE "u"."id" = $1 AND stats.count > 10`,
 		},
 		{
 			name:    "sqlite delete using error",
