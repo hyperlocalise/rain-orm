@@ -196,6 +196,7 @@ func (q *SelectQuery) WithRelations(names ...string) *SelectQuery {
 type RelationConfig struct {
 	Where   schema.Predicate
 	OrderBy []schema.OrderExpr
+	Columns []schema.Expression
 }
 
 // Relation configures filters and ordering for a named relation.

@@ -279,12 +279,17 @@ func (db *DB) QueryRow(ctx context.Context, query string, args ...any) *sql.Row 
 
 // Begin starts a new transaction.
 func (db *DB) Begin(ctx context.Context) (*Tx, error) {
+	return db.BeginTx(ctx, nil)
+}
+
+// BeginTx starts a new transaction with options.
+func (db *DB) BeginTx(ctx context.Context, opts *sql.TxOptions) (*Tx, error) {
 	primary := db.primaryHandle()
 	if primary.db == nil {
 		return nil, ErrNoConnection
 	}
 
-	tx, err := primary.db.BeginTx(ctx, nil)
+	tx, err := primary.db.BeginTx(ctx, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -294,7 +299,12 @@ func (db *DB) Begin(ctx context.Context) (*Tx, error) {
 
 // RunInTx executes fn in a transaction, rolling back on error and committing on success.
 func (db *DB) RunInTx(ctx context.Context, fn func(*Tx) error) error {
-	tx, err := db.Begin(ctx)
+	return db.RunInTxOpts(ctx, nil, fn)
+}
+
+// RunInTxOpts executes fn in a transaction with options, rolling back on error and committing on success.
+func (db *DB) RunInTxOpts(ctx context.Context, opts *sql.TxOptions, fn func(*Tx) error) error {
+	tx, err := db.BeginTx(ctx, opts)
 	if err != nil {
 		return err
 	}

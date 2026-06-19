@@ -173,13 +173,13 @@ func (q *SelectQuery) loadRelationNode(ctx context.Context, parents reflect.Valu
 
 	if node.relation.Type == schema.RelationTypeManyToMany {
 		var err error
-		relatedRows, relatedBySourceKey, err = q.loadRelatedManyToManyRows(ctx, parents, node.relation, node.config, orderedSourceKeys)
+		relatedRows, relatedBySourceKey, err = q.loadRelatedManyToManyRows(ctx, parents, node.relation, node.config, orderedSourceKeys, node)
 		if err != nil {
 			return err
 		}
 	} else {
 		var err error
-		relatedRows, err = q.loadRelatedRows(ctx, parents, node.relation, node.config, orderedSourceKeys)
+		relatedRows, err = q.loadRelatedRows(ctx, parents, node.relation, node.config, orderedSourceKeys, node)
 		if err != nil {
 			return err
 		}
@@ -234,6 +234,7 @@ func (q *SelectQuery) loadRelatedManyToManyRows(
 	relation schema.RelationDef,
 	config RelationConfig,
 	sourceKeys []any,
+	node *relationLoadNode,
 ) (reflect.Value, map[typedKey][]reflect.Value, error) {
 	parentStructType, err := sliceParentStructType(parents.Type())
 	if err != nil {
@@ -294,6 +295,13 @@ func (q *SelectQuery) loadRelatedManyToManyRows(
 
 		batchDest := reflect.New(reflect.SliceOf(relatedElemType))
 		targetQuery := &SelectQuery{runner: q.runner, dialect: q.dialect, table: relation.TargetTable}
+		if len(config.Columns) > 0 {
+			targetQuery.Column(config.Columns...)
+			ensureTargetColumnSelected(targetQuery, relation.TargetColumn)
+			for _, child := range node.children {
+				ensureTargetColumnSelected(targetQuery, child.relation.SourceColumn)
+			}
+		}
 		if config.Where != nil {
 			targetQuery.Where(config.Where)
 		}
@@ -360,6 +368,7 @@ func (q *SelectQuery) loadRelatedRows(
 	relation schema.RelationDef,
 	config RelationConfig,
 	sourceKeys []any,
+	node *relationLoadNode,
 ) (reflect.Value, error) {
 	parentStructType, err := sliceParentStructType(parents.Type())
 	if err != nil {
@@ -375,6 +384,13 @@ func (q *SelectQuery) loadRelatedRows(
 		end := min(start+relationBatchSize, len(sourceKeys))
 		batchDest := reflect.New(reflect.SliceOf(relatedElemType))
 		query := &SelectQuery{runner: q.runner, dialect: q.dialect, table: relation.TargetTable}
+		if len(config.Columns) > 0 {
+			query.Column(config.Columns...)
+			ensureTargetColumnSelected(query, relation.TargetColumn)
+			for _, child := range node.children {
+				ensureTargetColumnSelected(query, child.relation.SourceColumn)
+			}
+		}
 		if config.Where != nil {
 			query.Where(config.Where)
 		}
@@ -572,4 +588,32 @@ func normalizeTypedKeyValue(value any) any {
 	// Fallback for uncommon non-comparable key types. Primary/foreign key values are
 	// expected to be comparable primitives or []byte in normal ORM usage.
 	return strconv.Quote(fmt.Sprintf("%#v", value))
+}
+
+func ensureTargetColumnSelected(q *SelectQuery, targetCol *schema.ColumnDef) {
+	if len(q.cols) == 0 {
+		return
+	}
+
+	for _, colExpr := range q.cols {
+		if colRef, ok := colExpr.(schema.ColumnReference); ok {
+			if colRef.ColumnDef() == targetCol {
+				return
+			}
+		}
+
+		// Also check for aliased expressions or raw SQL that might already provide the column name.
+		var name string
+		switch v := colExpr.(type) {
+		case schema.AliasExpr:
+			name = v.Alias
+		case schema.RawExpr:
+			name = v.SQL
+		}
+		if name == targetCol.Name || name == "\""+targetCol.Name+"\"" {
+			return
+		}
+	}
+
+	q.Column(schema.Ref(targetCol))
 }
