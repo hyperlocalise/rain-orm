@@ -483,13 +483,6 @@ func (q *SelectQuery) writeSQL(ctx *compileContext) error {
 		return q.writeLocking(ctx)
 	}
 
-	if q.table == nil && q.tableSubquery == nil {
-		if q.tableAlias != "" {
-			return errors.New("rain: subquery table source requires a non-nil query")
-		}
-		return errors.New("rain: select query requires a table")
-	}
-
 	ctx.writeString("SELECT ")
 	if q.distinct {
 		ctx.writeString("DISTINCT ")
@@ -521,9 +514,13 @@ func (q *SelectQuery) writeSQL(ctx *compileContext) error {
 		}
 	}
 
-	ctx.writeString(" FROM ")
-	if err := q.writeTableSourceSQL(ctx); err != nil {
-		return err
+	if q.table != nil || q.tableSubquery != nil {
+		ctx.writeString(" FROM ")
+		if err := q.writeTableSourceSQL(ctx); err != nil {
+			return err
+		}
+	} else if q.tableAlias != "" {
+		return errors.New("rain: subquery table source requires a non-nil query")
 	}
 
 	if err := q.writeJoins(ctx); err != nil {
@@ -903,7 +900,9 @@ func (q *SelectQuery) compile() (compiledQuery, error) {
 		if q.tableAlias != "" {
 			return compiledQuery{}, errors.New("rain: subquery table source requires a non-nil query")
 		}
-		return compiledQuery{}, errors.New("rain: select query requires a table")
+		if len(q.cols) == 0 {
+			return compiledQuery{}, errors.New("rain: select query requires a table or at least one column")
+		}
 	}
 
 	if q.distinct && len(q.distinctOn) > 0 {
@@ -959,7 +958,6 @@ func (q *SelectQuery) compileAggregate(selection string) (compiledQuery, error) 
 		if q.tableAlias != "" {
 			return compiledQuery{}, errors.New("rain: subquery table source requires a non-nil query")
 		}
-		return compiledQuery{}, errors.New("rain: select query requires a table")
 	}
 	if len(q.ctes) > 0 {
 		return compiledQuery{}, errors.New("rain: aggregate helpers do not support WITH clauses")
@@ -975,9 +973,11 @@ func (q *SelectQuery) compileAggregate(selection string) (compiledQuery, error) 
 	defer releaseCompileContext(ctx)
 	ctx.writeString("SELECT ")
 	ctx.writeString(selection)
-	ctx.writeString(" FROM ")
-	if err := q.writeTableSourceSQL(ctx); err != nil {
-		return compiledQuery{}, err
+	if q.table != nil || q.tableSubquery != nil {
+		ctx.writeString(" FROM ")
+		if err := q.writeTableSourceSQL(ctx); err != nil {
+			return compiledQuery{}, err
+		}
 	}
 
 	if err := q.writeJoins(ctx); err != nil {

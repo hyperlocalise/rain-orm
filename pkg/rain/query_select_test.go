@@ -11,6 +11,74 @@ import (
 	"github.com/hyperlocalise/rain-orm/pkg/schema"
 )
 
+func TestSelectTablelessToSQL(t *testing.T) {
+	t.Parallel()
+
+	db, err := rain.OpenDialect("postgres")
+	if err != nil {
+		t.Fatalf("OpenDialect returned error: %v", err)
+	}
+
+	t.Run("simple table-less select", func(t *testing.T) {
+		sqlText, args, err := db.Select(schema.Raw("1 + 1")).ToSQL()
+		if err != nil {
+			t.Fatalf("ToSQL returned error: %v", err)
+		}
+		wantSQL := `SELECT 1 + 1`
+		if sqlText != wantSQL {
+			t.Fatalf("unexpected SQL:\nwant: %s\ngot:  %s", wantSQL, sqlText)
+		}
+		if len(args) != 0 {
+			t.Fatalf("unexpected args: %#v", args)
+		}
+	})
+
+	t.Run("table-less select with args", func(t *testing.T) {
+		sqlText, args, err := db.Select(schema.Raw("? + ?", 1, 2)).ToSQL()
+		if err != nil {
+			t.Fatalf("ToSQL returned error: %v", err)
+		}
+		wantSQL := `SELECT $1 + $2`
+		if sqlText != wantSQL {
+			t.Fatalf("unexpected SQL:\nwant: %s\ngot:  %s", wantSQL, sqlText)
+		}
+		if len(args) != 2 || args[0] != 1 || args[1] != 2 {
+			t.Fatalf("unexpected args: %#v", args)
+		}
+	})
+
+	t.Run("table-less select with alias", func(t *testing.T) {
+		sqlText, _, err := db.Select(schema.Raw("1").As("val")).ToSQL()
+		if err != nil {
+			t.Fatalf("ToSQL returned error: %v", err)
+		}
+		wantSQL := `SELECT 1 AS "val"`
+		if sqlText != wantSQL {
+			t.Fatalf("unexpected SQL:\nwant: %s\ngot:  %s", wantSQL, sqlText)
+		}
+	})
+
+	t.Run("table-less aggregate", func(t *testing.T) {
+		// This is technically allowed by our logic, though SQL might complain without a source
+		// unless it's something like SELECT COUNT(*) if the dialect allows it.
+		sqlText, _, err := db.Select(schema.Count()).ToSQL()
+		if err != nil {
+			t.Fatalf("ToSQL returned error: %v", err)
+		}
+		wantSQL := `SELECT COUNT(*)`
+		if sqlText != wantSQL {
+			t.Fatalf("unexpected SQL:\nwant: %s\ngot:  %s", wantSQL, sqlText)
+		}
+	})
+
+	t.Run("missing table and columns error", func(t *testing.T) {
+		_, _, err := db.Select().ToSQL()
+		if err == nil || !strings.Contains(err.Error(), "select query requires a table or at least one column") {
+			t.Fatalf("expected error about missing table/columns, got: %v", err)
+		}
+	})
+}
+
 func TestSelectToSQL(t *testing.T) {
 	t.Parallel()
 

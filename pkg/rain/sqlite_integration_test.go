@@ -1956,6 +1956,58 @@ func TestSQLiteIntegrationFirst(t *testing.T) {
 	})
 }
 
+func TestSQLiteIntegrationTablelessSelect(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db := openSQLiteTestDB(t)
+
+	t.Run("ScanPrimitive", func(t *testing.T) {
+		var result int64
+		if err := db.Select(schema.Raw("1 + 1")).Scan(ctx, &result); err != nil {
+			t.Fatalf("Scan failed: %v", err)
+		}
+		if result != 2 {
+			t.Fatalf("expected 2, got %d", result)
+		}
+	})
+
+	t.Run("ScanString", func(t *testing.T) {
+		var result string
+		if err := db.Select(schema.Raw("'hello'")).Scan(ctx, &result); err != nil {
+			t.Fatalf("Scan failed: %v", err)
+		}
+		if result != "hello" {
+			t.Fatalf("expected hello, got %q", result)
+		}
+	})
+
+	t.Run("ScanSlice", func(t *testing.T) {
+		// Even for table-less, we might have multiple rows if UNION is used.
+		q1 := db.Select(schema.Raw("1"))
+		q2 := db.Select(schema.Raw("2"))
+		var results []int64
+		if err := q1.Union(q2).Scan(ctx, &results); err != nil {
+			t.Fatalf("Scan failed: %v", err)
+		}
+		if !slices.Equal(results, []int64{1, 2}) {
+			t.Fatalf("expected [1, 2], got %v", results)
+		}
+	})
+
+	t.Run("ScanStruct", func(t *testing.T) {
+		var result struct {
+			Val int64 `db:"val"`
+		}
+		if err := db.Select(schema.Raw("42").As("val")).Scan(ctx, &result); err != nil {
+			t.Fatalf("Scan failed: %v", err)
+		}
+		if result.Val != 42 {
+			t.Fatalf("expected 42, got %d", result.Val)
+		}
+	})
+}
+
 func TestSQLiteIntegrationArithmeticAndConcat(t *testing.T) {
 	t.Parallel()
 

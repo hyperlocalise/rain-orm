@@ -252,6 +252,17 @@ func scanRowsAgainstTableDirect(rows *sql.Rows, dest any, table *schema.TableDef
 		return fmt.Errorf("rain: destination must be settable (pass a pointer to a slice or struct)")
 	}
 
+	if len(cols) == 1 {
+		t := target.Type()
+		isSlice := t.Kind() == reflect.Slice && !isBytesType(t)
+		if isSlice {
+			t = t.Elem()
+		}
+		if !isMappingStructType(t) {
+			return scanSingleColumn(rows, target)
+		}
+	}
+
 	switch target.Kind() {
 	case reflect.Struct:
 		plan, err := newRowScanPlanForColumns(cols, target.Type(), table)
@@ -1010,6 +1021,18 @@ func scanCachedRowsAgainstTable(result *cachedSelectRows, dest any, table *schem
 	}
 
 	target := value.Elem()
+
+	if len(result.Columns) == 1 {
+		t := target.Type()
+		isSlice := t.Kind() == reflect.Slice && !isBytesType(t)
+		if isSlice {
+			t = t.Elem()
+		}
+		if !isMappingStructType(t) {
+			return scanCachedSingleColumn(result, target, table)
+		}
+	}
+
 	switch target.Kind() {
 	case reflect.Struct:
 		plan, err := newRowScanPlanForColumns(result.Columns, target.Type(), table)
@@ -1611,4 +1634,77 @@ func toLowerRune(r rune) rune {
 		return r + ('a' - 'A')
 	}
 	return r
+}
+
+func isMappingStructType(t reflect.Type) bool {
+	for t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	if t.Kind() != reflect.Struct {
+		return false
+	}
+	if t == reflect.TypeFor[time.Time]() {
+		return false
+	}
+	return true
+}
+
+func scanSingleColumn(rows *sql.Rows, target reflect.Value) error {
+	t := target.Type()
+	isSlice := t.Kind() == reflect.Slice && !isBytesType(t)
+
+	if isSlice {
+		elemType := t.Elem()
+		for rows.Next() {
+			elem := reflect.New(elemType).Elem()
+			if err := rows.Scan(elem.Addr().Interface()); err != nil {
+				return err
+			}
+			target.Set(reflect.Append(target, elem))
+		}
+		return rows.Err()
+	}
+
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		return sql.ErrNoRows
+	}
+
+	return rows.Scan(target.Addr().Interface())
+}
+
+func scanCachedSingleColumn(result *cachedSelectRows, target reflect.Value, table *schema.TableDef) error {
+	if len(result.Rows) == 0 {
+		t := target.Type()
+		if t.Kind() == reflect.Slice && !isBytesType(t) {
+			return nil
+		}
+		return sql.ErrNoRows
+	}
+
+	var columnDef *schema.ColumnDef
+	if table != nil {
+		columnDef, _ = table.ColumnByName(result.Columns[0])
+	}
+
+	t := target.Type()
+	isSlice := t.Kind() == reflect.Slice && !isBytesType(t)
+
+	if isSlice {
+		elemType := t.Elem()
+		items := reflect.MakeSlice(t, 0, len(result.Rows))
+		for _, row := range result.Rows {
+			elem := reflect.New(elemType).Elem()
+			if err := assignCachedValueToField(elem, row[0], columnDef); err != nil {
+				return err
+			}
+			items = reflect.Append(items, elem)
+		}
+		target.Set(items)
+		return nil
+	}
+
+	return assignCachedValueToField(target, result.Rows[0][0], columnDef)
 }
