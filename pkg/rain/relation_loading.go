@@ -133,14 +133,32 @@ func (q *SelectQuery) loadRelationsIntoSlice(
 }
 
 func (q *SelectQuery) loadRelationNode(ctx context.Context, parents reflect.Value, node *relationLoadNode) error {
-	for idx := 0; idx < parents.Len(); idx++ {
-		parent := dereferenceModelValue(parents.Index(idx))
-		if !parent.IsValid() {
-			continue
-		}
-		if err := q.validateRelationField(parent, node.relation); err != nil {
-			return err
-		}
+	// OPTIMIZATION: Resolve parent metadata and field indices once per node
+	// to avoid redundant lookups and validation in loops.
+	parentType, err := sliceParentStructType(parents.Type())
+	if err != nil {
+		return err
+	}
+	if _, err := lookupTableModelBinding(parentType, node.relation.SourceColumn.Table, true); err != nil {
+		return err
+	}
+	parentMeta, err := lookupModelMetaForType(parentType)
+	if err != nil {
+		return err
+	}
+
+	sourceColField, ok := parentMeta.byColumn[node.relation.SourceColumn.Name]
+	if !ok {
+		return fmt.Errorf("rain: source column %q not found in model metadata", node.relation.SourceColumn.Name)
+	}
+	relField, ok := parentMeta.byRelation[node.name]
+	if !ok {
+		return fmt.Errorf("rain: relation %q not found in model metadata", node.name)
+	}
+
+	// Validate the relation field once.
+	if err := q.validateRelationFieldType(parentType.FieldByIndex(relField.index).Type, node.relation); err != nil {
+		return err
 	}
 
 	sourceKeys := make(map[typedKey]any, parents.Len())
@@ -150,13 +168,19 @@ func (q *SelectQuery) loadRelationNode(ctx context.Context, parents reflect.Valu
 		if !parent.IsValid() {
 			continue
 		}
-		keyValue, ok, err := relationColumnValue(parent, node.relation.SourceColumn.Name)
-		if err != nil {
-			return err
+
+		// OPTIMIZATION: Use pre-resolved field index for source column.
+		field := parent.FieldByIndex(sourceColField.index)
+		var keyValue any
+		if field.Kind() == reflect.Pointer {
+			if field.IsNil() {
+				continue
+			}
+			keyValue = field.Elem().Interface()
+		} else {
+			keyValue = field.Interface()
 		}
-		if !ok {
-			continue
-		}
+
 		key := toTypedKey(keyValue)
 		if _, exists := sourceKeys[key]; exists {
 			continue
@@ -184,20 +208,41 @@ func (q *SelectQuery) loadRelationNode(ctx context.Context, parents reflect.Valu
 			return err
 		}
 
+		// OPTIMIZATION: Resolve related model metadata once before mapping.
+		relatedElemType, err := q.relationElementTypeFromType(parentType, node.relation)
+		if err != nil {
+			return err
+		}
+		relatedMeta, err := lookupModelMetaForType(relatedElemType)
+		if err != nil {
+			return err
+		}
+		targetColField, ok := relatedMeta.byColumn[node.relation.TargetColumn.Name]
+		if !ok {
+			return fmt.Errorf("rain: target column %q not found in related model metadata", node.relation.TargetColumn.Name)
+		}
+
 		relatedBySourceKey = make(map[typedKey][]reflect.Value, len(sourceKeys))
 		for rowIdx := 0; rowIdx < relatedRows.Len(); rowIdx++ {
 			related := dereferenceModelValue(relatedRows.Index(rowIdx))
 			if !related.IsValid() {
 				continue
 			}
-			targetValue, ok, err := relationColumnValue(related, node.relation.TargetColumn.Name)
-			if err != nil {
-				return err
+
+			// OPTIMIZATION: Use pre-resolved field index for target column.
+			field := related.FieldByIndex(targetColField.index)
+			var targetValue any
+			if field.Kind() == reflect.Pointer {
+				if field.IsNil() {
+					continue
+				}
+				targetValue = field.Elem().Interface()
+			} else {
+				targetValue = field.Interface()
 			}
-			if !ok {
-				continue
-			}
-			relatedBySourceKey[toTypedKey(targetValue)] = append(relatedBySourceKey[toTypedKey(targetValue)], related)
+
+			key := toTypedKey(targetValue)
+			relatedBySourceKey[key] = append(relatedBySourceKey[key], related)
 		}
 	}
 
@@ -207,21 +252,76 @@ func (q *SelectQuery) loadRelationNode(ctx context.Context, parents reflect.Valu
 		}
 	}
 
+	// OPTIMIZATION: Pre-calculate info for relation assignment.
+	relFieldType := parentType.FieldByIndex(relField.index).Type
+	isRelPointer := relFieldType.Kind() == reflect.Pointer
+	var relElemType reflect.Type
+	var pointerElems bool
+	if node.relation.Type == schema.RelationTypeHasMany || node.relation.Type == schema.RelationTypeManyToMany {
+		relElemType = relFieldType.Elem()
+		pointerElems = relElemType.Kind() == reflect.Pointer
+	}
+
 	for idx := 0; idx < parents.Len(); idx++ {
 		parent := dereferenceModelValue(parents.Index(idx))
 		if !parent.IsValid() {
 			continue
 		}
-		sourceValue, ok, err := relationColumnValue(parent, node.relation.SourceColumn.Name)
-		if err != nil {
-			return err
+
+		// OPTIMIZATION: Use pre-resolved field index for source column.
+		field := parent.FieldByIndex(sourceColField.index)
+		var sourceValue any
+		if field.Kind() == reflect.Pointer {
+			if !field.IsNil() {
+				sourceValue = field.Elem().Interface()
+			}
+		} else {
+			sourceValue = field.Interface()
 		}
-		if !ok {
+
+		if sourceValue == nil {
 			continue
 		}
+
 		matches := relatedBySourceKey[toTypedKey(sourceValue)]
-		if err := setRelationValue(parent, node.name, node.relation.Type, matches); err != nil {
-			return err
+		if len(matches) == 0 {
+			continue
+		}
+
+		// OPTIMIZATION: Inlined assignment logic using pre-cached metadata.
+		relFieldVal := parent.FieldByIndex(relField.index)
+		switch node.relation.Type {
+		case schema.RelationTypeBelongsTo, schema.RelationTypeHasOne:
+			if node.relation.Type == schema.RelationTypeHasOne && len(matches) > 1 {
+				return fmt.Errorf("rain: has_one relation %q returned %d matches, expected at most 1", node.name, len(matches))
+			}
+			item := dereferenceModelValue(matches[0])
+			if !item.IsValid() {
+				continue
+			}
+			if isRelPointer {
+				ptr := reflect.New(relFieldType.Elem())
+				ptr.Elem().Set(item)
+				relFieldVal.Set(ptr)
+			} else {
+				relFieldVal.Set(item)
+			}
+		case schema.RelationTypeHasMany, schema.RelationTypeManyToMany:
+			slice := reflect.MakeSlice(relFieldType, 0, len(matches))
+			for _, match := range matches {
+				item := dereferenceModelValue(match)
+				if !item.IsValid() {
+					continue
+				}
+				if pointerElems {
+					ptr := reflect.New(relElemType.Elem())
+					ptr.Elem().Set(item)
+					slice = reflect.Append(slice, ptr)
+				} else {
+					slice = reflect.Append(slice, item)
+				}
+			}
+			relFieldVal.Set(slice)
 		}
 	}
 
@@ -410,6 +510,26 @@ func (q *SelectQuery) loadRelatedRows(
 	return relatedRows.Elem(), nil
 }
 
+func (q *SelectQuery) validateRelationFieldType(fieldType reflect.Type, relation schema.RelationDef) error {
+	switch relation.Type {
+	case schema.RelationTypeBelongsTo, schema.RelationTypeHasOne:
+		if fieldType.Kind() != reflect.Struct && fieldType.Kind() != reflect.Pointer {
+			return fmt.Errorf("rain: relation %q must target a struct or pointer-to-struct field", relation.Name)
+		}
+	case schema.RelationTypeHasMany, schema.RelationTypeManyToMany:
+		if fieldType.Kind() != reflect.Slice {
+			return fmt.Errorf("rain: relation %q must target a slice field", relation.Name)
+		}
+		elemType := fieldType.Elem()
+		if elemType.Kind() != reflect.Struct && (elemType.Kind() != reflect.Pointer || elemType.Elem().Kind() != reflect.Struct) {
+			return fmt.Errorf("rain: relation %q must target a slice of struct or pointer-to-struct", relation.Name)
+		}
+	default:
+		return fmt.Errorf("rain: unsupported relation type %q", relation.Type)
+	}
+	return nil
+}
+
 func (q *SelectQuery) validateRelationField(parent reflect.Value, relation schema.RelationDef) error {
 	if _, err := lookupTableModelBinding(parent.Type(), relation.SourceColumn.Table, true); err != nil {
 		return err
@@ -422,24 +542,7 @@ func (q *SelectQuery) validateRelationField(parent reflect.Value, relation schem
 	if !ok {
 		return fmt.Errorf("rain: relation %q requires a struct field tagged with `rain:\"relation:%s\"`", relation.Name, relation.Name)
 	}
-	field := parent.FieldByIndex(fieldInfo.index)
-	switch relation.Type {
-	case schema.RelationTypeBelongsTo, schema.RelationTypeHasOne:
-		if field.Kind() != reflect.Struct && field.Kind() != reflect.Pointer {
-			return fmt.Errorf("rain: relation %q must target a struct or pointer-to-struct field", relation.Name)
-		}
-	case schema.RelationTypeHasMany, schema.RelationTypeManyToMany:
-		if field.Kind() != reflect.Slice {
-			return fmt.Errorf("rain: relation %q must target a slice field", relation.Name)
-		}
-		elemType := field.Type().Elem()
-		if elemType.Kind() != reflect.Struct && (elemType.Kind() != reflect.Pointer || elemType.Elem().Kind() != reflect.Struct) {
-			return fmt.Errorf("rain: relation %q must target a slice of struct or pointer-to-struct", relation.Name)
-		}
-	default:
-		return fmt.Errorf("rain: unsupported relation type %q", relation.Type)
-	}
-	return nil
+	return q.validateRelationFieldType(parent.FieldByIndex(fieldInfo.index).Type(), relation)
 }
 
 func sliceParentStructType(sliceType reflect.Type) (reflect.Type, error) {
@@ -571,13 +674,30 @@ func dereferenceModelValue(value reflect.Value) reflect.Value {
 }
 
 func toTypedKey(value any) typedKey {
+	// OPTIMIZATION: Fast-path for the most common comparable key types to avoid
+	// reflect.TypeOf and reflect.ValueOf overhead.
+	switch v := value.(type) {
+	case int64:
+		return typedKey{typ: reflect.TypeFor[int64](), value: v}
+	case string:
+		return typedKey{typ: reflect.TypeFor[string](), value: v}
+	case int:
+		return typedKey{typ: reflect.TypeFor[int](), value: v}
+	}
+
 	typ := reflect.TypeOf(value)
 	return typedKey{typ: typ, value: normalizeTypedKeyValue(value)}
 }
 
 func normalizeTypedKeyValue(value any) any {
-	if bytes, ok := value.([]byte); ok {
-		return string(bytes)
+	// OPTIMIZATION: Handle common types directly to avoid reflection.
+	switch v := value.(type) {
+	case string:
+		return v
+	case int64, int, int32, int16, int8, uint64, uint32, uint16, uint8, uint, bool:
+		return v
+	case []byte:
+		return string(v)
 	}
 
 	rv := reflect.ValueOf(value)
