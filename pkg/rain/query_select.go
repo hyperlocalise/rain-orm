@@ -487,7 +487,9 @@ func (q *SelectQuery) writeSQL(ctx *compileContext) error {
 		if q.tableAlias != "" {
 			return errors.New("rain: subquery table source requires a non-nil query")
 		}
-		return errors.New("rain: select query requires a table")
+		if len(q.cols) == 0 {
+			return errors.New("rain: select query requires a table")
+		}
 	}
 
 	ctx.writeString("SELECT ")
@@ -521,9 +523,11 @@ func (q *SelectQuery) writeSQL(ctx *compileContext) error {
 		}
 	}
 
-	ctx.writeString(" FROM ")
-	if err := q.writeTableSourceSQL(ctx); err != nil {
-		return err
+	if q.table != nil || q.tableSubquery != nil {
+		ctx.writeString(" FROM ")
+		if err := q.writeTableSourceSQL(ctx); err != nil {
+			return err
+		}
 	}
 
 	if err := q.writeJoins(ctx); err != nil {
@@ -903,7 +907,9 @@ func (q *SelectQuery) compile() (compiledQuery, error) {
 		if q.tableAlias != "" {
 			return compiledQuery{}, errors.New("rain: subquery table source requires a non-nil query")
 		}
-		return compiledQuery{}, errors.New("rain: select query requires a table")
+		if len(q.cols) == 0 {
+			return compiledQuery{}, errors.New("rain: select query requires a table")
+		}
 	}
 
 	if q.distinct && len(q.distinctOn) > 0 {
