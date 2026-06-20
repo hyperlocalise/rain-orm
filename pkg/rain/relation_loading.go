@@ -389,6 +389,16 @@ func (q *SelectQuery) loadRelatedManyToManyRows(
 	targetRowsMap := make(map[typedKey]reflect.Value)
 	relatedRows := reflect.MakeSlice(reflect.SliceOf(relatedElemType), 0, len(uniqueTargetKeys))
 
+	// Resolve related model metadata for target column indexing.
+	relatedMeta, err := lookupModelMetaForType(relatedElemType)
+	if err != nil {
+		return reflect.Value{}, nil, err
+	}
+	targetColField, ok := relatedMeta.byColumn[relation.TargetColumn.Name]
+	if !ok {
+		return reflect.Value{}, nil, fmt.Errorf("rain: target column %q not found in related model metadata", relation.TargetColumn.Name)
+	}
+
 	for start := 0; start < len(uniqueTargetKeys); start += relationBatchSize {
 		end := min(start+relationBatchSize, len(uniqueTargetKeys))
 		batchKeys := uniqueTargetKeys[start:end]
@@ -420,11 +430,18 @@ func (q *SelectQuery) loadRelatedManyToManyRows(
 		batchDestElem := batchDest.Elem()
 		for i := 0; i < batchDestElem.Len(); i++ {
 			row := dereferenceModelValue(batchDestElem.Index(i))
-			tVal, ok, err := relationColumnValue(row, relation.TargetColumn.Name)
-			if err != nil {
-				return reflect.Value{}, nil, err
+
+			field := row.FieldByIndex(targetColField.index)
+			var tVal any
+			if field.Kind() == reflect.Pointer {
+				if !field.IsNil() {
+					tVal = field.Elem().Interface()
+				}
+			} else {
+				tVal = field.Interface()
 			}
-			if ok {
+
+			if tVal != nil {
 				tKey := toTypedKey(tVal)
 				targetRowsMap[tKey] = row
 			}
@@ -446,16 +463,22 @@ func (q *SelectQuery) loadRelatedManyToManyRows(
 	for rowIdx := 0; rowIdx < relatedRows.Len(); rowIdx++ {
 		row := relatedRows.Index(rowIdx)
 		deref := dereferenceModelValue(row)
-		tVal, ok, err := relationColumnValue(deref, relation.TargetColumn.Name)
-		if err != nil {
-			return reflect.Value{}, nil, err
+
+		field := deref.FieldByIndex(targetColField.index)
+		var tVal any
+		if field.Kind() == reflect.Pointer {
+			if !field.IsNil() {
+				tVal = field.Elem().Interface()
+			}
+		} else {
+			tVal = field.Interface()
 		}
-		if !ok {
-			continue
-		}
-		tKey := toTypedKey(tVal)
-		for _, sKey := range sourceKeysByTargetKey[tKey] {
-			relatedBySourceKey[sKey] = append(relatedBySourceKey[sKey], row)
+
+		if tVal != nil {
+			tKey := toTypedKey(tVal)
+			for _, sKey := range sourceKeysByTargetKey[tKey] {
+				relatedBySourceKey[sKey] = append(relatedBySourceKey[sKey], row)
+			}
 		}
 	}
 
@@ -530,21 +553,6 @@ func (q *SelectQuery) validateRelationFieldType(fieldType reflect.Type, relation
 	return nil
 }
 
-func (q *SelectQuery) validateRelationField(parent reflect.Value, relation schema.RelationDef) error {
-	if _, err := lookupTableModelBinding(parent.Type(), relation.SourceColumn.Table, true); err != nil {
-		return err
-	}
-	meta, _, err := lookupModelMeta(parent.Addr().Interface())
-	if err != nil {
-		return err
-	}
-	fieldInfo, ok := meta.byRelation[relation.Name]
-	if !ok {
-		return fmt.Errorf("rain: relation %q requires a struct field tagged with `rain:\"relation:%s\"`", relation.Name, relation.Name)
-	}
-	return q.validateRelationFieldType(parent.FieldByIndex(fieldInfo.index).Type(), relation)
-}
-
 func sliceParentStructType(sliceType reflect.Type) (reflect.Type, error) {
 	if sliceType.Kind() != reflect.Slice {
 		return nil, fmt.Errorf("rain: relation loading requires a slice, got %s", sliceType)
@@ -586,79 +594,6 @@ func (q *SelectQuery) relationElementTypeFromType(parentType reflect.Type, relat
 		return elemType, nil
 	default:
 		return nil, fmt.Errorf("rain: unsupported relation type %q", relation.Type)
-	}
-}
-
-func relationColumnValue(model reflect.Value, columnName string) (any, bool, error) {
-	meta, _, err := lookupModelMeta(model.Addr().Interface())
-	if err != nil {
-		return nil, false, err
-	}
-	fieldInfo, ok := meta.byColumn[columnName]
-	if !ok {
-		return nil, false, nil
-	}
-	field := model.FieldByIndex(fieldInfo.index)
-	if field.Kind() == reflect.Pointer {
-		if field.IsNil() {
-			return nil, false, nil
-		}
-		return field.Elem().Interface(), true, nil
-	}
-	return field.Interface(), true, nil
-}
-
-func setRelationValue(parent reflect.Value, relationName string, relationType schema.RelationType, matches []reflect.Value) error {
-	meta, _, err := lookupModelMeta(parent.Addr().Interface())
-	if err != nil {
-		return err
-	}
-	fieldInfo, ok := meta.byRelation[relationName]
-	if !ok {
-		return fmt.Errorf("rain: relation %q not found in model metadata", relationName)
-	}
-	field := parent.FieldByIndex(fieldInfo.index)
-
-	switch relationType {
-	case schema.RelationTypeBelongsTo, schema.RelationTypeHasOne:
-		if len(matches) == 0 {
-			return nil
-		}
-		if relationType == schema.RelationTypeHasOne && len(matches) > 1 {
-			return fmt.Errorf("rain: has_one relation %q returned %d matches, expected at most 1", relationName, len(matches))
-		}
-		item := dereferenceModelValue(matches[0])
-		if !item.IsValid() {
-			return nil
-		}
-		if field.Kind() == reflect.Pointer {
-			ptr := reflect.New(field.Type().Elem())
-			ptr.Elem().Set(item)
-			field.Set(ptr)
-			return nil
-		}
-		field.Set(item)
-		return nil
-	case schema.RelationTypeHasMany, schema.RelationTypeManyToMany:
-		slice := reflect.MakeSlice(field.Type(), 0, len(matches))
-		pointerElems := field.Type().Elem().Kind() == reflect.Pointer
-		for _, match := range matches {
-			item := dereferenceModelValue(match)
-			if !item.IsValid() {
-				continue
-			}
-			if pointerElems {
-				ptr := reflect.New(field.Type().Elem().Elem())
-				ptr.Elem().Set(item)
-				slice = reflect.Append(slice, ptr)
-				continue
-			}
-			slice = reflect.Append(slice, item)
-		}
-		field.Set(slice)
-		return nil
-	default:
-		return fmt.Errorf("rain: unsupported relation type %q", relationType)
 	}
 }
 
