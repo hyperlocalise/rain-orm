@@ -359,6 +359,9 @@ func (q *SelectQuery) loadRelatedManyToManyRows(
 		)
 		for i := 0; i < batchDestElem.Len(); i++ {
 			row := dereferenceModelValue(batchDestElem.Index(i))
+			if !row.IsValid() {
+				continue
+			}
 			if batchMeta == nil {
 				var err error
 				batchMeta, err = lookupModelMetaForType(row.Type())
@@ -399,6 +402,9 @@ func (q *SelectQuery) loadRelatedManyToManyRows(
 	for rowIdx := 0; rowIdx < relatedRows.Len(); rowIdx++ {
 		row := relatedRows.Index(rowIdx)
 		deref := dereferenceModelValue(row)
+		if !deref.IsValid() {
+			continue
+		}
 		if relatedMeta == nil {
 			var err error
 			relatedMeta, err = lookupModelMetaForType(deref.Type())
@@ -667,6 +673,12 @@ func toTypedKey(value any) typedKey {
 		return typedKey{typ: reflect.TypeFor[string](), value: v}
 	case int:
 		return typedKey{typ: reflect.TypeFor[int](), value: v}
+	case uint32:
+		return typedKey{typ: reflect.TypeFor[uint32](), value: v}
+	case int32:
+		return typedKey{typ: reflect.TypeFor[int32](), value: v}
+	case uint64:
+		return typedKey{typ: reflect.TypeFor[uint64](), value: v}
 	}
 
 	return typedKey{typ: reflect.TypeOf(value), value: normalizeTypedKeyValue(value)}
