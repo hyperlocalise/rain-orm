@@ -133,13 +133,34 @@ func (q *SelectQuery) loadRelationsIntoSlice(
 }
 
 func (q *SelectQuery) loadRelationNode(ctx context.Context, parents reflect.Value, node *relationLoadNode) error {
-	for idx := 0; idx < parents.Len(); idx++ {
-		parent := dereferenceModelValue(parents.Index(idx))
-		if !parent.IsValid() {
-			continue
-		}
-		if err := q.validateRelationField(parent, node.relation); err != nil {
-			return err
+	var (
+		parentMeta        *modelMeta
+		sourceColumnIndex []int
+		relationIndex     []int
+	)
+	if parents.Len() > 0 {
+		// Validate the relation field once for the entire batch and resolve metadata.
+		for idx := 0; idx < parents.Len(); idx++ {
+			parent := dereferenceModelValue(parents.Index(idx))
+			if !parent.IsValid() {
+				continue
+			}
+			var err error
+			parentMeta, err = lookupModelMetaForType(parent.Type())
+			if err != nil {
+				return err
+			}
+			if info, ok := parentMeta.byColumn[node.relation.SourceColumn.Name]; ok {
+				sourceColumnIndex = info.index
+			}
+			if info, ok := parentMeta.byRelation[node.name]; ok {
+				relationIndex = info.index
+			}
+
+			if err := q.validateRelationField(parent, node.relation, parentMeta); err != nil {
+				return err
+			}
+			break
 		}
 	}
 
@@ -150,7 +171,7 @@ func (q *SelectQuery) loadRelationNode(ctx context.Context, parents reflect.Valu
 		if !parent.IsValid() {
 			continue
 		}
-		keyValue, ok, err := relationColumnValue(parent, node.relation.SourceColumn.Name)
+		keyValue, ok, err := relationColumnValue(parent, node.relation.SourceColumn.Name, parentMeta, sourceColumnIndex)
 		if err != nil {
 			return err
 		}
@@ -185,12 +206,26 @@ func (q *SelectQuery) loadRelationNode(ctx context.Context, parents reflect.Valu
 		}
 
 		relatedBySourceKey = make(map[typedKey][]reflect.Value, len(sourceKeys))
+		var (
+			relatedMeta       *modelMeta
+			targetColumnIndex []int
+		)
 		for rowIdx := 0; rowIdx < relatedRows.Len(); rowIdx++ {
 			related := dereferenceModelValue(relatedRows.Index(rowIdx))
 			if !related.IsValid() {
 				continue
 			}
-			targetValue, ok, err := relationColumnValue(related, node.relation.TargetColumn.Name)
+			if relatedMeta == nil {
+				var err error
+				relatedMeta, err = lookupModelMetaForType(related.Type())
+				if err != nil {
+					return err
+				}
+				if info, ok := relatedMeta.byColumn[node.relation.TargetColumn.Name]; ok {
+					targetColumnIndex = info.index
+				}
+			}
+			targetValue, ok, err := relationColumnValue(related, node.relation.TargetColumn.Name, relatedMeta, targetColumnIndex)
 			if err != nil {
 				return err
 			}
@@ -212,7 +247,7 @@ func (q *SelectQuery) loadRelationNode(ctx context.Context, parents reflect.Valu
 		if !parent.IsValid() {
 			continue
 		}
-		sourceValue, ok, err := relationColumnValue(parent, node.relation.SourceColumn.Name)
+		sourceValue, ok, err := relationColumnValue(parent, node.relation.SourceColumn.Name, parentMeta, sourceColumnIndex)
 		if err != nil {
 			return err
 		}
@@ -220,7 +255,7 @@ func (q *SelectQuery) loadRelationNode(ctx context.Context, parents reflect.Valu
 			continue
 		}
 		matches := relatedBySourceKey[toTypedKey(sourceValue)]
-		if err := setRelationValue(parent, node.name, node.relation.Type, matches); err != nil {
+		if err := setRelationValue(parent, node.name, node.relation.Type, matches, parentMeta, relationIndex); err != nil {
 			return err
 		}
 	}
@@ -318,9 +353,26 @@ func (q *SelectQuery) loadRelatedManyToManyRows(
 		}
 
 		batchDestElem := batchDest.Elem()
+		var (
+			batchMeta         *modelMeta
+			targetColumnIndex []int
+		)
 		for i := 0; i < batchDestElem.Len(); i++ {
 			row := dereferenceModelValue(batchDestElem.Index(i))
-			tVal, ok, err := relationColumnValue(row, relation.TargetColumn.Name)
+			if !row.IsValid() {
+				continue
+			}
+			if batchMeta == nil {
+				var err error
+				batchMeta, err = lookupModelMetaForType(row.Type())
+				if err != nil {
+					return reflect.Value{}, nil, err
+				}
+				if info, ok := batchMeta.byColumn[relation.TargetColumn.Name]; ok {
+					targetColumnIndex = info.index
+				}
+			}
+			tVal, ok, err := relationColumnValue(row, relation.TargetColumn.Name, batchMeta, targetColumnIndex)
 			if err != nil {
 				return reflect.Value{}, nil, err
 			}
@@ -343,10 +395,27 @@ func (q *SelectQuery) loadRelatedManyToManyRows(
 		sourceKeysByTargetKey[tKey] = append(sourceKeysByTargetKey[tKey], sKey)
 	}
 
+	var (
+		relatedMeta       *modelMeta
+		targetColumnIndex []int
+	)
 	for rowIdx := 0; rowIdx < relatedRows.Len(); rowIdx++ {
 		row := relatedRows.Index(rowIdx)
 		deref := dereferenceModelValue(row)
-		tVal, ok, err := relationColumnValue(deref, relation.TargetColumn.Name)
+		if !deref.IsValid() {
+			continue
+		}
+		if relatedMeta == nil {
+			var err error
+			relatedMeta, err = lookupModelMetaForType(deref.Type())
+			if err != nil {
+				return reflect.Value{}, nil, err
+			}
+			if info, ok := relatedMeta.byColumn[relation.TargetColumn.Name]; ok {
+				targetColumnIndex = info.index
+			}
+		}
+		tVal, ok, err := relationColumnValue(deref, relation.TargetColumn.Name, relatedMeta, targetColumnIndex)
 		if err != nil {
 			return reflect.Value{}, nil, err
 		}
@@ -410,19 +479,25 @@ func (q *SelectQuery) loadRelatedRows(
 	return relatedRows.Elem(), nil
 }
 
-func (q *SelectQuery) validateRelationField(parent reflect.Value, relation schema.RelationDef) error {
+func (q *SelectQuery) validateRelationField(parent reflect.Value, relation schema.RelationDef, meta *modelMeta) error {
 	if _, err := lookupTableModelBinding(parent.Type(), relation.SourceColumn.Table, true); err != nil {
 		return err
 	}
-	meta, _, err := lookupModelMeta(parent.Addr().Interface())
-	if err != nil {
-		return err
+	if meta == nil {
+		var err error
+		meta, _, err = lookupModelMeta(parent.Addr().Interface())
+		if err != nil {
+			return err
+		}
 	}
 	fieldInfo, ok := meta.byRelation[relation.Name]
 	if !ok {
 		return fmt.Errorf("rain: relation %q requires a struct field tagged with `rain:\"relation:%s\"`", relation.Name, relation.Name)
 	}
-	field := parent.FieldByIndex(fieldInfo.index)
+	field, err := fieldByIndexAlloc(parent, fieldInfo.index)
+	if err != nil {
+		return err
+	}
 	switch relation.Type {
 	case schema.RelationTypeBelongsTo, schema.RelationTypeHasOne:
 		if field.Kind() != reflect.Struct && field.Kind() != reflect.Pointer {
@@ -486,16 +561,25 @@ func (q *SelectQuery) relationElementTypeFromType(parentType reflect.Type, relat
 	}
 }
 
-func relationColumnValue(model reflect.Value, columnName string) (any, bool, error) {
-	meta, _, err := lookupModelMeta(model.Addr().Interface())
+func relationColumnValue(model reflect.Value, columnName string, meta *modelMeta, index []int) (any, bool, error) {
+	if index == nil {
+		if meta == nil {
+			var err error
+			meta, _, err = lookupModelMeta(model.Addr().Interface())
+			if err != nil {
+				return nil, false, err
+			}
+		}
+		fieldInfo, ok := meta.byColumn[columnName]
+		if !ok {
+			return nil, false, nil
+		}
+		index = fieldInfo.index
+	}
+	field, err := fieldByIndexAlloc(model, index)
 	if err != nil {
 		return nil, false, err
 	}
-	fieldInfo, ok := meta.byColumn[columnName]
-	if !ok {
-		return nil, false, nil
-	}
-	field := model.FieldByIndex(fieldInfo.index)
 	if field.Kind() == reflect.Pointer {
 		if field.IsNil() {
 			return nil, false, nil
@@ -505,16 +589,25 @@ func relationColumnValue(model reflect.Value, columnName string) (any, bool, err
 	return field.Interface(), true, nil
 }
 
-func setRelationValue(parent reflect.Value, relationName string, relationType schema.RelationType, matches []reflect.Value) error {
-	meta, _, err := lookupModelMeta(parent.Addr().Interface())
+func setRelationValue(parent reflect.Value, relationName string, relationType schema.RelationType, matches []reflect.Value, meta *modelMeta, index []int) error {
+	if index == nil {
+		if meta == nil {
+			var err error
+			meta, _, err = lookupModelMeta(parent.Addr().Interface())
+			if err != nil {
+				return err
+			}
+		}
+		fieldInfo, ok := meta.byRelation[relationName]
+		if !ok {
+			return fmt.Errorf("rain: relation %q not found in model metadata", relationName)
+		}
+		index = fieldInfo.index
+	}
+	field, err := fieldByIndexAlloc(parent, index)
 	if err != nil {
 		return err
 	}
-	fieldInfo, ok := meta.byRelation[relationName]
-	if !ok {
-		return fmt.Errorf("rain: relation %q not found in model metadata", relationName)
-	}
-	field := parent.FieldByIndex(fieldInfo.index)
 
 	switch relationType {
 	case schema.RelationTypeBelongsTo, schema.RelationTypeHasOne:
@@ -571,17 +664,41 @@ func dereferenceModelValue(value reflect.Value) reflect.Value {
 }
 
 func toTypedKey(value any) typedKey {
-	typ := reflect.TypeOf(value)
-	return typedKey{typ: typ, value: normalizeTypedKeyValue(value)}
+	// OPTIMIZATION: Type-switch fast-paths for common primary/foreign key types
+	// to avoid reflect.TypeOf and reflect.ValueOf allocations.
+	switch v := value.(type) {
+	case int64:
+		return typedKey{typ: reflect.TypeFor[int64](), value: v}
+	case string:
+		return typedKey{typ: reflect.TypeFor[string](), value: v}
+	case int:
+		return typedKey{typ: reflect.TypeFor[int](), value: v}
+	case uint32:
+		return typedKey{typ: reflect.TypeFor[uint32](), value: v}
+	case int32:
+		return typedKey{typ: reflect.TypeFor[int32](), value: v}
+	case uint64:
+		return typedKey{typ: reflect.TypeFor[uint64](), value: v}
+	}
+
+	return typedKey{typ: reflect.TypeOf(value), value: normalizeTypedKeyValue(value)}
 }
 
 func normalizeTypedKeyValue(value any) any {
-	if bytes, ok := value.([]byte); ok {
-		return string(bytes)
+	// OPTIMIZATION: Type-switch fast-paths for common comparable types.
+	switch v := value.(type) {
+	case int64, string, int, bool, float64:
+		return v
+	case []byte:
+		return string(v)
+	}
+
+	if value == nil {
+		return nil
 	}
 
 	rv := reflect.ValueOf(value)
-	if rv.IsValid() && rv.Type().Comparable() {
+	if rv.Type().Comparable() {
 		return value
 	}
 
