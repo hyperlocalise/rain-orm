@@ -867,8 +867,8 @@ func TestCoverageDDLMethodsAndHelpers(t *testing.T) {
 	if got, err := expressionDDLSQL(pg, users.TableDef(), schema.Raw("1 = 1")); err != nil || got != "1 = 1" {
 		t.Fatalf("unexpected raw expression: %q err=%v", got, err)
 	}
-	if _, err := expressionDDLSQL(pg, users.TableDef(), schema.Raw("?", 1)); err == nil {
-		t.Fatalf("expected raw expression with args to fail")
+	if got, err := expressionDDLSQL(pg, users.TableDef(), schema.Raw("?", 1)); err != nil || got != "1" {
+		t.Fatalf("expected raw expression with args to succeed, got %q err=%v", got, err)
 	}
 	if _, err := expressionDDLSQL(pg, users.TableDef(), schema.AliasExpr{}); err == nil {
 		t.Fatalf("expected unsupported expression to fail")

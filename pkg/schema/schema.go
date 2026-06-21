@@ -566,15 +566,29 @@ func (c *AnyColumn) ColumnDef() *ColumnDef {
 	return c.def
 }
 
+// Eq compares this column to a value or expression for equality.
+func (c *AnyColumn) Eq(value any) ComparisonExpr { return Eq(c, value) }
+
+// Ne compares this column to a value or expression for inequality.
+func (c *AnyColumn) Ne(value any) ComparisonExpr { return Ne(c, value) }
+
+// Gt compares this column to a value or expression using >.
+func (c *AnyColumn) Gt(value any) ComparisonExpr { return Gt(c, value) }
+
+// Gte compares this column to a value or expression using >=.
+func (c *AnyColumn) Gte(value any) ComparisonExpr { return Gte(c, value) }
+
+// Lt compares this column to a value or expression using <.
+func (c *AnyColumn) Lt(value any) ComparisonExpr { return Lt(c, value) }
+
+// Lte compares this column to a value or expression using <=.
+func (c *AnyColumn) Lte(value any) ComparisonExpr { return Lte(c, value) }
+
 // Asc returns an ascending sort expression.
-func (c *AnyColumn) Asc() OrderExpr {
-	return OrderExpr{Expr: c, Direction: SortAsc}
-}
+func (c *AnyColumn) Asc() OrderExpr { return Asc(c) }
 
 // Desc returns a descending sort expression.
-func (c *AnyColumn) Desc() OrderExpr {
-	return OrderExpr{Expr: c, Direction: SortDesc}
-}
+func (c *AnyColumn) Desc() OrderExpr { return Desc(c) }
 
 // As aliases this column in a SELECT list.
 func (c *AnyColumn) As(alias string) AliasExpr {
@@ -582,26 +596,14 @@ func (c *AnyColumn) As(alias string) AliasExpr {
 }
 
 // IsNull creates an IS NULL predicate.
-func (c *AnyColumn) IsNull() NullCheckExpr {
-	return NullCheckExpr{Expr: c, Negated: false}
-}
+func (c *AnyColumn) IsNull() NullCheckExpr { return IsNull(c) }
 
 // IsNotNull creates an IS NOT NULL predicate.
-func (c *AnyColumn) IsNotNull() NullCheckExpr {
-	return NullCheckExpr{Expr: c, Negated: true}
-}
+func (c *AnyColumn) IsNotNull() NullCheckExpr { return IsNotNull(c) }
 
 // In compares this column to a set of Go values or expressions using SQL IN.
 func (c *AnyColumn) In(values ...any) InExpr {
-	exprs := make([]Expression, 0, len(values))
-	for _, value := range values {
-		if expr, ok := value.(Expression); ok {
-			exprs = append(exprs, expr)
-		} else {
-			exprs = append(exprs, ValueExpr{Value: value})
-		}
-	}
-	return InExpr{Left: c, Values: exprs}
+	return In(c, values...)
 }
 
 // InSubquery compares this column to the result of a subquery.
@@ -1063,6 +1065,30 @@ func (b BinaryExpr) As(alias string) AliasExpr {
 	return As(b, alias)
 }
 
+// Eq compares this expression to a value or expression for equality.
+func (b BinaryExpr) Eq(value any) ComparisonExpr { return Eq(b, value) }
+
+// Ne compares this expression to a value or expression for inequality.
+func (b BinaryExpr) Ne(value any) ComparisonExpr { return Ne(b, value) }
+
+// Gt compares this expression to a value or expression using >.
+func (b BinaryExpr) Gt(value any) ComparisonExpr { return Gt(b, value) }
+
+// Gte compares this expression to a value or expression using >=.
+func (b BinaryExpr) Gte(value any) ComparisonExpr { return Gte(b, value) }
+
+// Lt compares this expression to a value or expression using <.
+func (b BinaryExpr) Lt(value any) ComparisonExpr { return Lt(b, value) }
+
+// Lte compares this expression to a value or expression using <=.
+func (b BinaryExpr) Lte(value any) ComparisonExpr { return Lte(b, value) }
+
+// Asc returns an ascending sort expression.
+func (b BinaryExpr) Asc() OrderExpr { return Asc(b) }
+
+// Desc returns a descending sort expression.
+func (b BinaryExpr) Desc() OrderExpr { return Desc(b) }
+
 // Add adds a value or expression to this binary expression.
 func (b BinaryExpr) Add(value any) BinaryExpr {
 	return BinaryExpr{Left: b, Operator: "+", Right: wrapValue(value)}
@@ -1187,6 +1213,30 @@ func (c CaseExpr) As(alias string) AliasExpr {
 	return As(c, alias)
 }
 
+// Eq compares this expression to a value or expression for equality.
+func (c CaseExpr) Eq(value any) ComparisonExpr { return Eq(c, value) }
+
+// Ne compares this expression to a value or expression for inequality.
+func (c CaseExpr) Ne(value any) ComparisonExpr { return Ne(c, value) }
+
+// Gt compares this expression to a value or expression using >.
+func (c CaseExpr) Gt(value any) ComparisonExpr { return Gt(c, value) }
+
+// Gte compares this expression to a value or expression using >=.
+func (c CaseExpr) Gte(value any) ComparisonExpr { return Gte(c, value) }
+
+// Lt compares this expression to a value or expression using <.
+func (c CaseExpr) Lt(value any) ComparisonExpr { return Lt(c, value) }
+
+// Lte compares this expression to a value or expression using <=.
+func (c CaseExpr) Lte(value any) ComparisonExpr { return Lte(c, value) }
+
+// Asc returns an ascending sort expression.
+func (c CaseExpr) Asc() OrderExpr { return Asc(c) }
+
+// Desc returns a descending sort expression.
+func (c CaseExpr) Desc() OrderExpr { return Desc(c) }
+
 // AggregateExpr renders SQL aggregate functions.
 //
 // Function must be non-empty. Distinct must not be combined with Star.
@@ -1204,6 +1254,30 @@ func (a AggregateExpr) As(alias string) AliasExpr {
 	return As(a, alias)
 }
 
+// Eq compares this expression to a value or expression for equality.
+func (a AggregateExpr) Eq(value any) ComparisonExpr { return Eq(a, value) }
+
+// Ne compares this expression to a value or expression for inequality.
+func (a AggregateExpr) Ne(value any) ComparisonExpr { return Ne(a, value) }
+
+// Gt compares this expression to a value or expression using >.
+func (a AggregateExpr) Gt(value any) ComparisonExpr { return Gt(a, value) }
+
+// Gte compares this expression to a value or expression using >=.
+func (a AggregateExpr) Gte(value any) ComparisonExpr { return Gte(a, value) }
+
+// Lt compares this expression to a value or expression using <.
+func (a AggregateExpr) Lt(value any) ComparisonExpr { return Lt(a, value) }
+
+// Lte compares this expression to a value or expression using <=.
+func (a AggregateExpr) Lte(value any) ComparisonExpr { return Lte(a, value) }
+
+// Asc returns an ascending sort expression.
+func (a AggregateExpr) Asc() OrderExpr { return Asc(a) }
+
+// Desc returns a descending sort expression.
+func (a AggregateExpr) Desc() OrderExpr { return Desc(a) }
+
 // CoalesceExpr renders COALESCE(expr1, expr2, ...).
 type CoalesceExpr struct {
 	Exprs []Expression
@@ -1215,6 +1289,30 @@ func (CoalesceExpr) isExpression() {}
 func (c CoalesceExpr) As(alias string) AliasExpr {
 	return As(c, alias)
 }
+
+// Eq compares this expression to a value or expression for equality.
+func (c CoalesceExpr) Eq(value any) ComparisonExpr { return Eq(c, value) }
+
+// Ne compares this expression to a value or expression for inequality.
+func (c CoalesceExpr) Ne(value any) ComparisonExpr { return Ne(c, value) }
+
+// Gt compares this expression to a value or expression using >.
+func (c CoalesceExpr) Gt(value any) ComparisonExpr { return Gt(c, value) }
+
+// Gte compares this expression to a value or expression using >=.
+func (c CoalesceExpr) Gte(value any) ComparisonExpr { return Gte(c, value) }
+
+// Lt compares this expression to a value or expression using <.
+func (c CoalesceExpr) Lt(value any) ComparisonExpr { return Lt(c, value) }
+
+// Lte compares this expression to a value or expression using <=.
+func (c CoalesceExpr) Lte(value any) ComparisonExpr { return Lte(c, value) }
+
+// Asc returns an ascending sort expression.
+func (c CoalesceExpr) Asc() OrderExpr { return Asc(c) }
+
+// Desc returns a descending sort expression.
+func (c CoalesceExpr) Desc() OrderExpr { return Desc(c) }
 
 // AliasExpr renames a computed expression in a select list.
 type AliasExpr struct {
@@ -1400,9 +1498,136 @@ func (r RawExpr) As(alias string) AliasExpr {
 	return As(r, alias)
 }
 
+// Eq compares this expression to a value or expression for equality.
+func (r RawExpr) Eq(value any) ComparisonExpr { return Eq(r, value) }
+
+// Ne compares this expression to a value or expression for inequality.
+func (r RawExpr) Ne(value any) ComparisonExpr { return Ne(r, value) }
+
+// Gt compares this expression to a value or expression using >.
+func (r RawExpr) Gt(value any) ComparisonExpr { return Gt(r, value) }
+
+// Gte compares this expression to a value or expression using >=.
+func (r RawExpr) Gte(value any) ComparisonExpr { return Gte(r, value) }
+
+// Lt compares this expression to a value or expression using <.
+func (r RawExpr) Lt(value any) ComparisonExpr { return Lt(r, value) }
+
+// Lte compares this expression to a value or expression using <=.
+func (r RawExpr) Lte(value any) ComparisonExpr { return Lte(r, value) }
+
+// Asc returns an ascending sort expression.
+func (r RawExpr) Asc() OrderExpr { return Asc(r) }
+
+// Desc returns a descending sort expression.
+func (r RawExpr) Desc() OrderExpr { return Desc(r) }
+
 // Raw returns a raw SQL expression.
 func Raw(sql string, args ...any) RawExpr {
 	return RawExpr{SQL: sql, Args: args}
+}
+
+// Eq compares two expressions or values for equality.
+func Eq(left, right any) ComparisonExpr {
+	return ComparisonExpr{Left: wrapValue(left), Operator: "=", Right: wrapValue(right)}
+}
+
+// Ne compares two expressions or values for inequality.
+func Ne(left, right any) ComparisonExpr {
+	return ComparisonExpr{Left: wrapValue(left), Operator: "<>", Right: wrapValue(right)}
+}
+
+// Gt compares two expressions or values using >.
+func Gt(left, right any) ComparisonExpr {
+	return ComparisonExpr{Left: wrapValue(left), Operator: ">", Right: wrapValue(right)}
+}
+
+// Gte compares two expressions or values using >=.
+func Gte(left, right any) ComparisonExpr {
+	return ComparisonExpr{Left: wrapValue(left), Operator: ">=", Right: wrapValue(right)}
+}
+
+// Lt compares two expressions or values using <.
+func Lt(left, right any) ComparisonExpr {
+	return ComparisonExpr{Left: wrapValue(left), Operator: "<", Right: wrapValue(right)}
+}
+
+// Lte compares two expressions or values using <=.
+func Lte(left, right any) ComparisonExpr {
+	return ComparisonExpr{Left: wrapValue(left), Operator: "<=", Right: wrapValue(right)}
+}
+
+// Like compares an expression to a pattern using SQL LIKE.
+func Like(left any, pattern string) ComparisonExpr {
+	return ComparisonExpr{Left: wrapValue(left), Operator: "LIKE", Right: ValueExpr{Value: pattern}}
+}
+
+// NotLike compares an expression to a pattern using SQL NOT LIKE.
+func NotLike(left any, pattern string) ComparisonExpr {
+	return ComparisonExpr{Left: wrapValue(left), Operator: "NOT LIKE", Right: ValueExpr{Value: pattern}}
+}
+
+// ILike compares an expression to a pattern using SQL ILIKE.
+func ILike(left any, pattern string) ComparisonExpr {
+	return ComparisonExpr{Left: wrapValue(left), Operator: "ILIKE", Right: ValueExpr{Value: pattern}}
+}
+
+// NotILike compares an expression to a pattern using SQL NOT ILIKE.
+func NotILike(left any, pattern string) ComparisonExpr {
+	return ComparisonExpr{Left: wrapValue(left), Operator: "NOT ILIKE", Right: ValueExpr{Value: pattern}}
+}
+
+// In compares an expression to a set of values or a subquery.
+func In(left any, values ...any) InExpr {
+	l := wrapValue(left)
+	exprs := make([]Expression, 0, len(values))
+	for _, v := range values {
+		exprs = append(exprs, wrapValue(v))
+	}
+	return InExpr{Left: l, Values: exprs}
+}
+
+// NotIn compares an expression to a set of values or a subquery using NOT IN.
+func NotIn(left any, values ...any) InExpr {
+	expr := In(left, values...)
+	expr.Negated = true
+	return expr
+}
+
+// Between compares an expression to a range using SQL BETWEEN.
+func Between(left, start, end any) BetweenExpr {
+	return BetweenExpr{
+		Left:  wrapValue(left),
+		Start: wrapValue(start),
+		End:   wrapValue(end),
+	}
+}
+
+// NotBetween compares an expression to a range using SQL NOT BETWEEN.
+func NotBetween(left, start, end any) BetweenExpr {
+	expr := Between(left, start, end)
+	expr.Negated = true
+	return expr
+}
+
+// IsNull creates an IS NULL predicate.
+func IsNull(expr any) NullCheckExpr {
+	return NullCheckExpr{Expr: wrapValue(expr), Negated: false}
+}
+
+// IsNotNull creates an IS NOT NULL predicate.
+func IsNotNull(expr any) NullCheckExpr {
+	return NullCheckExpr{Expr: wrapValue(expr), Negated: true}
+}
+
+// Asc returns an ascending sort expression.
+func Asc(expr any) OrderExpr {
+	return OrderExpr{Expr: wrapValue(expr), Direction: SortAsc}
+}
+
+// Desc returns a descending sort expression.
+func Desc(expr any) OrderExpr {
+	return OrderExpr{Expr: wrapValue(expr), Direction: SortDesc}
 }
 
 // And combines predicates with AND.
@@ -1442,11 +1667,18 @@ func Concat(values ...any) ConcatExpr {
 	return ConcatExpr{Exprs: exprs}
 }
 
-func wrapValue(v any) Expression {
+// ReflectExpression converts a value to an Expression.
+// If it's already an Expression, it's returned as-is.
+// Otherwise, it's wrapped in a ValueExpr.
+func ReflectExpression(v any) Expression {
 	if expr, ok := v.(Expression); ok {
 		return expr
 	}
 	return ValueExpr{Value: v}
+}
+
+func wrapValue(v any) Expression {
+	return ReflectExpression(v)
 }
 
 // IndexBuilder configures a table index.

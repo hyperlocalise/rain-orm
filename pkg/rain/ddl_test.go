@@ -357,20 +357,20 @@ func TestCreateTableSQLValidation(t *testing.T) {
 		t.Fatalf("expected mismatched foreign key arity to fail")
 	}
 
-	unsupportedCheck := schema.Define("unsupported_check", func(t *struct {
+	supportedCheck := schema.Define("supported_check", func(t *struct {
 		schema.TableModel
 		ID *schema.Column[int64]
 	},
 	) {
 		t.ID = t.BigSerial("id").PrimaryKey()
-		t.Check("unsupported_check_expr", schema.ComparisonExpr{
+		t.Check("supported_check_expr", schema.ComparisonExpr{
 			Left:     schema.Raw("lower(?)", "value"),
 			Operator: "=",
 			Right:    schema.ValueExpr{Value: "x"},
 		})
 	})
-	if _, err := db.CreateTableSQL(unsupportedCheck); err == nil {
-		t.Fatalf("expected raw CHECK args to fail")
+	if sql, err := db.CreateTableSQL(supportedCheck); err != nil || !strings.Contains(sql, "CHECK (lower('value') = 'x')") {
+		t.Fatalf("expected raw CHECK with supported args to succeed, got sql=%q err=%v", sql, err)
 	}
 
 	crossTableCheck := schema.Define("cross_table_check", func(t *struct {

@@ -703,10 +703,31 @@ func expressionDDLSQL(d dialect.Dialect, table *schema.TableDef, expr schema.Exp
 		}
 		return "(" + strings.Join(parts, " "+value.Operator+" ") + ")", nil
 	case schema.RawExpr:
-		if len(value.Args) != 0 {
-			return "", errors.New("raw SQL CHECK expressions cannot contain args")
+		if len(value.Args) == 0 {
+			return value.SQL, nil
 		}
-		return value.SQL, nil
+
+		var builder strings.Builder
+		argIndex := 0
+		for idx := range len(value.SQL) {
+			if value.SQL[idx] != '?' {
+				builder.WriteByte(value.SQL[idx])
+				continue
+			}
+			if argIndex >= len(value.Args) {
+				return "", errors.New("rain: raw SQL placeholder count does not match args")
+			}
+			rendered, err := expressionDDLSQL(d, table, schema.ReflectExpression(value.Args[argIndex]))
+			if err != nil {
+				return "", err
+			}
+			builder.WriteString(rendered)
+			argIndex++
+		}
+		if argIndex != len(value.Args) {
+			return "", errors.New("rain: raw SQL has unused args")
+		}
+		return builder.String(), nil
 	default:
 		return "", fmt.Errorf("unsupported DDL expression type %T", expr)
 	}
