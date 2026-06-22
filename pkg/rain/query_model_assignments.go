@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"reflect"
 	"slices"
-	"time"
 	"strings"
+	"time"
 
 	"github.com/hyperlocalise/rain-orm/pkg/schema"
 )
