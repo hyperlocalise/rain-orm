@@ -357,10 +357,12 @@ func (q *InsertQuery) writeModelsSQL(ctx *compileContext) error {
 		index  []int
 	}
 	activeFields := make([]activeField, 0, len(plan.fields))
-	for _, f := range plan.fields {
+	includedMask := make([]bool, len(plan.fields))
+	for idx, f := range plan.fields {
 		fieldValue := firstModelVal.FieldByIndex(f.index)
 		if _, include := fieldValueForInsert(f.column, fieldValue, true); include {
 			activeFields = append(activeFields, activeField(f))
+			includedMask[idx] = true
 		}
 	}
 
@@ -393,29 +395,35 @@ func (q *InsertQuery) writeModelsSQL(ctx *compileContext) error {
 		}
 
 		ctx.writeByte('(')
-		rowActiveCount := 0
-		for _, f := range plan.fields {
-			fieldVal := rowVal.FieldByIndex(f.index)
-			if _, include := fieldValueForInsert(f.column, fieldVal, true); include {
-				rowActiveCount++
-			}
-		}
-		if rowActiveCount != len(activeFields) {
-			return fmt.Errorf("rain: insert row %d targets %d columns, expected %d", i+1, rowActiveCount, len(activeFields))
-		}
 
-		for j, f := range activeFields {
-			if j > 0 {
-				ctx.writeString(", ")
-			}
+		// OPTIMIZATION: Use the pre-calculated active fields to write the row
+		// in a single pass. We also validate that the row shape matches the
+		// first model by ensuring all previously active fields are still
+		// present and no new ones would have been included (by checking the mask
+		// against the full plan).
+		activeIdx := 0
+		for j, f := range plan.fields {
 			fieldVal := rowVal.FieldByIndex(f.index)
 			resolved, include := fieldValueForInsert(f.column, fieldVal, true)
-			if !include {
+
+			if include != includedMask[j] {
+				if include {
+					return fmt.Errorf("rain: insert row %d has unexpected column %q", i+1, f.column.Name)
+				}
 				return fmt.Errorf("rain: insert row %d is missing column %q", i+1, f.column.Name)
+			}
+
+			if !include {
+				continue
+			}
+
+			if activeIdx > 0 {
+				ctx.writeString(", ")
 			}
 			if err := ctx.writeAny(resolved); err != nil {
 				return err
 			}
+			activeIdx++
 		}
 		ctx.writeByte(')')
 	}

@@ -146,7 +146,7 @@ func TestInsertMultiRowColumnMismatchReturnsError(t *testing.T) {
 			{Email: "bob@example.com", Name: ""},
 		}).
 		ToSQL()
-	if err == nil || !strings.Contains(err.Error(), "targets 2 columns, expected 3") {
+	if err == nil || !strings.Contains(err.Error(), "is missing column \"active\"") {
 		t.Fatalf("expected column mismatch error, got %v", err)
 	}
 }
