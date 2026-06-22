@@ -1667,10 +1667,10 @@ func Concat(values ...any) ConcatExpr {
 	return ConcatExpr{Exprs: exprs}
 }
 
-// ReflectExpression converts a value to an Expression.
+// ToExpression converts a value to an Expression.
 // If it's already an Expression, it's returned as-is.
 // Otherwise, it's wrapped in a ValueExpr.
-func ReflectExpression(v any) Expression {
+func ToExpression(v any) Expression {
 	if expr, ok := v.(Expression); ok {
 		return expr
 	}
@@ -1678,7 +1678,7 @@ func ReflectExpression(v any) Expression {
 }
 
 func wrapValue(v any) Expression {
-	return ReflectExpression(v)
+	return ToExpression(v)
 }
 
 // IndexBuilder configures a table index.

@@ -692,6 +692,102 @@ func expressionDDLSQL(d dialect.Dialect, table *schema.TableDef, expr schema.Exp
 			return inner + " IS NOT NULL", nil
 		}
 		return inner + " IS NULL", nil
+	case schema.BinaryExpr:
+		left, err := expressionDDLSQL(d, table, value.Left)
+		if err != nil {
+			return "", err
+		}
+		right, err := expressionDDLSQL(d, table, value.Right)
+		if err != nil {
+			return "", err
+		}
+		return "(" + left + " " + value.Operator + " " + right + ")", nil
+	case schema.BetweenExpr:
+		left, err := expressionDDLSQL(d, table, value.Left)
+		if err != nil {
+			return "", err
+		}
+		start, err := expressionDDLSQL(d, table, value.Start)
+		if err != nil {
+			return "", err
+		}
+		end, err := expressionDDLSQL(d, table, value.End)
+		if err != nil {
+			return "", err
+		}
+		op := "BETWEEN"
+		if value.Negated {
+			op = "NOT BETWEEN"
+		}
+		return left + " " + op + " " + start + " AND " + end, nil
+	case schema.AggregateExpr:
+		if value.Star && value.Distinct {
+			return "", fmt.Errorf("rain: aggregate %s cannot combine DISTINCT with *", value.Function)
+		}
+		var builder strings.Builder
+		builder.WriteString(value.Function)
+		builder.WriteByte('(')
+		if value.Distinct {
+			builder.WriteString("DISTINCT ")
+		}
+		if value.Star {
+			builder.WriteByte('*')
+		} else if value.Expr != nil {
+			rendered, err := expressionDDLSQL(d, table, value.Expr)
+			if err != nil {
+				return "", err
+			}
+			builder.WriteString(rendered)
+		} else {
+			return "", fmt.Errorf("rain: aggregate %s requires an expression", value.Function)
+		}
+		builder.WriteByte(')')
+		return builder.String(), nil
+	case schema.CoalesceExpr:
+		var parts []string
+		for _, expr := range value.Exprs {
+			rendered, err := expressionDDLSQL(d, table, expr)
+			if err != nil {
+				return "", err
+			}
+			parts = append(parts, rendered)
+		}
+		return "COALESCE(" + strings.Join(parts, ", ") + ")", nil
+	case schema.CaseExpr:
+		var builder strings.Builder
+		builder.WriteString("CASE")
+		if value.ValueExpression != nil {
+			builder.WriteByte(' ')
+			rendered, err := expressionDDLSQL(d, table, value.ValueExpression)
+			if err != nil {
+				return "", err
+			}
+			builder.WriteString(rendered)
+		}
+		for _, pair := range value.WhenThenPairs {
+			builder.WriteString(" WHEN ")
+			when, err := expressionDDLSQL(d, table, pair.When)
+			if err != nil {
+				return "", err
+			}
+			builder.WriteString(when)
+			builder.WriteString(" THEN ")
+			then, err := expressionDDLSQL(d, table, pair.Then)
+			if err != nil {
+				return "", err
+			}
+			builder.WriteString(then)
+		}
+		if value.ElseExpression != nil {
+			builder.WriteString(" ELSE ")
+			rendered, err := expressionDDLSQL(d, table, value.ElseExpression)
+			if err != nil {
+				return "", err
+			}
+			builder.WriteString(rendered)
+		}
+		builder.WriteString(" END")
+		return builder.String(), nil
 	case schema.LogicalExpr:
 		parts := make([]string, 0, len(value.Exprs))
 		for _, part := range value.Exprs {
@@ -717,7 +813,7 @@ func expressionDDLSQL(d dialect.Dialect, table *schema.TableDef, expr schema.Exp
 			if argIndex >= len(value.Args) {
 				return "", errors.New("rain: raw SQL placeholder count does not match args")
 			}
-			rendered, err := expressionDDLSQL(d, table, schema.ReflectExpression(value.Args[argIndex]))
+			rendered, err := expressionDDLSQL(d, table, schema.ToExpression(value.Args[argIndex]))
 			if err != nil {
 				return "", err
 			}
