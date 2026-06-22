@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/hyperlocalise/rain-orm/pkg/schema"
 )
@@ -130,6 +131,14 @@ func insertValueForField(fieldValue reflect.Value) (value any, include bool, exp
 	if !fieldValue.IsValid() {
 		return nil, false, false
 	}
+
+	// OPTIMIZATION: Check for nil pointers before calling Interface() to avoid
+	// redundant heap allocations from boxing nil pointers.
+	kind := fieldValue.Kind()
+	if kind == reflect.Pointer && fieldValue.IsNil() {
+		return nil, false, false
+	}
+
 	if fieldValue.CanInterface() {
 		if setter, ok := fieldValue.Interface().(setValueProvider); ok {
 			value, include = setter.rainSetValue()
@@ -137,10 +146,7 @@ func insertValueForField(fieldValue reflect.Value) (value any, include bool, exp
 		}
 	}
 
-	if fieldValue.Kind() == reflect.Pointer {
-		if fieldValue.IsNil() {
-			return nil, false, false
-		}
+	if kind == reflect.Pointer {
 		if fieldValue.Type().Implements(reflect.TypeFor[driver.Valuer]()) {
 			return fieldValue.Interface(), true, true
 		}
@@ -162,5 +168,25 @@ func isZeroInsertValue(value any) bool {
 	if value == nil {
 		return true
 	}
+
+	// OPTIMIZATION: Use a type-switch fast-path for common database types to
+	// avoid the heap allocations and overhead of reflect.ValueOf(value).IsZero().
+	switch v := value.(type) {
+	case int64:
+		return v == 0
+	case int:
+		return v == 0
+	case string:
+		return v == ""
+	case bool:
+		return !v
+	case time.Time:
+		return v.IsZero()
+	case float64:
+		return v == 0
+	case int32:
+		return v == 0
+	}
+
 	return reflect.ValueOf(value).IsZero()
 }
