@@ -253,7 +253,7 @@ func scanRowsAgainstTableDirect(rows *sql.Rows, dest any, table *schema.TableDef
 	}
 
 	targetType := target.Type()
-	if isMappingStructType(targetType) {
+	if targetType.Kind() == reflect.Struct && isMappingStructType(targetType) {
 		plan, err := newRowScanPlanForColumns(cols, targetType, table)
 		if err != nil {
 			return err
@@ -282,7 +282,7 @@ func scanRowsAgainstTableDirect(rows *sql.Rows, dest any, table *schema.TableDef
 
 	if targetType.Kind() == reflect.Slice {
 		elemType := targetType.Elem()
-		if isMappingStructType(elemType) {
+		if isMappingStructType(elemType) || (elemType.Kind() == reflect.Pointer && isMappingStructType(elemType.Elem())) {
 			structType, pointerElems, err := sliceElementStructType(elemType)
 			if err != nil {
 				return err
@@ -1056,7 +1056,7 @@ func scanCachedRowsAgainstTable(result *cachedSelectRows, dest any, table *schem
 
 	target := value.Elem()
 	targetType := target.Type()
-	if isMappingStructType(targetType) {
+	if targetType.Kind() == reflect.Struct && isMappingStructType(targetType) {
 		plan, err := newRowScanPlanForColumns(result.Columns, targetType, table)
 		if err != nil {
 			return err
@@ -1072,7 +1072,7 @@ func scanCachedRowsAgainstTable(result *cachedSelectRows, dest any, table *schem
 
 	if targetType.Kind() == reflect.Slice {
 		elemType := targetType.Elem()
-		if isMappingStructType(elemType) {
+		if isMappingStructType(elemType) || (elemType.Kind() == reflect.Pointer && isMappingStructType(elemType.Elem())) {
 			structType, pointerElems, err := sliceElementStructType(elemType)
 			if err != nil {
 				return err
@@ -1386,9 +1386,6 @@ func newRowScanPlanForColumns(cols []string, modelType reflect.Type, table *sche
 }
 
 func isMappingStructType(t reflect.Type) bool {
-	if t.Kind() == reflect.Pointer {
-		t = t.Elem()
-	}
 	if t.Kind() != reflect.Struct {
 		return false
 	}
