@@ -1115,10 +1115,9 @@ func scanCachedRowsAgainstTable(result *cachedSelectRows, dest any, table *schem
 
 		items := reflect.MakeSlice(targetType, len(result.Rows), len(result.Rows))
 		elemSize := elemType.Size()
-		basePtr := items.Pointer()
 
 		for i, row := range result.Rows {
-			ptr := unsafe.Add(unsafe.Pointer(basePtr), uintptr(i)*elemSize)
+			ptr := unsafe.Add(unsafe.Pointer(items.Pointer()), uintptr(i)*elemSize)
 			item := reflect.NewAt(elemType, ptr).Elem()
 			if err := assignCachedValueToField(item, row[0], colDef); err != nil {
 				return err
