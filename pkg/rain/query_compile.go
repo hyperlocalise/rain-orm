@@ -531,6 +531,7 @@ func (c *compileContext) writeExpressionInContext(expr schema.Expression, contex
 		if len(value.WhenThenPairs) == 0 {
 			return errors.New("rain: CASE expression requires at least one WHEN clause")
 		}
+		c.writeByte('(')
 		c.writeString("CASE")
 		if value.ValueExpression != nil {
 			c.writeByte(' ')
@@ -555,6 +556,7 @@ func (c *compileContext) writeExpressionInContext(expr schema.Expression, contex
 			}
 		}
 		c.writeString(" END")
+		c.writeByte(')')
 	case schema.AggregateExpr:
 		if value.Function == "" {
 			return errors.New("rain: aggregate function name cannot be empty")

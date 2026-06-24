@@ -398,3 +398,103 @@ func TestOrderExprNulls(t *testing.T) {
 		t.Fatalf("expected NULLS LAST")
 	}
 }
+
+func TestFluentAndStandaloneExpressions(t *testing.T) {
+	users := schema.Define("users", func(tu *usersTable) {
+		tu.ID = tu.BigSerial("id").PrimaryKey()
+		tu.Email = tu.VarChar("email", 255).NotNull()
+	})
+
+	t.Run("ReflectExpression", func(t *testing.T) {
+		if got := schema.ReflectExpression(1); reflect.TypeOf(got) != reflect.TypeFor[schema.ValueExpr]() {
+			t.Fatalf("expected ValueExpr, got %T", got)
+		}
+		if got := schema.ReflectExpression(users.ID); got != users.ID {
+			t.Fatalf("expected original Expression back")
+		}
+	})
+
+	t.Run("Standalone functions", func(t *testing.T) {
+		if got := schema.Eq(users.ID, 1); got.Operator != "=" || !reflect.DeepEqual(got.Left, users.ID) {
+			t.Fatalf("Eq failed")
+		}
+		if got := schema.Ne(users.ID, 1); got.Operator != "<>" {
+			t.Fatalf("Ne failed")
+		}
+		if got := schema.Gt(users.ID, 1); got.Operator != ">" {
+			t.Fatalf("Gt failed")
+		}
+		if got := schema.Gte(users.ID, 1); got.Operator != ">=" {
+			t.Fatalf("Gte failed")
+		}
+		if got := schema.Lt(users.ID, 1); got.Operator != "<" {
+			t.Fatalf("Lt failed")
+		}
+		if got := schema.Lte(users.ID, 1); got.Operator != "<=" {
+			t.Fatalf("Lte failed")
+		}
+		if got := schema.Like(users.Email, "%@%"); got.Operator != "LIKE" {
+			t.Fatalf("Like failed")
+		}
+		if got := schema.In(users.ID, 1, 2, 3); len(got.Values) != 3 || got.Negated {
+			t.Fatalf("In failed")
+		}
+		if got := schema.Between(users.ID, 1, 10); got.Negated {
+			t.Fatalf("Between failed")
+		}
+		if got := schema.IsNull(users.ID); got.Negated {
+			t.Fatalf("IsNull failed")
+		}
+		if got := schema.IsNotNull(users.ID); !got.Negated {
+			t.Fatalf("IsNotNull failed")
+		}
+		if got := schema.Asc(users.ID); got.Direction != schema.SortAsc {
+			t.Fatalf("Asc failed")
+		}
+		if got := schema.Desc(users.ID); got.Direction != schema.SortDesc {
+			t.Fatalf("Desc failed")
+		}
+	})
+
+	t.Run("AnyColumn fluent methods", func(t *testing.T) {
+		col := users.C("email")
+		if got := col.Eq("foo"); got.Operator != "=" {
+			t.Fatalf("AnyColumn.Eq failed")
+		}
+		if got := col.IsNull(); got.Negated {
+			t.Fatalf("AnyColumn.IsNull failed")
+		}
+	})
+
+	t.Run("Expression fluent methods", func(t *testing.T) {
+		// BinaryExpr
+		expr := users.ID.Add(1)
+		if got := expr.Gt(10); got.Operator != ">" {
+			t.Fatalf("BinaryExpr.Gt failed")
+		}
+
+		// AggregateExpr
+		agg := schema.Count(users.ID)
+		if got := agg.Lt(5); got.Operator != "<" {
+			t.Fatalf("AggregateExpr.Lt failed")
+		}
+
+		// CaseExpr
+		ce := schema.Case().When(users.ID.Eq(int64(1)), schema.ValueExpr{Value: 1}).End()
+		if got := ce.Eq(1); got.Operator != "=" {
+			t.Fatalf("CaseExpr.Eq failed")
+		}
+
+		// CoalesceExpr
+		coa := schema.Coalesce(users.Email, schema.ValueExpr{Value: "none"})
+		if got := coa.IsNotNull(); !got.Negated {
+			t.Fatalf("CoalesceExpr.IsNotNull failed")
+		}
+
+		// RawExpr
+		raw := schema.Raw("random()")
+		if got := raw.Asc(); got.Direction != schema.SortAsc {
+			t.Fatalf("RawExpr.Asc failed")
+		}
+	})
+}
