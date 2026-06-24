@@ -701,10 +701,7 @@ func toTypedKey(value any) typedKey {
 }
 
 func normalizeTypedKeyValue(value any) any {
-	// OPTIMIZATION: Type-switch fast-paths for common comparable types.
 	switch v := value.(type) {
-	case int64, string, int, bool, float64, int32, uint32, uint64, int16, int8, uint, uint16, uint8, float32:
-		return v
 	case []byte:
 		return string(v)
 	}
