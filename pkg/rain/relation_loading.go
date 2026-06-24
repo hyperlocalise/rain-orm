@@ -677,18 +677,31 @@ func toTypedKey(value any) typedKey {
 		return typedKey{typ: reflect.TypeFor[uint32](), value: v}
 	case int32:
 		return typedKey{typ: reflect.TypeFor[int32](), value: v}
+	case int16:
+		return typedKey{typ: reflect.TypeFor[int16](), value: v}
+	case int8:
+		return typedKey{typ: reflect.TypeFor[int8](), value: v}
+	case uint:
+		return typedKey{typ: reflect.TypeFor[uint](), value: v}
 	case uint64:
 		return typedKey{typ: reflect.TypeFor[uint64](), value: v}
+	case uint16:
+		return typedKey{typ: reflect.TypeFor[uint16](), value: v}
+	case uint8:
+		return typedKey{typ: reflect.TypeFor[uint8](), value: v}
+	case bool:
+		return typedKey{typ: reflect.TypeFor[bool](), value: v}
+	case float64:
+		return typedKey{typ: reflect.TypeFor[float64](), value: v}
+	case float32:
+		return typedKey{typ: reflect.TypeFor[float32](), value: v}
 	}
 
 	return typedKey{typ: reflect.TypeOf(value), value: normalizeTypedKeyValue(value)}
 }
 
 func normalizeTypedKeyValue(value any) any {
-	// OPTIMIZATION: Type-switch fast-paths for common comparable types.
 	switch v := value.(type) {
-	case int64, string, int, bool, float64:
-		return v
 	case []byte:
 		return string(v)
 	}
