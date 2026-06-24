@@ -92,9 +92,9 @@ type rowScanPlan struct {
 type rowScanPlanKey struct {
 	modelType reflect.Type
 
-	// OPTIMIZATION: Avoid strings.Join for models with up to 10 columns by using
+	// OPTIMIZATION: Avoid strings.Join for models with up to 16 columns by using
 	// a fixed-size array. Larger column sets fall back to the dynamic string.
-	columns      [10]string
+	columns      [16]string
 	columnString string
 	numColumns   int
 
@@ -1073,9 +1073,9 @@ func newRowScanPlanForColumns(cols []string, modelType reflect.Type, table *sche
 		modelType:  modelType,
 		numColumns: len(cols),
 	}
-	// OPTIMIZATION: Populate the fixed-size column array for up to 10 columns
+	// OPTIMIZATION: Populate the fixed-size column array for up to 16 columns
 	// to avoid strings.Join allocations in the hot plan lookup path.
-	if len(cols) <= 10 {
+	if len(cols) <= 16 {
 		copy(key.columns[:], cols)
 	} else {
 		key.columnString = strings.Join(cols, "\x00")
