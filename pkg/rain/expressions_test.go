@@ -186,16 +186,17 @@ func TestFluentAndStandaloneExpressionsToSQL(t *testing.T) {
 		}{
 			{"BinaryExpr.Gt", Users.ID.Add(1).Gt(10), `("users"."id" + $1) > $2`},
 			{"AggregateExpr.Lt", schema.Count(Users.ID).Lt(5), `COUNT("users"."id") < $1`},
-			{"CaseExpr.Eq", schema.Case().When(Users.ID.Eq(int64(1)), schema.ValueExpr{Value: "one"}).End().Eq("one"), `(CASE WHEN "users"."id" = $1 THEN $2 END) = $3`},
-			{"CoalesceExpr.IsNotNull", schema.Coalesce(Users.Name, schema.ValueExpr{Value: "N/A"}).IsNotNull(), `COALESCE("users"."name", $1) IS NOT NULL`},
-			{"RawExpr.Asc", schema.Raw("random()").Asc(), `random()`},
+			{"CaseExpr.Eq", schema.Case().When(Users.ID.Eq(int64(1)), "one").End().Eq("one"), `(CASE WHEN "users"."id" = $1 THEN $2 END) = $3`},
+			{"CoalesceExpr.IsNotNull", schema.Coalesce(Users.Name, "N/A").IsNotNull(), `COALESCE("users"."name", $1) IS NOT NULL`},
+			{"SQL.Asc", schema.SQL("random()").Asc(), `ORDER BY random() ASC`},
+			{"SQL.Embedded", schema.SQL("LOWER(?)", Users.Name).Eq("alice"), `LOWER("users"."name") = $1`},
 		}
 
 		for _, tt := range tests {
 			t.Run(tt.name, func(t *testing.T) {
 				var sql string
 				var err error
-				if tt.name == "RawExpr.Asc" {
+				if strings.HasSuffix(tt.name, ".Asc") {
 					sql, _, err = db.Select().From(Users).OrderBy(tt.expr.(schema.OrderExpr)).ToSQL()
 				} else {
 					sql, _, err = db.Select().From(Users).Where(tt.expr.(schema.Predicate)).ToSQL()

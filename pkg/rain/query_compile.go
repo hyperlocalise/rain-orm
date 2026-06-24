@@ -640,13 +640,10 @@ func (c *compileContext) writeRaw(raw schema.RawExpr) error {
 		if argIndex >= len(raw.Args) {
 			return errors.New("rain: raw SQL placeholder count does not match args")
 		}
-		index := c.nextPlaceholderIndex()
 		val := raw.Args[argIndex]
-		if c.hasNames {
-			c.argPlan = append(c.argPlan, compiledArg{kind: compiledArgLiteral, value: val})
+		if err := c.writeAny(val); err != nil {
+			return err
 		}
-		c.args = append(c.args, val)
-		c.writeString(c.dialect.Placeholder(index))
 		argIndex++
 	}
 	if argIndex != len(raw.Args) {

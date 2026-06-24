@@ -1234,26 +1234,29 @@ type CaseBuilder struct {
 // If an expression is provided, it builds a simple CASE (CASE expr WHEN ...).
 // If no expression is provided, it builds a searched CASE (CASE WHEN ...).
 // Passing more than one expression is a programming error and will panic.
-func Case(expr ...Expression) *CaseBuilder {
+func Case(expr ...any) *CaseBuilder {
 	if len(expr) > 1 {
 		panic("schema: Case accepts at most one expression")
 	}
 	builder := &CaseBuilder{}
 	if len(expr) == 1 {
-		builder.caseExpr.ValueExpression = expr[0]
+		builder.caseExpr.ValueExpression = ReflectExpression(expr[0])
 	}
 	return builder
 }
 
 // When adds a WHEN ... THEN pair to the CASE expression.
-func (b *CaseBuilder) When(when Expression, then Expression) *CaseBuilder {
-	b.caseExpr.WhenThenPairs = append(b.caseExpr.WhenThenPairs, WhenThen{When: when, Then: then})
+func (b *CaseBuilder) When(when any, then any) *CaseBuilder {
+	b.caseExpr.WhenThenPairs = append(b.caseExpr.WhenThenPairs, WhenThen{
+		When: ReflectExpression(when),
+		Then: ReflectExpression(then),
+	})
 	return b
 }
 
 // Else sets the optional ELSE expression for the CASE expression.
-func (b *CaseBuilder) Else(elseExpr Expression) *CaseBuilder {
-	b.caseExpr.ElseExpression = elseExpr
+func (b *CaseBuilder) Else(elseExpr any) *CaseBuilder {
+	b.caseExpr.ElseExpression = ReflectExpression(elseExpr)
 	return b
 }
 
@@ -1499,16 +1502,18 @@ func Max(expr Expression) AggregateExpr {
 }
 
 // Coalesce renders COALESCE(expr1, expr2, ...).
-func Coalesce(exprs ...Expression) CoalesceExpr {
+func Coalesce(exprs ...any) CoalesceExpr {
 	if len(exprs) < 2 {
 		panic("schema: Coalesce requires at least two expressions")
 	}
+	resolved := make([]Expression, 0, len(exprs))
 	for _, expr := range exprs {
 		if expr == nil {
 			panic("schema: Coalesce requires non-nil expressions")
 		}
+		resolved = append(resolved, ReflectExpression(expr))
 	}
-	return CoalesceExpr{Exprs: exprs}
+	return CoalesceExpr{Exprs: resolved}
 }
 
 // NotIn compares this column to a set of Go values using SQL NOT IN.
@@ -1685,6 +1690,9 @@ func Raw(sql string, args ...any) RawExpr {
 	return RawExpr{SQL: sql, Args: args}
 }
 
+// SQL is an alias for Raw, matching Drizzle's familiar entry point.
+var SQL = Raw
+
 // And combines predicates with AND.
 func And(predicates ...Predicate) LogicalExpr {
 	return LogicalExpr{Operator: "AND", Exprs: predicates}
@@ -1717,7 +1725,7 @@ func Concat(values ...any) ConcatExpr {
 	}
 	exprs := make([]Expression, 0, len(values))
 	for _, v := range values {
-		exprs = append(exprs, wrapValue(v))
+		exprs = append(exprs, ReflectExpression(v))
 	}
 	return ConcatExpr{Exprs: exprs}
 }
