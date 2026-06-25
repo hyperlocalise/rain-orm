@@ -1,6 +1,7 @@
 package rain
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/hyperlocalise/rain-orm/pkg/schema"
@@ -125,6 +126,87 @@ func TestBinaryAndConcatExpressionsToSQL(t *testing.T) {
 				}
 				if gotSQL != tt.wantSQL {
 					t.Errorf("got SQL %q, want %q", gotSQL, tt.wantSQL)
+				}
+			})
+		}
+	})
+}
+
+func TestFluentAndStandaloneExpressionsToSQL(t *testing.T) {
+	type UsersTable struct {
+		schema.TableModel
+		ID   *schema.Column[int64]
+		Name *schema.Column[string]
+	}
+
+	Users := schema.Define("users", func(t *UsersTable) {
+		t.ID = t.BigSerial("id").PrimaryKey()
+		t.Name = t.Text("name").NotNull()
+	})
+
+	db := MustOpenDialect("postgres")
+
+	t.Run("Standalone functions", func(t *testing.T) {
+		tests := []struct {
+			name    string
+			expr    schema.Predicate
+			wantSQL string
+		}{
+			{"Eq", schema.Eq(Users.ID, 1), `"users"."id" = $1`},
+			{"Ne", schema.Ne(Users.ID, 1), `"users"."id" <> $1`},
+			{"Gt", schema.Gt(Users.ID, 1), `"users"."id" > $1`},
+			{"Gte", schema.Gte(Users.ID, 1), `"users"."id" >= $1`},
+			{"Lt", schema.Lt(Users.ID, 1), `"users"."id" < $1`},
+			{"Lte", schema.Lte(Users.ID, 1), `"users"."id" <= $1`},
+			{"Like", schema.Like(Users.Name, "A%"), `"users"."name" LIKE $1`},
+			{"In", schema.In(Users.ID, 1, 2, 3), `"users"."id" IN ($1, $2, $3)`},
+			{"Between", schema.Between(Users.ID, 1, 10), `"users"."id" BETWEEN $1 AND $2`},
+			{"IsNull", schema.IsNull(Users.ID), `"users"."id" IS NULL`},
+			{"IsNotNull", schema.IsNotNull(Users.ID), `"users"."id" IS NOT NULL`},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				sql, _, err := db.Select().From(Users).Where(tt.expr).ToSQL()
+				if err != nil {
+					t.Fatalf("ToSQL failed: %v", err)
+				}
+				if !strings.Contains(sql, "WHERE "+tt.wantSQL) {
+					t.Fatalf("expected SQL to contain %q, got %q", tt.wantSQL, sql)
+				}
+			})
+		}
+	})
+
+	t.Run("Fluent methods", func(t *testing.T) {
+		tests := []struct {
+			name    string
+			expr    any
+			wantSQL string
+		}{
+			{"BinaryExpr.Gt", Users.ID.Add(1).Gt(10), `("users"."id" + $1) > $2`},
+			{"AggregateExpr.Lt", schema.Count(Users.ID).Lt(5), `COUNT("users"."id") < $1`},
+			{"CaseExpr.Eq", schema.Case().When(Users.ID.Eq(int64(1)), "one").End().Eq("one"), `(CASE WHEN "users"."id" = $1 THEN $2 END) = $3`},
+			{"CoalesceExpr.IsNotNull", schema.Coalesce(Users.Name, "N/A").IsNotNull(), `COALESCE("users"."name", $1) IS NOT NULL`},
+			{"SQL.Asc", schema.SQL("random()").Asc(), `ORDER BY random() ASC`},
+			{"SQL.Embedded", schema.SQL("LOWER(?)", Users.Name).Eq("alice"), `LOWER("users"."name") = $1`},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				var sql string
+				var err error
+				if strings.HasSuffix(tt.name, ".Asc") {
+					sql, _, err = db.Select().From(Users).OrderBy(tt.expr.(schema.OrderExpr)).ToSQL()
+				} else {
+					sql, _, err = db.Select().From(Users).Where(tt.expr.(schema.Predicate)).ToSQL()
+				}
+
+				if err != nil {
+					t.Fatalf("ToSQL failed: %v", err)
+				}
+				if !strings.Contains(sql, tt.wantSQL) {
+					t.Fatalf("expected SQL to contain %q, got %q", tt.wantSQL, sql)
 				}
 			})
 		}

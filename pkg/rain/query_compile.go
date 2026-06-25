@@ -531,6 +531,7 @@ func (c *compileContext) writeExpressionInContext(expr schema.Expression, contex
 		if len(value.WhenThenPairs) == 0 {
 			return errors.New("rain: CASE expression requires at least one WHEN clause")
 		}
+		c.writeByte('(')
 		c.writeString("CASE")
 		if value.ValueExpression != nil {
 			c.writeByte(' ')
@@ -555,6 +556,7 @@ func (c *compileContext) writeExpressionInContext(expr schema.Expression, contex
 			}
 		}
 		c.writeString(" END")
+		c.writeByte(')')
 	case schema.AggregateExpr:
 		if value.Function == "" {
 			return errors.New("rain: aggregate function name cannot be empty")
@@ -638,13 +640,10 @@ func (c *compileContext) writeRaw(raw schema.RawExpr) error {
 		if argIndex >= len(raw.Args) {
 			return errors.New("rain: raw SQL placeholder count does not match args")
 		}
-		index := c.nextPlaceholderIndex()
 		val := raw.Args[argIndex]
-		if c.hasNames {
-			c.argPlan = append(c.argPlan, compiledArg{kind: compiledArgLiteral, value: val})
+		if err := c.writeAny(val); err != nil {
+			return err
 		}
-		c.args = append(c.args, val)
-		c.writeString(c.dialect.Placeholder(index))
 		argIndex++
 	}
 	if argIndex != len(raw.Args) {

@@ -275,7 +275,7 @@ func TestSelectAdvancedPredicatesAndOrderToSQL(t *testing.T) {
 					End()
 				return db.Select().Table(users).Column(caseExpr.As("status"))
 			},
-			wantSQL:  `SELECT CASE WHEN "users"."active" = $1 THEN $2 WHEN "users"."active" = $3 THEN $4 ELSE $5 END AS "status" FROM "users"`,
+			wantSQL:  `SELECT (CASE WHEN "users"."active" = $1 THEN $2 WHEN "users"."active" = $3 THEN $4 ELSE $5 END) AS "status" FROM "users"`,
 			wantArgs: []any{true, "active", false, "inactive", "unknown"},
 		},
 		{
@@ -288,7 +288,7 @@ func TestSelectAdvancedPredicatesAndOrderToSQL(t *testing.T) {
 					End()
 				return db.Select().Table(users).Column(caseExpr)
 			},
-			wantSQL:  "SELECT CASE `users`.`id` WHEN ? THEN ? ELSE ? END FROM `users`",
+			wantSQL:  "SELECT (CASE `users`.`id` WHEN ? THEN ? ELSE ? END) FROM `users`",
 			wantArgs: []any{int64(1), "one", "other"},
 		},
 		{
