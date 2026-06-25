@@ -31,11 +31,11 @@ type TableSnapshot struct {
 
 // ColumnSnapshot stores one column definition and its additive DDL fragment.
 type ColumnSnapshot struct {
-	Name            string            `json:"name"`
-	Type            schema.ColumnType `json:"type"`
-	Nullable        bool              `json:"nullable"`
-	DefaultSQL      string            `json:"default_sql,omitempty"`
-	HasDefault      bool              `json:"has_default"`
+	Name            string              `json:"name"`
+	Type            schema.ColumnType   `json:"type"`
+	Nullable        bool                `json:"nullable"`
+	DefaultSQL      string              `json:"default_sql,omitempty"`
+	HasDefault      bool                `json:"has_default"`
 	PrimaryKey      bool                `json:"primary_key"`
 	AutoIncrement   bool                `json:"auto_increment"`
 	Unique          bool                `json:"unique"`
