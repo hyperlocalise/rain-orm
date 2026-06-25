@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+	"sync"
 
 	"github.com/hyperlocalise/rain-orm/pkg/dialect"
 	"github.com/hyperlocalise/rain-orm/pkg/schema"
@@ -40,6 +41,47 @@ type SelectQuery struct {
 	relationConfigs map[string]RelationConfig
 	cacheOptions    *queryCacheOptions
 	locking         *selectLocking
+
+	// OPTIMIZATION: Minimal internal buffers to avoid heap allocations for
+	// common query shapes while keeping the struct size small.
+	colsBuf    [4]schema.Expression
+	whereBuf   [2]schema.Predicate
+	orderBuf   [1]schema.OrderExpr
+	joinsBuf   [1]joinClause
+	groupByBuf [1]schema.Expression
+	havingBuf  [1]schema.Predicate
+}
+
+var selectQueryPool = sync.Pool{
+	New: func() any {
+		return &SelectQuery{}
+	},
+}
+
+func newSelectQuery(runner queryRunner, d dialect.Dialect, cache QueryCache) *SelectQuery {
+	q := selectQueryPool.Get().(*SelectQuery)
+	*q = SelectQuery{
+		runner:  runner,
+		dialect: d,
+		cache:   cache,
+	}
+	q.cols = q.colsBuf[:0]
+	q.where = q.whereBuf[:0]
+	q.order = q.orderBuf[:0]
+	q.joins = q.joinsBuf[:0]
+	q.groupBy = q.groupByBuf[:0]
+	q.having = q.havingBuf[:0]
+	return q
+}
+
+func releaseSelectQuery(q *SelectQuery) {
+	if q == nil {
+		return
+	}
+	// Clear any references to prevent memory leaks while the query builder
+	// sits in the pool.
+	*q = SelectQuery{}
+	selectQueryPool.Put(q)
 }
 
 // Table sets the table source for the query.
@@ -325,16 +367,55 @@ func (q *SelectQuery) clone() *SelectQuery {
 	if q.tableSubquery != nil {
 		newQ.tableSubquery = q.tableSubquery.clone()
 	}
-	newQ.cols = append([]schema.Expression(nil), q.cols...)
-	newQ.where = append([]schema.Predicate(nil), q.where...)
-	newQ.joins = append([]joinClause(nil), q.joins...)
-	newQ.order = append([]schema.OrderExpr(nil), q.order...)
-	newQ.groupBy = append([]schema.Expression(nil), q.groupBy...)
-	newQ.having = append([]schema.Predicate(nil), q.having...)
+
+	// OPTIMIZATION: Utilize internal buffers for cloned slices if they fit,
+	// avoiding redundant heap allocations for common query shapes.
+	if len(q.cols) <= len(newQ.colsBuf) {
+		newQ.cols = newQ.colsBuf[:len(q.cols)]
+		copy(newQ.cols, q.cols)
+	} else {
+		newQ.cols = append([]schema.Expression(nil), q.cols...)
+	}
+
+	if len(q.where) <= len(newQ.whereBuf) {
+		newQ.where = newQ.whereBuf[:len(q.where)]
+		copy(newQ.where, q.where)
+	} else {
+		newQ.where = append([]schema.Predicate(nil), q.where...)
+	}
+
+	if len(q.order) <= len(newQ.orderBuf) {
+		newQ.order = newQ.orderBuf[:len(q.order)]
+		copy(newQ.order, q.order)
+	} else {
+		newQ.order = append([]schema.OrderExpr(nil), q.order...)
+	}
+
+	if len(q.joins) <= len(newQ.joinsBuf) {
+		newQ.joins = newQ.joinsBuf[:len(q.joins)]
+		copy(newQ.joins, q.joins)
+	} else {
+		newQ.joins = append([]joinClause(nil), q.joins...)
+	}
+
+	if len(q.groupBy) <= len(newQ.groupByBuf) {
+		newQ.groupBy = newQ.groupByBuf[:len(q.groupBy)]
+		copy(newQ.groupBy, q.groupBy)
+	} else {
+		newQ.groupBy = append([]schema.Expression(nil), q.groupBy...)
+	}
+
+	if len(q.having) <= len(newQ.havingBuf) {
+		newQ.having = newQ.havingBuf[:len(q.having)]
+		copy(newQ.having, q.having)
+	} else {
+		newQ.having = append([]schema.Predicate(nil), q.having...)
+	}
 	newQ.ctes = append([]cteDefinition(nil), q.ctes...)
 	newQ.setOps = append([]setOperation(nil), q.setOps...)
 	newQ.distinctOn = append([]schema.Expression(nil), q.distinctOn...)
 	newQ.relationNames = append([]string(nil), q.relationNames...)
+
 	if q.relationConfigs != nil {
 		newQ.relationConfigs = make(map[string]RelationConfig, len(q.relationConfigs))
 		for k, v := range q.relationConfigs {
@@ -454,7 +535,14 @@ func (q *SelectQuery) First(ctx context.Context, dest any) error {
 		return errors.New("rain: First destination must be a non-nil pointer to a struct")
 	}
 
-	return q.clone().Limit(1).Scan(ctx, dest)
+	// OPTIMIZATION: Temporarily modify the query's limit to avoid a full clone.
+	oldLimit, oldHasLimit := q.limit, q.hasLimit
+	q.limit, q.hasLimit = 1, true
+	defer func() {
+		q.limit, q.hasLimit = oldLimit, oldHasLimit
+	}()
+
+	return q.Scan(ctx, dest)
 }
 
 func (q *SelectQuery) writeSQL(ctx *compileContext) error {

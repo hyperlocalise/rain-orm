@@ -26,6 +26,11 @@ type InsertQuery struct {
 	conflict      *insertConflictClause
 	ctes          []cteDefinition
 	defaultValues bool
+
+	// OPTIMIZATION: Minimal internal buffers to avoid heap allocations for
+	// common query shapes while keeping the struct size small.
+	valuesBuf    [4]assignment
+	returningBuf [1]schema.Expression
 }
 
 type insertConflictAction uint8

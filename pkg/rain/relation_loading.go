@@ -292,11 +292,14 @@ func (q *SelectQuery) loadRelatedManyToManyRows(
 		batchKeys := sourceKeys[start:end]
 
 		var batchPairs []pair
-		joinQuery := &SelectQuery{runner: q.runner, dialect: q.dialect, table: relation.JoinTable}
-		if err := joinQuery.
+		joinQuery := newSelectQuery(q.runner, q.dialect, nil)
+		joinQuery.table = relation.JoinTable
+		err := joinQuery.
 			Column(schema.Ref(relation.JoinSourceColumn).As("s"), schema.Ref(relation.JoinTargetColumn).As("t")).
 			Where(schema.Ref(relation.JoinSourceColumn).In(batchKeys...)).
-			Scan(ctx, &batchPairs); err != nil {
+			Scan(ctx, &batchPairs)
+		releaseSelectQuery(joinQuery)
+		if err != nil {
 			if err == sql.ErrNoRows {
 				continue
 			}
@@ -329,7 +332,8 @@ func (q *SelectQuery) loadRelatedManyToManyRows(
 		batchKeys := uniqueTargetKeys[start:end]
 
 		batchDest := reflect.New(reflect.SliceOf(relatedElemType))
-		targetQuery := &SelectQuery{runner: q.runner, dialect: q.dialect, table: relation.TargetTable}
+		targetQuery := newSelectQuery(q.runner, q.dialect, nil)
+		targetQuery.table = relation.TargetTable
 		if len(config.Columns) > 0 {
 			targetQuery.Column(config.Columns...)
 			ensureTargetColumnSelected(targetQuery, relation.TargetColumn)
@@ -343,9 +347,11 @@ func (q *SelectQuery) loadRelatedManyToManyRows(
 		if len(config.OrderBy) > 0 {
 			targetQuery.OrderBy(config.OrderBy...)
 		}
-		if err := targetQuery.
+		err := targetQuery.
 			Where(schema.Ref(relation.TargetColumn).In(batchKeys...)).
-			Scan(ctx, batchDest.Interface()); err != nil {
+			Scan(ctx, batchDest.Interface())
+		releaseSelectQuery(targetQuery)
+		if err != nil {
 			if err == sql.ErrNoRows {
 				continue
 			}
@@ -452,7 +458,8 @@ func (q *SelectQuery) loadRelatedRows(
 	for start := 0; start < len(sourceKeys); start += relationBatchSize {
 		end := min(start+relationBatchSize, len(sourceKeys))
 		batchDest := reflect.New(reflect.SliceOf(relatedElemType))
-		query := &SelectQuery{runner: q.runner, dialect: q.dialect, table: relation.TargetTable}
+		query := newSelectQuery(q.runner, q.dialect, nil)
+		query.table = relation.TargetTable
 		if len(config.Columns) > 0 {
 			query.Column(config.Columns...)
 			ensureTargetColumnSelected(query, relation.TargetColumn)
@@ -466,8 +473,10 @@ func (q *SelectQuery) loadRelatedRows(
 		if len(config.OrderBy) > 0 {
 			query.OrderBy(config.OrderBy...)
 		}
-		if err := query.Where(schema.Ref(relation.TargetColumn).In(sourceKeys[start:end]...)).
-			Scan(ctx, batchDest.Interface()); err != nil {
+		err := query.Where(schema.Ref(relation.TargetColumn).In(sourceKeys[start:end]...)).
+			Scan(ctx, batchDest.Interface())
+		releaseSelectQuery(query)
+		if err != nil {
 			if err == sql.ErrNoRows {
 				continue
 			}
