@@ -36,11 +36,12 @@ type ColumnSnapshot struct {
 	Nullable        bool              `json:"nullable"`
 	DefaultSQL      string            `json:"default_sql,omitempty"`
 	HasDefault      bool              `json:"has_default"`
-	PrimaryKey      bool              `json:"primary_key"`
-	AutoIncrement   bool              `json:"auto_increment"`
-	Unique          bool              `json:"unique"`
-	GeneratedStored bool              `json:"generated_stored"`
-	DefinitionSQL   string            `json:"definition_sql"`
+	PrimaryKey      bool                `json:"primary_key"`
+	AutoIncrement   bool                `json:"auto_increment"`
+	Unique          bool                `json:"unique"`
+	GeneratedStored bool                `json:"generated_stored"`
+	Identity        schema.IdentityKind `json:"identity,omitempty"`
+	DefinitionSQL   string              `json:"definition_sql"`
 }
 
 // ConstraintSnapshot stores one table-level constraint.
@@ -118,6 +119,7 @@ func BuildSnapshot(dialectName string, tables []schema.TableReference) (Snapshot
 					AutoIncrement:   column.AutoIncrement,
 					Unique:          column.Unique,
 					GeneratedStored: column.GeneratedStored,
+					Identity:        column.Identity,
 					DefinitionSQL:   definitionSQL,
 				})
 			}

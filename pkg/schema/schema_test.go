@@ -498,3 +498,32 @@ func TestFluentAndStandaloneExpressions(t *testing.T) {
 		}
 	})
 }
+
+func TestIdentityColumnsMetadata(t *testing.T) {
+	table := schema.Define("identity_test", func(tt *usersTable) {
+		tt.ID = tt.BigInt("id").GeneratedAlwaysAsIdentity().PrimaryKey()
+		tt.Email = tt.Text("email").GeneratedByDefaultAsIdentity()
+	})
+
+	idCol, ok := table.TableDef().ColumnByName("id")
+	if !ok {
+		t.Fatalf("expected to find column id")
+	}
+	if idCol.Identity != schema.IdentityAlways {
+		t.Fatalf("expected IdentityAlways, got %q", idCol.Identity)
+	}
+	if !idCol.AutoIncrement {
+		t.Fatalf("expected AutoIncrement to be true for identity column")
+	}
+
+	emailCol, ok := table.TableDef().ColumnByName("email")
+	if !ok {
+		t.Fatalf("expected to find column email")
+	}
+	if emailCol.Identity != schema.IdentityByDefault {
+		t.Fatalf("expected IdentityByDefault, got %q", emailCol.Identity)
+	}
+	if !emailCol.AutoIncrement {
+		t.Fatalf("expected AutoIncrement to be true for identity column")
+	}
+}

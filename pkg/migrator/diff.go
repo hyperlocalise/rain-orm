@@ -247,6 +247,7 @@ func columnsEqual(left, right ColumnSnapshot) bool {
 		left.AutoIncrement == right.AutoIncrement &&
 		left.Unique == right.Unique &&
 		left.GeneratedStored == right.GeneratedStored &&
+		left.Identity == right.Identity &&
 		normalizeSQL(left.DefinitionSQL) == normalizeSQL(right.DefinitionSQL)
 }
 
