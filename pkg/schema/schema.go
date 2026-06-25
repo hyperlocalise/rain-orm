@@ -1691,7 +1691,9 @@ func Raw(sql string, args ...any) RawExpr {
 }
 
 // SQL is an alias for Raw, matching Drizzle's familiar entry point.
-var SQL = Raw
+func SQL(sql string, args ...any) RawExpr {
+	return Raw(sql, args...)
+}
 
 // And combines predicates with AND.
 func And(predicates ...Predicate) LogicalExpr {
