@@ -28,6 +28,12 @@ type UpdateQuery struct {
 	ctes      []cteDefinition
 	returning []schema.Expression
 	unbounded bool
+
+	// OPTIMIZATION: Minimal internal buffers to avoid heap allocations for
+	// common query shapes while keeping the struct size small.
+	valuesBuf    [4]assignment
+	whereBuf     [2]schema.Predicate
+	returningBuf [1]schema.Expression
 }
 
 // Table sets the UPDATE target table.
