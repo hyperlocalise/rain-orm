@@ -135,6 +135,24 @@ func BenchmarkSQLiteSelectPointLookup(b *testing.B) {
 	})
 }
 
+func BenchmarkSQLiteSelectFirstPointLookup(b *testing.B) {
+	runSQLiteBenchmarkDatasets(b, func(b *testing.B, fixture *benchmarkFixture, _ benchmarkDataset) {
+		ctx := context.Background()
+		b.ReportAllocs()
+		b.ResetTimer()
+
+		for range b.N {
+			var row benchmarkUserRow
+			if err := fixture.db.Select().
+				Table(fixture.users).
+				Where(fixture.users.ID.Eq(fixture.target)).
+				First(ctx, &row); err != nil {
+				b.Fatalf("first point lookup scan: %v", err)
+			}
+		}
+	})
+}
+
 func BenchmarkSQLitePreparedSelectPointLookup(b *testing.B) {
 	runSQLiteBenchmarkDatasets(b, func(b *testing.B, fixture *benchmarkFixture, _ benchmarkDataset) {
 		ctx := context.Background()

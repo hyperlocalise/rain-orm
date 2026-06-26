@@ -535,10 +535,17 @@ func (q *SelectQuery) First(ctx context.Context, dest any) error {
 		return errors.New("rain: First destination must be a non-nil pointer to a struct")
 	}
 
-	// Use clone() to ensure concurrency safety if the builder is shared,
-	// though builders are generally not thread-safe. clone() is optimized
-	// to use internal buffers when possible.
-	return q.clone().Limit(1).Scan(ctx, dest)
+	// OPTIMIZATION: Temporarily override the limit to avoid a full query clone.
+	// This reduces allocations for point lookups using the First() helper.
+	origLimit, origHasLimit := q.limit, q.hasLimit
+	q.limit = 1
+	q.hasLimit = true
+	defer func() {
+		q.limit = origLimit
+		q.hasLimit = origHasLimit
+	}()
+
+	return q.Scan(ctx, dest)
 }
 
 func (q *SelectQuery) writeSQL(ctx *compileContext) error {
