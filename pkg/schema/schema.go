@@ -766,6 +766,7 @@ func (c *Column[T]) GeneratedAlwaysAs(expr Expression, stored bool) *Column[T] {
 func (c *Column[T]) GeneratedAlwaysAsIdentity() *Column[T] {
 	c.def.Identity = IdentityAlways
 	c.def.AutoIncrement = true
+	c.def.Nullable = false
 	return c
 }
 
@@ -773,6 +774,7 @@ func (c *Column[T]) GeneratedAlwaysAsIdentity() *Column[T] {
 func (c *Column[T]) GeneratedByDefaultAsIdentity() *Column[T] {
 	c.def.Identity = IdentityByDefault
 	c.def.AutoIncrement = true
+	c.def.Nullable = false
 	return c
 }
 
