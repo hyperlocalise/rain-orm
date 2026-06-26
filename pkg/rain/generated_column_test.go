@@ -168,8 +168,8 @@ func TestGeneratedColumnNotNull(t *testing.T) {
 		t.Fatalf("CreateTableSQL: %v", err)
 	}
 
-	// Generated Always clause MUST come before NOT NULL in Postgres.
-	expected := `"full_name" VARCHAR(201) GENERATED ALWAYS AS (first_name || ' ' || last_name) STORED NOT NULL`
+	// Postgres requires NOT NULL to precede GENERATED ALWAYS AS for generated columns.
+	expected := `"full_name" VARCHAR(201) NOT NULL GENERATED ALWAYS AS (first_name || ' ' || last_name) STORED`
 	if !strings.Contains(sql, expected) {
 		t.Errorf("expected correct clause ordering, got:\n%s", sql)
 	}
