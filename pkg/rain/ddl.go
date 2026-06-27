@@ -344,6 +344,25 @@ func columnDefinitionSQL(d dialect.Dialect, table *schema.TableDef, column *sche
 	if column.AutoIncrement && shouldEmitAutoIncrementKeyword(d, column, inlinePrimaryKey) {
 		parts = append(parts, d.AutoIncrementKeyword())
 	}
+
+	// PostgreSQL Identity Columns
+	if column.Identity != schema.IdentityNone {
+		if d.Name() != "postgres" {
+			return "", fmt.Errorf("rain: identity columns are only supported by postgres dialect, got %s", d.Name())
+		}
+		if column.Default != nil || column.DefaultSQL != "" || column.DefaultExpr != nil {
+			return "", fmt.Errorf("rain: identity column %q cannot have a DEFAULT clause", column.Name)
+		}
+		if column.GeneratedExpr != nil {
+			return "", fmt.Errorf("rain: identity column %q cannot have a non-identity GENERATED clause", column.Name)
+		}
+	}
+
+	if !column.Nullable && (!inlinePrimaryKey || column.Identity != schema.IdentityNone) {
+		parts = append(parts, "NOT NULL")
+	}
+
+	// Generated Always MUST come after NOT NULL in Postgres.
 	if column.GeneratedExpr != nil {
 		exprSQL, err := expressionDDLSQL(d, table, column.GeneratedExpr)
 		if err != nil {
@@ -356,9 +375,11 @@ func columnDefinitionSQL(d dialect.Dialect, table *schema.TableDef, column *sche
 		parts = append(parts, clause)
 	}
 
-	if !column.Nullable && !inlinePrimaryKey {
-		parts = append(parts, "NOT NULL")
+	// Identity MUST come after NOT NULL in Postgres.
+	if column.Identity != schema.IdentityNone {
+		parts = append(parts, "GENERATED", string(column.Identity), "AS IDENTITY")
 	}
+
 	if column.Unique {
 		parts = append(parts, "UNIQUE")
 	}
@@ -377,7 +398,21 @@ func columnDefinitionSQL(d dialect.Dialect, table *schema.TableDef, column *sche
 }
 
 func columnTypeSQL(d dialect.Dialect, column *schema.ColumnDef) string {
-	typeSQL := d.DataType(column.Type)
+	colType := column.Type
+	if d.Name() == "postgres" && column.Identity != schema.IdentityNone {
+		// Identity columns must be built on top of standard integer types.
+		// Downgrade SERIAL types to their base integer counterparts.
+		switch colType.DataType {
+		case schema.TypeSmallSerial:
+			colType.DataType = schema.TypeSmallInt
+		case schema.TypeSerial:
+			colType.DataType = schema.TypeInteger
+		case schema.TypeBigSerial:
+			colType.DataType = schema.TypeBigInt
+		}
+	}
+
+	typeSQL := d.DataType(colType)
 
 	if (column.Type.DataType == schema.TypeVarChar || column.Type.DataType == schema.TypeChar) && column.Type.Size > 0 &&
 		(strings.EqualFold(typeSQL, "VARCHAR") || strings.EqualFold(typeSQL, "CHAR")) {
@@ -398,6 +433,9 @@ func columnTypeSQL(d dialect.Dialect, column *schema.ColumnDef) string {
 
 func shouldEmitAutoIncrementKeyword(d dialect.Dialect, column *schema.ColumnDef, inlinePrimaryKey bool) bool {
 	if !column.AutoIncrement {
+		return false
+	}
+	if column.Identity != schema.IdentityNone {
 		return false
 	}
 	if !inlinePrimaryKey {
@@ -683,6 +721,24 @@ func expressionDDLSQL(d dialect.Dialect, table *schema.TableDef, expr schema.Exp
 			items = append(items, rendered)
 		}
 		return left + " IN (" + strings.Join(items, ", ") + ")", nil
+	case schema.BetweenExpr:
+		left, err := expressionDDLSQL(d, table, value.Left)
+		if err != nil {
+			return "", err
+		}
+		start, err := expressionDDLSQL(d, table, value.Start)
+		if err != nil {
+			return "", err
+		}
+		end, err := expressionDDLSQL(d, table, value.End)
+		if err != nil {
+			return "", err
+		}
+		op := "BETWEEN"
+		if value.Negated {
+			op = "NOT BETWEEN"
+		}
+		return fmt.Sprintf("%s %s %s AND %s", left, op, start, end), nil
 	case schema.NullCheckExpr:
 		inner, err := expressionDDLSQL(d, table, value.Expr)
 		if err != nil {
@@ -702,11 +758,125 @@ func expressionDDLSQL(d dialect.Dialect, table *schema.TableDef, expr schema.Exp
 			parts = append(parts, rendered)
 		}
 		return "(" + strings.Join(parts, " "+value.Operator+" ") + ")", nil
-	case schema.RawExpr:
-		if len(value.Args) != 0 {
-			return "", errors.New("raw SQL CHECK expressions cannot contain args")
+	case schema.BinaryExpr:
+		left, err := expressionDDLSQL(d, table, value.Left)
+		if err != nil {
+			return "", err
 		}
-		return value.SQL, nil
+		right, err := expressionDDLSQL(d, table, value.Right)
+		if err != nil {
+			return "", err
+		}
+		return "(" + left + " " + value.Operator + " " + right + ")", nil
+	case schema.ConcatExpr:
+		if len(value.Exprs) < 2 {
+			return "", errors.New("CONCAT requires at least two expressions")
+		}
+		var parts []string
+		for _, e := range value.Exprs {
+			rendered, err := expressionDDLSQL(d, table, e)
+			if err != nil {
+				return "", err
+			}
+			parts = append(parts, rendered)
+		}
+		if d.Name() == "mysql" {
+			return "CONCAT(" + strings.Join(parts, ", ") + ")", nil
+		}
+		return "(" + strings.Join(parts, " || ") + ")", nil
+	case schema.AggregateExpr:
+		if value.Function == "" {
+			return "", errors.New("aggregate function name cannot be empty")
+		}
+		if value.Star {
+			return value.Function + "(*)", nil
+		}
+		inner, err := expressionDDLSQL(d, table, value.Expr)
+		if err != nil {
+			return "", err
+		}
+		distinct := ""
+		if value.Distinct {
+			distinct = "DISTINCT "
+		}
+		return value.Function + "(" + distinct + inner + ")", nil
+	case schema.CaseExpr:
+		if len(value.WhenThenPairs) == 0 {
+			return "", errors.New("CASE expression requires at least one WHEN clause")
+		}
+		var sb strings.Builder
+		sb.WriteString("(CASE")
+		if value.ValueExpression != nil {
+			rendered, err := expressionDDLSQL(d, table, value.ValueExpression)
+			if err != nil {
+				return "", err
+			}
+			sb.WriteString(" ")
+			sb.WriteString(rendered)
+		}
+		for _, pair := range value.WhenThenPairs {
+			when, err := expressionDDLSQL(d, table, pair.When)
+			if err != nil {
+				return "", err
+			}
+			then, err := expressionDDLSQL(d, table, pair.Then)
+			if err != nil {
+				return "", err
+			}
+			sb.WriteString(" WHEN ")
+			sb.WriteString(when)
+			sb.WriteString(" THEN ")
+			sb.WriteString(then)
+		}
+		if value.ElseExpression != nil {
+			rendered, err := expressionDDLSQL(d, table, value.ElseExpression)
+			if err != nil {
+				return "", err
+			}
+			sb.WriteString(" ELSE ")
+			sb.WriteString(rendered)
+		}
+		sb.WriteString(" END)")
+		return sb.String(), nil
+	case schema.CoalesceExpr:
+		if len(value.Exprs) < 2 {
+			return "", errors.New("COALESCE requires at least two expressions")
+		}
+		var parts []string
+		for _, e := range value.Exprs {
+			rendered, err := expressionDDLSQL(d, table, e)
+			if err != nil {
+				return "", err
+			}
+			parts = append(parts, rendered)
+		}
+		return "COALESCE(" + strings.Join(parts, ", ") + ")", nil
+	case schema.RawExpr:
+		if len(value.Args) == 0 {
+			return value.SQL, nil
+		}
+
+		argIndex := 0
+		var sb strings.Builder
+		for i := 0; i < len(value.SQL); i++ {
+			if value.SQL[i] != '?' {
+				sb.WriteByte(value.SQL[i])
+				continue
+			}
+			if argIndex >= len(value.Args) {
+				return "", errors.New("rain: raw SQL placeholder count does not match args")
+			}
+			rendered, err := expressionDDLSQL(d, table, schema.ReflectExpression(value.Args[argIndex]))
+			if err != nil {
+				return "", err
+			}
+			sb.WriteString(rendered)
+			argIndex++
+		}
+		if argIndex != len(value.Args) {
+			return "", errors.New("rain: raw SQL has unused args")
+		}
+		return sb.String(), nil
 	default:
 		return "", fmt.Errorf("unsupported DDL expression type %T", expr)
 	}

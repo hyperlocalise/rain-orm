@@ -364,13 +364,13 @@ func TestCreateTableSQLValidation(t *testing.T) {
 	) {
 		t.ID = t.BigSerial("id").PrimaryKey()
 		t.Check("unsupported_check_expr", schema.ComparisonExpr{
-			Left:     schema.Raw("lower(?)", "value"),
+			Left:     schema.Raw("lower(?)", "value", "extra"),
 			Operator: "=",
 			Right:    schema.ValueExpr{Value: "x"},
 		})
 	})
-	if _, err := db.CreateTableSQL(unsupportedCheck); err == nil {
-		t.Fatalf("expected raw CHECK args to fail")
+	if _, err := db.CreateTableSQL(unsupportedCheck); err == nil || !strings.Contains(err.Error(), "unused args") {
+		t.Fatalf("expected raw CHECK args mismatch to fail, got: %v", err)
 	}
 
 	crossTableCheck := schema.Define("cross_table_check", func(t *struct {
@@ -383,6 +383,44 @@ func TestCreateTableSQLValidation(t *testing.T) {
 	})
 	if _, err := db.CreateTableSQL(crossTableCheck); err == nil {
 		t.Fatalf("expected cross-table check expression to fail")
+	}
+}
+
+func TestCreateTableSQLWithComplexCheckExpressions(t *testing.T) {
+	t.Parallel()
+
+	type ComplexCheckTable struct {
+		schema.TableModel
+		ID   *schema.Column[int64]
+		Val1 *schema.Column[int32]
+		Val2 *schema.Column[int32]
+	}
+
+	table := schema.Define("complex_check_test", func(t *ComplexCheckTable) {
+		t.ID = t.BigSerial("id").PrimaryKey()
+		t.Val1 = t.Integer("val1").NotNull()
+		t.Val2 = t.Integer("val2").NotNull()
+		t.Check("check1", t.Val1.AddExpr(t.Val2).Gt(int32(100)))
+		t.Check("check2", schema.Case().When(t.Val1.Gt(int32(10)), t.Val2).Else(int32(0)).End().Lt(int32(50)))
+		t.Check("check3", schema.Raw("ABS(?) < 10", t.Val1))
+	})
+
+	db, _ := rain.OpenDialect("postgres")
+	sql, err := db.CreateTableSQL(table)
+	if err != nil {
+		t.Fatalf("CreateTableSQL: %v", err)
+	}
+
+	fragments := []string{
+		`CONSTRAINT "check1" CHECK (("val1" + "val2") > 100)`,
+		`CONSTRAINT "check2" CHECK ((CASE WHEN "val1" > 10 THEN "val2" ELSE 0 END) < 50)`,
+		`CONSTRAINT "check3" CHECK (ABS("val1") < 10)`,
+	}
+
+	for _, fragment := range fragments {
+		if !strings.Contains(sql, fragment) {
+			t.Errorf("expected SQL to contain %q, got:\n%s", fragment, sql)
+		}
 	}
 }
 
