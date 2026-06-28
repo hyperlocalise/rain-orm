@@ -29,8 +29,8 @@ type InsertQuery struct {
 
 	// OPTIMIZATION: Minimal internal buffers to avoid heap allocations for
 	// common query shapes while keeping the struct size small.
-	valuesBuf    [4]assignment
-	returningBuf [1]schema.Expression
+	valuesBuf    [16]assignment
+	returningBuf [4]schema.Expression
 }
 
 type insertConflictAction uint8

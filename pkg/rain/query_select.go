@@ -44,12 +44,12 @@ type SelectQuery struct {
 
 	// OPTIMIZATION: Minimal internal buffers to avoid heap allocations for
 	// common query shapes while keeping the struct size small.
-	colsBuf    [4]schema.Expression
-	whereBuf   [2]schema.Predicate
-	orderBuf   [1]schema.OrderExpr
-	joinsBuf   [1]joinClause
-	groupByBuf [1]schema.Expression
-	havingBuf  [1]schema.Predicate
+	colsBuf    [16]schema.Expression
+	whereBuf   [8]schema.Predicate
+	orderBuf   [4]schema.OrderExpr
+	joinsBuf   [4]joinClause
+	groupByBuf [4]schema.Expression
+	havingBuf  [4]schema.Predicate
 }
 
 var selectQueryPool = sync.Pool{

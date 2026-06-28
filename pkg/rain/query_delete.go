@@ -28,8 +28,8 @@ type DeleteQuery struct {
 
 	// OPTIMIZATION: Minimal internal buffers to avoid heap allocations for
 	// common query shapes while keeping the struct size small.
-	whereBuf     [2]schema.Predicate
-	returningBuf [1]schema.Expression
+	whereBuf     [8]schema.Predicate
+	returningBuf [4]schema.Expression
 }
 
 // Table sets the DELETE target table.
