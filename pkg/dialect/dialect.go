@@ -46,6 +46,9 @@ type Dialect interface {
 
 	// GeneratedClause returns the SQL for a generated column clause.
 	GeneratedClause(expr string, stored bool) (string, error)
+
+	// IdentityClause returns the SQL for a PostgreSQL identity column clause.
+	IdentityClause(always bool) (string, error)
 }
 
 // BaseDialect provides common implementations.
@@ -117,6 +120,11 @@ func (d *BaseDialect) DefaultValue(value interface{}) string {
 // GeneratedClause returns an error by default as generated columns require dialect-specific syntax.
 func (d *BaseDialect) GeneratedClause(expr string, stored bool) (string, error) {
 	return "", fmt.Errorf("dialect does not support generated columns")
+}
+
+// IdentityClause returns an error by default as identity columns require dialect-specific syntax.
+func (d *BaseDialect) IdentityClause(always bool) (string, error) {
+	return "", fmt.Errorf("dialect does not support identity columns")
 }
 
 // UpsertClause returns generic upsert syntax.
