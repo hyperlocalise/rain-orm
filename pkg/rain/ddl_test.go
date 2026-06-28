@@ -389,7 +389,8 @@ func TestCreateTableSQLValidation(t *testing.T) {
 		invalid := schema.Define("invalid_identity", func(t *struct {
 			schema.TableModel
 			ID *schema.Column[int64]
-		}) {
+		},
+		) {
 			t.ID = t.BigInt("id").GeneratedAlwaysAsIdentity().Default(1)
 		})
 		_, err := db.CreateTableSQL(invalid)
