@@ -369,8 +369,8 @@ func TestCreateTableSQLValidation(t *testing.T) {
 			Right:    schema.ValueExpr{Value: "x"},
 		})
 	})
-	if _, err := db.CreateTableSQL(unsupportedCheck); err == nil {
-		t.Fatalf("expected raw CHECK args to fail")
+	if _, err := db.CreateTableSQL(unsupportedCheck); err != nil {
+		t.Fatalf("expected raw CHECK args to pass with literal inlining, got: %v", err)
 	}
 
 	crossTableCheck := schema.Define("cross_table_check", func(t *struct {
@@ -384,6 +384,20 @@ func TestCreateTableSQLValidation(t *testing.T) {
 	if _, err := db.CreateTableSQL(crossTableCheck); err == nil {
 		t.Fatalf("expected cross-table check expression to fail")
 	}
+
+	t.Run("Identity with DEFAULT rejects", func(t *testing.T) {
+		invalid := schema.Define("invalid_identity", func(t *struct {
+			schema.TableModel
+			ID *schema.Column[int64]
+		},
+		) {
+			t.ID = t.BigInt("id").GeneratedAlwaysAsIdentity().Default(1)
+		})
+		_, err := db.CreateTableSQL(invalid)
+		if err == nil || !strings.Contains(err.Error(), "cannot have a DEFAULT clause") {
+			t.Fatalf("expected identity with default to fail, got: %v", err)
+		}
+	})
 }
 
 func TestCreateTableSQLCompositeBigSerialDoesNotEmitAutoIncrement(t *testing.T) {
@@ -468,6 +482,94 @@ func TestCreateTableSQLExecutesInSQLite(t *testing.T) {
 		if _, err := db.Exec(ctx, statement); err != nil {
 			t.Fatalf("exec generated index DDL failed: %v\nSQL:\n%s", err, statement)
 		}
+	}
+}
+
+func TestExpressionDDLSQLComplex(t *testing.T) {
+	t.Parallel()
+
+	type complexTable struct {
+		schema.TableModel
+		ID    *schema.Column[int64]
+		A     *schema.Column[int32]
+		B     *schema.Column[int32]
+		Email *schema.Column[string]
+	}
+
+	table := schema.Define("complex", func(t *complexTable) {
+		t.ID = t.BigSerial("id").PrimaryKey()
+		t.A = t.Integer("a").NotNull()
+		t.B = t.Integer("b").NotNull()
+		t.Email = t.Text("email").NotNull()
+
+		t.Check("binary_check", t.A.AddExpr(t.B).Gt(100))
+		t.Check("concat_check", schema.Concat(t.Email, schema.ValueExpr{Value: "@example.com"}).Eq("foo@example.com"))
+		t.Check("case_check", schema.Case().When(t.A.Gt(0), true).Else(false).End().Eq(true))
+		t.Check("coalesce_check", schema.Coalesce(t.Email, schema.ValueExpr{Value: "none"}).Ne("none"))
+		t.Check("raw_args_check", schema.Raw("length(?)", "foo").Eq(3))
+	})
+
+	cases := []struct {
+		name      string
+		dialect   string
+		fragments []string
+	}{
+		{
+			name:    "postgres complex expressions",
+			dialect: "postgres",
+			fragments: []string{
+				`CONSTRAINT "binary_check" CHECK (("a" + "b") > 100)`,
+				`CONSTRAINT "concat_check" CHECK (("email" || '@example.com') = 'foo@example.com')`,
+				`CONSTRAINT "case_check" CHECK ((CASE WHEN "a" > 0 THEN TRUE ELSE FALSE END) = TRUE)`,
+				`CONSTRAINT "coalesce_check" CHECK (COALESCE("email", 'none') <> 'none')`,
+				`CONSTRAINT "raw_args_check" CHECK (length('foo') = 3)`,
+			},
+		},
+		{
+			name:    "mysql complex expressions",
+			dialect: "mysql",
+			fragments: []string{
+				"CONSTRAINT `binary_check` CHECK ((`a` + `b`) > 100)",
+				"CONSTRAINT `concat_check` CHECK (CONCAT(`email`, '@example.com') = 'foo@example.com')",
+				"CONSTRAINT `case_check` CHECK ((CASE WHEN `a` > 0 THEN 1 ELSE 0 END) = 1)",
+				"CONSTRAINT `coalesce_check` CHECK (COALESCE(`email`, 'none') <> 'none')",
+				"CONSTRAINT `raw_args_check` CHECK (length('foo') = 3)",
+			},
+		},
+		{
+			name:    "sqlite complex expressions",
+			dialect: "sqlite",
+			fragments: []string{
+				`CONSTRAINT "binary_check" CHECK (("a" + "b") > 100)`,
+				`CONSTRAINT "concat_check" CHECK (("email" || '@example.com') = 'foo@example.com')`,
+				`CONSTRAINT "case_check" CHECK ((CASE WHEN "a" > 0 THEN 1 ELSE 0 END) = 1)`,
+				`CONSTRAINT "coalesce_check" CHECK (COALESCE("email", 'none') <> 'none')`,
+				`CONSTRAINT "raw_args_check" CHECK (length('foo') = 3)`,
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			db, err := rain.OpenDialect(tc.dialect)
+			if err != nil {
+				t.Fatalf("OpenDialect(%q): %v", tc.dialect, err)
+			}
+
+			sql, err := db.CreateTableSQL(table)
+			if err != nil {
+				t.Fatalf("CreateTableSQL: %v", err)
+			}
+
+			for _, fragment := range tc.fragments {
+				if !strings.Contains(sql, fragment) {
+					t.Fatalf("expected SQL to contain %q, got:\n%s", fragment, sql)
+				}
+			}
+		})
 	}
 }
 
