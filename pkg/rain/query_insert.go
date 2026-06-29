@@ -26,6 +26,7 @@ type InsertQuery struct {
 	conflict      *insertConflictClause
 	ctes          []cteDefinition
 	defaultValues bool
+	ignore        bool
 
 	// OPTIMIZATION: Internal buffers to avoid heap allocations for common
 	// query shapes while keeping the struct size reasonable.
@@ -42,7 +43,7 @@ const (
 )
 
 type insertConflictClause struct {
-	columns     []schema.ColumnReference
+	targets     []schema.Expression
 	constraint  string
 	targetWhere []schema.Predicate
 	action      insertConflictAction
@@ -184,9 +185,15 @@ func (q *InsertQuery) DefaultValues() *InsertQuery {
 	return q
 }
 
+// Ignore configures the INSERT to use IGNORE for MySQL.
+func (q *InsertQuery) Ignore() *InsertQuery {
+	q.ignore = true
+	return q
+}
+
 // OnConflict starts an upsert clause for PostgreSQL and SQLite dialects.
-func (q *InsertQuery) OnConflict(columns ...schema.ColumnReference) *InsertConflictBuilder {
-	q.conflict = &insertConflictClause{columns: columns}
+func (q *InsertQuery) OnConflict(targets ...schema.Expression) *InsertConflictBuilder {
+	q.conflict = &insertConflictClause{targets: targets}
 	return &InsertConflictBuilder{query: q}
 }
 
@@ -261,6 +268,10 @@ func (q *InsertQuery) compile() (compiledQuery, error) {
 	ctx := newCompileContext(q.dialect)
 	defer releaseCompileContext(ctx)
 
+	if q.dialect.Name() == "mysql" && q.conflict != nil && q.conflict.action == insertConflictActionDoNothing {
+		q.ignore = true
+	}
+
 	if q.selectQuery != nil {
 		if err := q.writeSelectSQL(ctx); err != nil {
 			return compiledQuery{}, err
@@ -287,7 +298,11 @@ func (q *InsertQuery) writeValuesSQL(ctx *compileContext) error {
 		if err := q.validateSources(); err != nil {
 			return err
 		}
-		ctx.writeString("INSERT INTO ")
+		ctx.writeString("INSERT ")
+		if q.ignore && ctx.dialect.Name() == "mysql" {
+			ctx.writeString("IGNORE ")
+		}
+		ctx.writeString("INTO ")
 		ctx.writeTableName(q.table)
 		if ctx.dialect.Name() == "mysql" {
 			ctx.writeString(" () VALUES ()")
@@ -299,7 +314,11 @@ func (q *InsertQuery) writeValuesSQL(ctx *compileContext) error {
 			return err
 		}
 
-		ctx.writeString("INSERT INTO ")
+		ctx.writeString("INSERT ")
+		if q.ignore && ctx.dialect.Name() == "mysql" {
+			ctx.writeString("IGNORE ")
+		}
+		ctx.writeString("INTO ")
 		ctx.writeTableName(q.table)
 
 		if q.models != nil {
@@ -574,7 +593,11 @@ func (q *InsertQuery) writeSelectSQL(ctx *compileContext) error {
 		selectQuery = selectQuery.withSQLiteInsertSelectConflictWhere()
 	}
 
-	ctx.writeString("INSERT INTO ")
+	ctx.writeString("INSERT ")
+	if q.ignore && ctx.dialect.Name() == "mysql" {
+		ctx.writeString("IGNORE ")
+	}
+	ctx.writeString("INTO ")
 	ctx.writeTableName(q.table)
 
 	if len(q.columns) > 0 {
@@ -703,7 +726,11 @@ func (q *InsertQuery) writeConflictClause(ctx *compileContext) error {
 	}
 
 	if q.dialect.Name() == "mysql" {
-		if len(q.conflict.columns) > 0 || q.conflict.constraint != "" || len(q.conflict.targetWhere) > 0 {
+		if q.conflict.action == insertConflictActionDoNothing {
+			return nil
+		}
+
+		if len(q.conflict.targets) > 0 || q.conflict.constraint != "" || len(q.conflict.targetWhere) > 0 {
 			return errors.New("rain: MySQL ON DUPLICATE KEY UPDATE does not support conflict targets (columns, constraints, or WHERE); call OnConflict() without modifiers")
 		}
 		if len(q.conflict.updateWhere) > 0 {
@@ -742,7 +769,7 @@ func (q *InsertQuery) writeConflictClause(ctx *compileContext) error {
 		return nil
 	}
 
-	if len(q.conflict.columns) == 0 && q.conflict.constraint == "" {
+	if len(q.conflict.targets) == 0 && q.conflict.constraint == "" && q.conflict.action != insertConflictActionDoNothing {
 		return errors.New("rain: conflict clause requires at least one target (columns or constraint)")
 	}
 
@@ -750,16 +777,22 @@ func (q *InsertQuery) writeConflictClause(ctx *compileContext) error {
 	if q.conflict.constraint != "" {
 		ctx.writeString(" ON CONSTRAINT ")
 		ctx.writeQuotedIdentifier(q.conflict.constraint)
-	} else if len(q.conflict.columns) > 0 {
+	} else if len(q.conflict.targets) > 0 {
 		ctx.writeString(" (")
-		for idx, col := range q.conflict.columns {
-			if err := validateColumnBelongsToTable(q.table, col.ColumnDef()); err != nil {
-				return err
-			}
+		for idx, target := range q.conflict.targets {
 			if idx > 0 {
 				ctx.writeString(", ")
 			}
-			ctx.writeColumnName(col)
+			if col, ok := target.(schema.ColumnReference); ok {
+				if err := validateColumnBelongsToTable(q.table, col.ColumnDef()); err != nil {
+					return err
+				}
+				ctx.writeColumnName(col)
+			} else {
+				if err := ctx.writeExpression(target); err != nil {
+					return err
+				}
+			}
 		}
 		ctx.writeByte(')')
 	}

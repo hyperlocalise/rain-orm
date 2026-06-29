@@ -181,6 +181,43 @@ func TestInsertOnConflictPostgres(t *testing.T) {
 		}
 	})
 
+	t.Run("do nothing without targets", func(t *testing.T) {
+		sqlText, args, err := db.Insert().
+			Table(users).
+			Set(users.Email, "alice@example.com").
+			OnConflict().
+			DoNothing().
+			ToSQL()
+		if err != nil {
+			t.Fatalf("ToSQL returned error: %v", err)
+		}
+
+		wantSQL := `INSERT INTO "users" ("email") VALUES ($1) ON CONFLICT DO NOTHING`
+		if sqlText != wantSQL {
+			t.Fatalf("unexpected SQL:\nwant: %s\ngot:  %s", wantSQL, sqlText)
+		}
+		if len(args) != 1 {
+			t.Fatalf("unexpected args: %#v", args)
+		}
+	})
+
+	t.Run("functional index target", func(t *testing.T) {
+		sqlText, _, err := db.Insert().
+			Table(users).
+			Set(users.Email, "alice@example.com").
+			OnConflict(schema.Raw("(lower(email))")).
+			DoNothing().
+			ToSQL()
+		if err != nil {
+			t.Fatalf("ToSQL returned error: %v", err)
+		}
+
+		wantSQL := `INSERT INTO "users" ("email") VALUES ($1) ON CONFLICT ((lower(email))) DO NOTHING`
+		if sqlText != wantSQL {
+			t.Fatalf("unexpected SQL:\nwant: %s\ngot:  %s", wantSQL, sqlText)
+		}
+	})
+
 	t.Run("do update set", func(t *testing.T) {
 		sqlText, args, err := db.Insert().
 			Table(users).
@@ -680,7 +717,7 @@ func TestInsertOnConflictMySQL(t *testing.T) {
 	}
 	users, _ := defineTables()
 
-	t.Run("do nothing (no-op update)", func(t *testing.T) {
+	t.Run("do nothing (mapped to ignore)", func(t *testing.T) {
 		sqlText, args, err := db.Insert().
 			Table(users).
 			Set(users.Email, "alice@example.com").
@@ -692,25 +729,12 @@ func TestInsertOnConflictMySQL(t *testing.T) {
 			t.Fatalf("insert on conflict mysql do nothing ToSQL returned error: %v", err)
 		}
 
-		wantSQL := "INSERT INTO `users` (`email`, `name`) VALUES (?, ?) ON DUPLICATE KEY UPDATE `id` = `id`"
+		wantSQL := "INSERT IGNORE INTO `users` (`email`, `name`) VALUES (?, ?)"
 		if sqlText != wantSQL {
 			t.Fatalf("unexpected mysql do nothing SQL:\nwant: %s\ngot:  %s", wantSQL, sqlText)
 		}
 		if len(args) != 2 {
 			t.Fatalf("unexpected mysql do nothing args: %#v", args)
-		}
-	})
-
-	t.Run("target columns are rejected for do nothing", func(t *testing.T) {
-		_, _, err := db.Insert().
-			Table(users).
-			Set(users.Email, "alice@example.com").
-			Set(users.Name, "Alice").
-			OnConflict(users.Email).
-			DoNothing().
-			ToSQL()
-		if err == nil || !strings.Contains(err.Error(), "does not support conflict targets") {
-			t.Fatalf("expected mysql conflict target error, got %v", err)
 		}
 	})
 
@@ -746,6 +770,60 @@ func TestInsertOnConflictMySQL(t *testing.T) {
 		}
 		if len(args) != 3 {
 			t.Fatalf("unexpected mysql do update args: %#v", args)
+		}
+	})
+
+
+	t.Run("ignore", func(t *testing.T) {
+		sqlText, args, err := db.Insert().
+			Ignore().
+			Table(users).
+			Set(users.Email, "alice@example.com").
+			ToSQL()
+		if err != nil {
+			t.Fatalf("ToSQL returned error: %v", err)
+		}
+
+		wantSQL := "INSERT IGNORE INTO `users` (`email`) VALUES (?)"
+		if sqlText != wantSQL {
+			t.Fatalf("unexpected SQL:\nwant: %s\ngot:  %s", wantSQL, sqlText)
+		}
+		if len(args) != 1 {
+			t.Fatalf("unexpected args: %#v", args)
+		}
+	})
+
+	t.Run("ignore with select", func(t *testing.T) {
+		subquery := db.Select().Table(users).Column(users.Email)
+		sqlText, _, err := db.Insert().
+			Ignore().
+			Table(users).
+			Columns(users.Email).
+			Select(subquery).
+			ToSQL()
+		if err != nil {
+			t.Fatalf("ToSQL returned error: %v", err)
+		}
+
+		wantSQL := "INSERT IGNORE INTO `users` (`email`) SELECT `users`.`email` FROM `users`"
+		if sqlText != wantSQL {
+			t.Fatalf("unexpected SQL:\nwant: %s\ngot:  %s", wantSQL, sqlText)
+		}
+	})
+
+	t.Run("ignore with default values", func(t *testing.T) {
+		sqlText, _, err := db.Insert().
+			Ignore().
+			Table(users).
+			DefaultValues().
+			ToSQL()
+		if err != nil {
+			t.Fatalf("ToSQL returned error: %v", err)
+		}
+
+		wantSQL := "INSERT IGNORE INTO `users` () VALUES ()"
+		if sqlText != wantSQL {
+			t.Fatalf("unexpected SQL:\nwant: %s\ngot:  %s", wantSQL, sqlText)
 		}
 	})
 }
