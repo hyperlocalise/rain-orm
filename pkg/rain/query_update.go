@@ -29,11 +29,11 @@ type UpdateQuery struct {
 	returning []schema.Expression
 	unbounded bool
 
-	// OPTIMIZATION: Minimal internal buffers to avoid heap allocations for
-	// common query shapes while keeping the struct size small.
-	valuesBuf    [4]assignment
-	whereBuf     [2]schema.Predicate
-	returningBuf [1]schema.Expression
+	// OPTIMIZATION: Internal buffers to avoid heap allocations for common
+	// query shapes while keeping the struct size reasonable.
+	valuesBuf    [8]assignment
+	whereBuf     [4]schema.Predicate
+	returningBuf [2]schema.Expression
 }
 
 // Table sets the UPDATE target table.

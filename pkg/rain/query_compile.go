@@ -90,8 +90,8 @@ type compileContext struct {
 var compileContextPool = sync.Pool{
 	New: func() any {
 		ctx := &compileContext{
-			argPlan: make([]compiledArg, 0, 8),
-			args:    make([]any, 0, 8),
+			argPlan: make([]compiledArg, 0, 32),
+			args:    make([]any, 0, 32),
 		}
 		// OPTIMIZATION: Pre-allocate a reasonable buffer capacity to reduce early
 		// re-allocations during query building. bytes.Buffer preserves this
