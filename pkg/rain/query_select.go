@@ -42,14 +42,14 @@ type SelectQuery struct {
 	cacheOptions    *queryCacheOptions
 	locking         *selectLocking
 
-	// OPTIMIZATION: Minimal internal buffers to avoid heap allocations for
-	// common query shapes while keeping the struct size small.
-	colsBuf    [16]schema.Expression
-	whereBuf   [8]schema.Predicate
-	orderBuf   [4]schema.OrderExpr
-	joinsBuf   [4]joinClause
-	groupByBuf [4]schema.Expression
-	havingBuf  [4]schema.Predicate
+	// OPTIMIZATION: Internal buffers to avoid heap allocations for common
+	// query shapes while keeping the struct size reasonable.
+	colsBuf    [8]schema.Expression
+	whereBuf   [4]schema.Predicate
+	orderBuf   [2]schema.OrderExpr
+	joinsBuf   [2]joinClause
+	groupByBuf [2]schema.Expression
+	havingBuf  [2]schema.Predicate
 }
 
 var selectQueryPool = sync.Pool{
