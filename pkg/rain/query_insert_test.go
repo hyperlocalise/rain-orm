@@ -773,7 +773,6 @@ func TestInsertOnConflictMySQL(t *testing.T) {
 		}
 	})
 
-
 	t.Run("ignore", func(t *testing.T) {
 		sqlText, args, err := db.Insert().
 			Ignore().
