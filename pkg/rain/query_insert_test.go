@@ -269,6 +269,105 @@ func TestInsertOnConflictPostgres(t *testing.T) {
 	})
 }
 
+func TestInsertIgnoreToSQL(t *testing.T) {
+	t.Parallel()
+
+	users, _ := defineTables()
+
+	type tc struct {
+		name     string
+		dialect  string
+		build    func(*rain.DB) *rain.InsertQuery
+		wantSQL  string
+		wantArgs []any
+	}
+
+	cases := []tc{
+		{
+			name:    "mysql explicit ignore",
+			dialect: "mysql",
+			build: func(db *rain.DB) *rain.InsertQuery {
+				return db.Insert().Table(users).Set(users.Email, "alice@example.com").Ignore()
+			},
+			wantSQL:  "INSERT IGNORE INTO `users` (`email`) VALUES (?)",
+			wantArgs: []any{"alice@example.com"},
+		},
+		{
+			name:    "mysql conflict do nothing renders as ignore",
+			dialect: "mysql",
+			build: func(db *rain.DB) *rain.InsertQuery {
+				return db.Insert().Table(users).Set(users.Email, "alice@example.com").OnConflict().DoNothing()
+			},
+			wantSQL:  "INSERT IGNORE INTO `users` (`email`) VALUES (?)",
+			wantArgs: []any{"alice@example.com"},
+		},
+		{
+			name:    "sqlite explicit ignore",
+			dialect: "sqlite",
+			build: func(db *rain.DB) *rain.InsertQuery {
+				return db.Insert().Table(users).Set(users.Email, "alice@example.com").Ignore()
+			},
+			wantSQL:  `INSERT OR IGNORE INTO "users" ("email") VALUES (?)`,
+			wantArgs: []any{"alice@example.com"},
+		},
+		{
+			name:    "sqlite conflict do nothing without target renders as ignore",
+			dialect: "sqlite",
+			build: func(db *rain.DB) *rain.InsertQuery {
+				return db.Insert().Table(users).Set(users.Email, "alice@example.com").OnConflict().DoNothing()
+			},
+			wantSQL:  `INSERT OR IGNORE INTO "users" ("email") VALUES (?)`,
+			wantArgs: []any{"alice@example.com"},
+		},
+		{
+			name:    "sqlite conflict do nothing with target renders on conflict",
+			dialect: "sqlite",
+			build: func(db *rain.DB) *rain.InsertQuery {
+				return db.Insert().Table(users).Set(users.Email, "alice@example.com").OnConflict(users.Email).DoNothing()
+			},
+			wantSQL:  `INSERT INTO "users" ("email") VALUES (?) ON CONFLICT ("email") DO NOTHING`,
+			wantArgs: []any{"alice@example.com"},
+		},
+		{
+			name:    "mysql insert select ignore",
+			dialect: "mysql",
+			build: func(db *rain.DB) *rain.InsertQuery {
+				subquery := db.Select().Table(users).Column(users.Email)
+				return db.Insert().Table(users).Columns(users.Email).Select(subquery).Ignore()
+			},
+			wantSQL: "INSERT IGNORE INTO `users` (`email`) SELECT `users`.`email` FROM `users`",
+		},
+	}
+
+	for _, tt := range cases {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			db, err := rain.OpenDialect(tt.dialect)
+			if err != nil {
+				t.Fatalf("OpenDialect returned error: %v", err)
+			}
+
+			sqlText, args, err := tt.build(db).ToSQL()
+			if err != nil {
+				t.Fatalf("ToSQL returned error: %v", err)
+			}
+			if sqlText != tt.wantSQL {
+				t.Fatalf("unexpected SQL:\nwant: %s\ngot:  %s", tt.wantSQL, sqlText)
+			}
+			if len(args) != len(tt.wantArgs) {
+				t.Fatalf("unexpected arg count: want %d got %d (%#v)", len(tt.wantArgs), len(args), args)
+			}
+			for idx := range tt.wantArgs {
+				if args[idx] != tt.wantArgs[idx] {
+					t.Fatalf("unexpected arg[%d]: want %#v got %#v", idx, tt.wantArgs[idx], args[idx])
+				}
+			}
+		})
+	}
+}
+
 func TestInsertWithCTEToSQL(t *testing.T) {
 	t.Parallel()
 
@@ -680,7 +779,7 @@ func TestInsertOnConflictMySQL(t *testing.T) {
 	}
 	users, _ := defineTables()
 
-	t.Run("do nothing (no-op update)", func(t *testing.T) {
+	t.Run("do nothing (renders as IGNORE)", func(t *testing.T) {
 		sqlText, args, err := db.Insert().
 			Table(users).
 			Set(users.Email, "alice@example.com").
@@ -692,7 +791,7 @@ func TestInsertOnConflictMySQL(t *testing.T) {
 			t.Fatalf("insert on conflict mysql do nothing ToSQL returned error: %v", err)
 		}
 
-		wantSQL := "INSERT INTO `users` (`email`, `name`) VALUES (?, ?) ON DUPLICATE KEY UPDATE `id` = `id`"
+		wantSQL := "INSERT IGNORE INTO `users` (`email`, `name`) VALUES (?, ?)"
 		if sqlText != wantSQL {
 			t.Fatalf("unexpected mysql do nothing SQL:\nwant: %s\ngot:  %s", wantSQL, sqlText)
 		}

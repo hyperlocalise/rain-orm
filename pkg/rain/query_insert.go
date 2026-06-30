@@ -26,6 +26,7 @@ type InsertQuery struct {
 	conflict      *insertConflictClause
 	ctes          []cteDefinition
 	defaultValues bool
+	ignore        bool
 
 	// OPTIMIZATION: Internal buffers to avoid heap allocations for common
 	// query shapes while keeping the struct size reasonable.
@@ -216,6 +217,13 @@ func (q *InsertQuery) Returning(exprs ...schema.Expression) *InsertQuery {
 	return q
 }
 
+// Ignore configures the INSERT to ignore conflicts.
+// MySQL renders "INSERT IGNORE", SQLite renders "INSERT OR IGNORE".
+func (q *InsertQuery) Ignore() *InsertQuery {
+	q.ignore = true
+	return q
+}
+
 // Prepare compiles and prepares the INSERT query.
 func (q *InsertQuery) Prepare(ctx context.Context) (*PreparedInsertQuery, error) {
 	if q.runner == nil {
@@ -287,7 +295,7 @@ func (q *InsertQuery) writeValuesSQL(ctx *compileContext) error {
 		if err := q.validateSources(); err != nil {
 			return err
 		}
-		ctx.writeString("INSERT INTO ")
+		q.writeInsertInto(ctx)
 		ctx.writeTableName(q.table)
 		if ctx.dialect.Name() == "mysql" {
 			ctx.writeString(" () VALUES ()")
@@ -299,7 +307,7 @@ func (q *InsertQuery) writeValuesSQL(ctx *compileContext) error {
 			return err
 		}
 
-		ctx.writeString("INSERT INTO ")
+		q.writeInsertInto(ctx)
 		ctx.writeTableName(q.table)
 
 		if q.models != nil {
@@ -521,6 +529,36 @@ func (q *InsertQuery) assignmentsFromModelAndSet() ([]assignment, error) {
 	return assignments, nil
 }
 
+func (q *InsertQuery) writeInsertInto(ctx *compileContext) {
+	ctx.writeString("INSERT")
+	if q.useIgnore(ctx) {
+		switch ctx.dialect.Name() {
+		case "mysql":
+			ctx.writeString(" IGNORE")
+		case "sqlite":
+			ctx.writeString(" OR IGNORE")
+		}
+	}
+	ctx.writeString(" INTO ")
+}
+
+func (q *InsertQuery) useIgnore(ctx *compileContext) bool {
+	if q.ignore {
+		return true
+	}
+	if q.conflict != nil && q.conflict.action == insertConflictActionDoNothing {
+		// Drizzle behavior: .onConflictDoNothing() without target columns on
+		// MySQL or SQLite renders as IGNORE.
+		if ctx.dialect.Name() == "mysql" {
+			return true
+		}
+		if ctx.dialect.Name() == "sqlite" && len(q.conflict.columns) == 0 && q.conflict.constraint == "" {
+			return true
+		}
+	}
+	return false
+}
+
 func (q *InsertQuery) writeSingleRowSQL(ctx *compileContext) error {
 	// Single row might be from a model and/or explicit .Set() values.
 	// We use assignmentsFromModelAndSet which is already
@@ -574,7 +612,7 @@ func (q *InsertQuery) writeSelectSQL(ctx *compileContext) error {
 		selectQuery = selectQuery.withSQLiteInsertSelectConflictWhere()
 	}
 
-	ctx.writeString("INSERT INTO ")
+	q.writeInsertInto(ctx)
 	ctx.writeTableName(q.table)
 
 	if len(q.columns) > 0 {
@@ -710,6 +748,9 @@ func (q *InsertQuery) writeConflictClause(ctx *compileContext) error {
 			return errors.New("rain: MySQL ON DUPLICATE KEY UPDATE does not support WHERE filters")
 		}
 		if q.conflict.action == insertConflictActionDoNothing {
+			if q.useIgnore(ctx) {
+				return nil
+			}
 			noopColumn, err := mysqlConflictNoopColumn(q.table)
 			if err != nil {
 				return err
@@ -743,6 +784,9 @@ func (q *InsertQuery) writeConflictClause(ctx *compileContext) error {
 	}
 
 	if len(q.conflict.columns) == 0 && q.conflict.constraint == "" {
+		if q.useIgnore(ctx) {
+			return nil
+		}
 		return errors.New("rain: conflict clause requires at least one target (columns or constraint)")
 	}
 
