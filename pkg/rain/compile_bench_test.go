@@ -108,4 +108,31 @@ func BenchmarkInsertToSQL(b *testing.B) {
 			}
 		}
 	})
+
+	b.Run("SingleModel", func(b *testing.B) {
+		type User struct {
+			schema.TableModel
+			ID     int64  `db:"id"`
+			Email  string `db:"email"`
+			Name   string `db:"name"`
+			Active bool   `db:"active"`
+		}
+		u := &User{
+			Email:  "bolt@example.com",
+			Name:   "Bolt",
+			Active: true,
+		}
+
+		b.ReportAllocs()
+		b.ResetTimer()
+		for range b.N {
+			_, _, err := db.Insert().
+				Table(users).
+				Model(u).
+				ToSQL()
+			if err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
 }

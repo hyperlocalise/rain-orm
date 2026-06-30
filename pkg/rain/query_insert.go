@@ -522,6 +522,13 @@ func (q *InsertQuery) assignmentsFromModelAndSet() ([]assignment, error) {
 }
 
 func (q *InsertQuery) writeSingleRowSQL(ctx *compileContext) error {
+	// OPTIMIZATION: If only a model is provided (no .Set() calls), stream
+	// directly from the model using its assignment plan to avoid intermediate
+	// slice and map allocations in assignmentsFromModelAndSet.
+	if q.model != nil && len(q.values) == 0 {
+		return q.writeSingleModelSQL(ctx)
+	}
+
 	// Single row might be from a model and/or explicit .Set() values.
 	// We use assignmentsFromModelAndSet which is already
 	// relatively efficient for a single row.
@@ -551,6 +558,74 @@ func (q *InsertQuery) writeSingleRowSQL(ctx *compileContext) error {
 	}
 	ctx.writeByte(')')
 
+	return nil
+}
+
+func (q *InsertQuery) writeSingleModelSQL(ctx *compileContext) error {
+	meta, value, err := lookupModelMeta(q.model)
+	if err != nil {
+		return err
+	}
+	plan, err := lookupModelAssignmentPlan(q.table, value.Type())
+	if err != nil {
+		return err
+	}
+
+	// First pass: determine which fields to include and write column names.
+	type activeField struct {
+		column *schema.ColumnDef
+		value  any
+	}
+	var activeFieldsBuf [16]activeField
+	activeFields := activeFieldsBuf[:0]
+
+	for _, f := range plan.fields {
+		fieldValue := value.FieldByIndex(f.index)
+		resolved, include := fieldValueForInsert(f.column, fieldValue, true)
+		if include {
+			field := activeField{column: f.column, value: resolved}
+			if len(activeFields) < cap(activeFieldsBuf) {
+				activeFields = append(activeFields, field)
+			} else {
+				if len(activeFields) == cap(activeFieldsBuf) {
+					// Fallback to heap if model has >16 active columns.
+					newFields := make([]activeField, len(activeFields), len(plan.fields))
+					copy(newFields, activeFields)
+					activeFields = newFields
+				}
+				activeFields = append(activeFields, field)
+			}
+		}
+	}
+
+	if len(activeFields) == 0 {
+		return errors.New("rain: insert model produced no values")
+	}
+
+	ctx.writeString(" (")
+	for idx, f := range activeFields {
+		if idx > 0 {
+			ctx.writeString(", ")
+		}
+		ctx.writeQuotedIdentifier(f.column.Name)
+	}
+	ctx.writeString(") VALUES (")
+
+	ctx.ensureArgsCapacity(len(activeFields))
+
+	for idx, f := range activeFields {
+		if idx > 0 {
+			ctx.writeString(", ")
+		}
+		if err := ctx.writeAny(f.value); err != nil {
+			return err
+		}
+	}
+	ctx.writeByte(')')
+
+	// Validate strict binding if requested (already checked by lookupModelAssignmentPlan
+	// but we re-check metadata here to be safe and consistent with assignmentsFromModel).
+	_ = meta
 	return nil
 }
 

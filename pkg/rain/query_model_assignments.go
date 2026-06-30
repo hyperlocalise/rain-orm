@@ -103,6 +103,29 @@ func fieldValueForInsert(column *schema.ColumnDef, fieldValue reflect.Value, ski
 		return nil, false
 	}
 
+	// OPTIMIZATION: Fast-path for common primitive types to check for zero values
+	// before calling the more expensive insertValueForField.
+	if skipAuto && column.AutoIncrement {
+		switch fieldValue.Kind() {
+		case reflect.Int64, reflect.Int, reflect.Int32, reflect.Int16, reflect.Int8:
+			if val := fieldValue.Int(); val == 0 {
+				return nil, false
+			}
+		case reflect.Uint64, reflect.Uint, reflect.Uint32, reflect.Uint16, reflect.Uint8:
+			if val := fieldValue.Uint(); val == 0 {
+				return nil, false
+			}
+		case reflect.String:
+			if val := fieldValue.String(); val == "" {
+				return nil, false
+			}
+		case reflect.Pointer:
+			if fieldValue.IsNil() {
+				return nil, false
+			}
+		}
+	}
+
 	resolvedValue, include, explicit := insertValueForField(fieldValue)
 	if !include {
 		return nil, false
@@ -137,6 +160,19 @@ func insertValueForField(fieldValue reflect.Value) (value any, include bool, exp
 	kind := fieldValue.Kind()
 	if kind == reflect.Pointer && fieldValue.IsNil() {
 		return nil, false, false
+	}
+
+	// OPTIMIZATION: Fast-path for common primitive types to avoid interface
+	// conversions and extra reflection overhead where possible.
+	switch kind {
+	case reflect.Int64:
+		return fieldValue.Int(), true, false
+	case reflect.String:
+		return fieldValue.String(), true, false
+	case reflect.Bool:
+		return fieldValue.Bool(), true, false
+	case reflect.Int:
+		return fieldValue.Int(), true, false
 	}
 
 	if fieldValue.CanInterface() {
