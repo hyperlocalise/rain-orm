@@ -24,6 +24,7 @@ type InsertQuery struct {
 	columns       []schema.ColumnReference
 	returning     []schema.Expression
 	conflict      *insertConflictClause
+	ignore        bool
 	ctes          []cteDefinition
 	defaultValues bool
 
@@ -210,6 +211,14 @@ func (b *InsertConflictBuilder) DoUpdateSet(columns ...schema.ColumnReference) *
 	return &InsertConflictUpdateBuilder{query: b.query}
 }
 
+// Ignore configures the INSERT to ignore conflict errors.
+// PostgreSQL renders "ON CONFLICT DO NOTHING", while MySQL renders "INSERT IGNORE"
+// and SQLite renders "INSERT OR IGNORE".
+func (q *InsertQuery) Ignore() *InsertQuery {
+	q.ignore = true
+	return q
+}
+
 // Returning adds RETURNING expressions when supported by the dialect.
 func (q *InsertQuery) Returning(exprs ...schema.Expression) *InsertQuery {
 	q.returning = append(q.returning, exprs...)
@@ -287,7 +296,7 @@ func (q *InsertQuery) writeValuesSQL(ctx *compileContext) error {
 		if err := q.validateSources(); err != nil {
 			return err
 		}
-		ctx.writeString("INSERT INTO ")
+		q.writeInsertInto(ctx)
 		ctx.writeTableName(q.table)
 		if ctx.dialect.Name() == "mysql" {
 			ctx.writeString(" () VALUES ()")
@@ -299,7 +308,7 @@ func (q *InsertQuery) writeValuesSQL(ctx *compileContext) error {
 			return err
 		}
 
-		ctx.writeString("INSERT INTO ")
+		q.writeInsertInto(ctx)
 		ctx.writeTableName(q.table)
 
 		if q.models != nil {
@@ -323,6 +332,33 @@ func (q *InsertQuery) writeValuesSQL(ctx *compileContext) error {
 	}
 
 	return ctx.writeReturning(q.returning, q.returningClause())
+}
+
+func (q *InsertQuery) useIgnore() bool {
+	if q.ignore {
+		return true
+	}
+	if q.conflict == nil || q.conflict.action != insertConflictActionDoNothing {
+		return false
+	}
+	// For MySQL and SQLite, OnConflict().DoNothing() with no targets is
+	// equivalent to INSERT [OR] IGNORE.
+	return (q.dialect.Name() == "mysql" || q.dialect.Name() == "sqlite") &&
+		len(q.conflict.columns) == 0 && q.conflict.constraint == ""
+}
+
+func (q *InsertQuery) writeInsertInto(ctx *compileContext) {
+	if q.useIgnore() {
+		switch q.dialect.Name() {
+		case "mysql":
+			ctx.writeString("INSERT IGNORE INTO ")
+			return
+		case "sqlite":
+			ctx.writeString("INSERT OR IGNORE INTO ")
+			return
+		}
+	}
+	ctx.writeString("INSERT INTO ")
 }
 
 func (q *InsertQuery) writeModelsSQL(ctx *compileContext) error {
@@ -648,7 +684,7 @@ func (q *InsertQuery) writeSelectSQL(ctx *compileContext) error {
 		selectQuery = selectQuery.withSQLiteInsertSelectConflictWhere()
 	}
 
-	ctx.writeString("INSERT INTO ")
+	q.writeInsertInto(ctx)
 	ctx.writeTableName(q.table)
 
 	if len(q.columns) > 0 {
@@ -765,6 +801,11 @@ func (q *InsertQuery) validateSources() error {
 }
 
 func (q *InsertQuery) writeConflictClause(ctx *compileContext) error {
+	if q.ignore && q.dialect.Name() == "postgres" {
+		ctx.writeString(" ON CONFLICT DO NOTHING")
+		return nil
+	}
+
 	if q.conflict == nil {
 		return nil
 	}
@@ -777,6 +818,9 @@ func (q *InsertQuery) writeConflictClause(ctx *compileContext) error {
 	}
 
 	if q.dialect.Name() == "mysql" {
+		if q.useIgnore() {
+			return nil
+		}
 		if len(q.conflict.columns) > 0 || q.conflict.constraint != "" || len(q.conflict.targetWhere) > 0 {
 			return errors.New("rain: MySQL ON DUPLICATE KEY UPDATE does not support conflict targets (columns, constraints, or WHERE); call OnConflict() without modifiers")
 		}
@@ -816,8 +860,8 @@ func (q *InsertQuery) writeConflictClause(ctx *compileContext) error {
 		return nil
 	}
 
-	if len(q.conflict.columns) == 0 && q.conflict.constraint == "" {
-		return errors.New("rain: conflict clause requires at least one target (columns or constraint)")
+	if q.dialect.Name() == "sqlite" && q.useIgnore() {
+		return nil
 	}
 
 	ctx.writeString(" ON CONFLICT")
@@ -836,6 +880,8 @@ func (q *InsertQuery) writeConflictClause(ctx *compileContext) error {
 			ctx.writeColumnName(col)
 		}
 		ctx.writeByte(')')
+	} else if q.conflict.action != insertConflictActionDoNothing {
+		return errors.New("rain: conflict clause requires at least one target (columns or constraint)")
 	}
 
 	if len(q.conflict.targetWhere) > 0 {
