@@ -522,6 +522,12 @@ func (q *InsertQuery) assignmentsFromModelAndSet() ([]assignment, error) {
 }
 
 func (q *InsertQuery) writeSingleRowSQL(ctx *compileContext) error {
+	// OPTIMIZATION: If we only have a single model and no explicit .Set() calls,
+	// use a direct streaming method to bypass intermediate assignment slices.
+	if q.model != nil && len(q.values) == 0 {
+		return q.writeSingleModelSQL(ctx)
+	}
+
 	// Single row might be from a model and/or explicit .Set() values.
 	// We use assignmentsFromModelAndSet which is already
 	// relatively efficient for a single row.
@@ -546,6 +552,74 @@ func (q *InsertQuery) writeSingleRowSQL(ctx *compileContext) error {
 			ctx.writeString(", ")
 		}
 		if err := ctx.writeAny(item.value); err != nil {
+			return err
+		}
+	}
+	ctx.writeByte(')')
+
+	return nil
+}
+
+func (q *InsertQuery) writeSingleModelSQL(ctx *compileContext) error {
+	_, value, err := lookupModelMeta(q.model)
+	if err != nil {
+		return err
+	}
+	plan, err := lookupModelAssignmentPlan(q.table, value.Type())
+	if err != nil {
+		return err
+	}
+
+	// OPTIMIZATION: Use stack-allocated buffers for values and columns to avoid
+	// heap allocations for the common case of models with <= 32 fields.
+	var (
+		valuesBuf [32]any
+		colsBuf   [32]*schema.ColumnDef
+		values    = valuesBuf[:0]
+		cols      = colsBuf[:0]
+	)
+
+	for _, field := range plan.fields {
+		fieldValue := value.FieldByIndex(field.index)
+		resolvedValue, include := fieldValueForInsert(field.column, fieldValue, true)
+		if !include {
+			continue
+		}
+
+		if len(values) >= len(valuesBuf) {
+			// Fallback to heap allocations for extremely large models.
+			if &values[0] == &valuesBuf[0] {
+				values = make([]any, 0, len(plan.fields))
+				values = append(values, valuesBuf[:]...)
+				cols = make([]*schema.ColumnDef, 0, len(plan.fields))
+				cols = append(cols, colsBuf[:]...)
+			}
+		}
+
+		values = append(values, resolvedValue)
+		cols = append(cols, field.column)
+	}
+
+	if len(values) == 0 {
+		return errors.New("rain: insert model produced no values")
+	}
+
+	ctx.writeString(" (")
+	for idx, col := range cols {
+		if idx > 0 {
+			ctx.writeString(", ")
+		}
+		ctx.writeQuotedIdentifier(col.Name)
+	}
+	ctx.writeString(") VALUES (")
+
+	ctx.ensureArgsCapacity(len(values))
+
+	for idx, val := range values {
+		if idx > 0 {
+			ctx.writeString(", ")
+		}
+		if err := ctx.writeAny(val); err != nil {
 			return err
 		}
 	}
