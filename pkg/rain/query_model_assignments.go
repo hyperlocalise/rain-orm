@@ -103,9 +103,11 @@ func fieldValueForInsert(column *schema.ColumnDef, fieldValue reflect.Value, ski
 		return nil, false
 	}
 
-	// OPTIMIZATION: Fast-path for common primitive types to check for zero values
-	// before calling the more expensive insertValueForField.
-	if skipAuto && column.AutoIncrement {
+	// OPTIMIZATION: Fast-path for common built-in primitive types to check for
+	// zero values before calling the more expensive insertValueForField.
+	// We only use the fast-path for types without a PkgPath (built-in) to
+	// ensure custom providers (wrappers) are still consulted for auto IDs.
+	if skipAuto && column.AutoIncrement && fieldValue.Type().PkgPath() == "" {
 		switch fieldValue.Kind() {
 		case reflect.Int64, reflect.Int, reflect.Int32, reflect.Int16, reflect.Int8:
 			if val := fieldValue.Int(); val == 0 {
@@ -162,17 +164,21 @@ func insertValueForField(fieldValue reflect.Value) (value any, include bool, exp
 		return nil, false, false
 	}
 
-	// OPTIMIZATION: Fast-path for common primitive types to avoid interface
-	// conversions and extra reflection overhead where possible.
-	switch kind {
-	case reflect.Int64:
-		return fieldValue.Int(), true, false
-	case reflect.String:
-		return fieldValue.String(), true, false
-	case reflect.Bool:
-		return fieldValue.Bool(), true, false
-	case reflect.Int:
-		return fieldValue.Int(), true, false
+	// OPTIMIZATION: Fast-path for common built-in primitive types to avoid
+	// interface conversions and extra reflection overhead where possible.
+	// We only use the fast-path for types without a PkgPath (built-in) to
+	// ensure custom providers (wrappers) are still consulted.
+	if fieldValue.Type().PkgPath() == "" {
+		switch kind {
+		case reflect.Int64:
+			return fieldValue.Int(), true, false
+		case reflect.String:
+			return fieldValue.String(), true, false
+		case reflect.Bool:
+			return fieldValue.Bool(), true, false
+		case reflect.Int:
+			return fieldValue.Int(), true, false
+		}
 	}
 
 	if fieldValue.CanInterface() {
