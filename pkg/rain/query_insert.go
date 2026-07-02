@@ -26,6 +26,7 @@ type InsertQuery struct {
 	conflict      *insertConflictClause
 	ctes          []cteDefinition
 	defaultValues bool
+	ignore        bool
 
 	// OPTIMIZATION: Internal buffers to avoid heap allocations for common
 	// query shapes while keeping the struct size reasonable.
@@ -184,6 +185,15 @@ func (q *InsertQuery) DefaultValues() *InsertQuery {
 	return q
 }
 
+// Ignore configures the INSERT to ignore conflicting rows.
+// For MySQL, this renders "INSERT IGNORE".
+// For SQLite, this renders "INSERT OR IGNORE".
+// For PostgreSQL, this renders "ON CONFLICT DO NOTHING".
+func (q *InsertQuery) Ignore() *InsertQuery {
+	q.ignore = true
+	return q
+}
+
 // OnConflict starts an upsert clause for PostgreSQL and SQLite dialects.
 func (q *InsertQuery) OnConflict(columns ...schema.ColumnReference) *InsertConflictBuilder {
 	q.conflict = &insertConflictClause{columns: columns}
@@ -275,6 +285,31 @@ func (q *InsertQuery) compile() (compiledQuery, error) {
 	return ctx.compiledQuery(), ctx.err
 }
 
+func (q *InsertQuery) useIgnore() bool {
+	if q.ignore {
+		return true
+	}
+	if q.conflict != nil && q.conflict.action == insertConflictActionDoNothing &&
+		len(q.conflict.columns) == 0 && q.conflict.constraint == "" {
+		return true
+	}
+	return false
+}
+
+func (q *InsertQuery) writeInsertInto(ctx *compileContext) {
+	if q.useIgnore() {
+		switch ctx.dialect.Name() {
+		case "mysql":
+			ctx.writeString("INSERT IGNORE INTO ")
+			return
+		case "sqlite":
+			ctx.writeString("INSERT OR IGNORE INTO ")
+			return
+		}
+	}
+	ctx.writeString("INSERT INTO ")
+}
+
 func (q *InsertQuery) writeValuesSQL(ctx *compileContext) error {
 	if err := writeCTEs(ctx, q.ctes, "insert"); err != nil {
 		return err
@@ -287,7 +322,7 @@ func (q *InsertQuery) writeValuesSQL(ctx *compileContext) error {
 		if err := q.validateSources(); err != nil {
 			return err
 		}
-		ctx.writeString("INSERT INTO ")
+		q.writeInsertInto(ctx)
 		ctx.writeTableName(q.table)
 		if ctx.dialect.Name() == "mysql" {
 			ctx.writeString(" () VALUES ()")
@@ -299,7 +334,7 @@ func (q *InsertQuery) writeValuesSQL(ctx *compileContext) error {
 			return err
 		}
 
-		ctx.writeString("INSERT INTO ")
+		q.writeInsertInto(ctx)
 		ctx.writeTableName(q.table)
 
 		if q.models != nil {
@@ -648,7 +683,7 @@ func (q *InsertQuery) writeSelectSQL(ctx *compileContext) error {
 		selectQuery = selectQuery.withSQLiteInsertSelectConflictWhere()
 	}
 
-	ctx.writeString("INSERT INTO ")
+	q.writeInsertInto(ctx)
 	ctx.writeTableName(q.table)
 
 	if len(q.columns) > 0 {
@@ -765,9 +800,15 @@ func (q *InsertQuery) validateSources() error {
 }
 
 func (q *InsertQuery) writeConflictClause(ctx *compileContext) error {
+	useIgnore := q.useIgnore()
+
 	if q.conflict == nil {
+		if useIgnore && ctx.dialect.Name() == "postgres" {
+			ctx.writeString(" ON CONFLICT DO NOTHING")
+		}
 		return nil
 	}
+
 	if q.conflict.action == insertConflictActionNone {
 		return errors.New("rain: conflict action is required; call DoNothing() or DoUpdateSet(...)")
 	}
@@ -777,6 +818,9 @@ func (q *InsertQuery) writeConflictClause(ctx *compileContext) error {
 	}
 
 	if q.dialect.Name() == "mysql" {
+		if useIgnore {
+			return nil
+		}
 		if len(q.conflict.columns) > 0 || q.conflict.constraint != "" || len(q.conflict.targetWhere) > 0 {
 			return errors.New("rain: MySQL ON DUPLICATE KEY UPDATE does not support conflict targets (columns, constraints, or WHERE); call OnConflict() without modifiers")
 		}
@@ -816,11 +860,19 @@ func (q *InsertQuery) writeConflictClause(ctx *compileContext) error {
 		return nil
 	}
 
-	if len(q.conflict.columns) == 0 && q.conflict.constraint == "" {
+	if q.dialect.Name() == "sqlite" && useIgnore {
+		return nil
+	}
+
+	if !useIgnore && len(q.conflict.columns) == 0 && q.conflict.constraint == "" {
 		return errors.New("rain: conflict clause requires at least one target (columns or constraint)")
 	}
 
 	ctx.writeString(" ON CONFLICT")
+	if q.useIgnore() && len(q.conflict.columns) == 0 && q.conflict.constraint == "" {
+		ctx.writeString(" DO NOTHING")
+		return nil
+	}
 	if q.conflict.constraint != "" {
 		ctx.writeString(" ON CONSTRAINT ")
 		ctx.writeQuotedIdentifier(q.conflict.constraint)

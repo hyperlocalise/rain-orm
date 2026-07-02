@@ -680,7 +680,7 @@ func TestInsertOnConflictMySQL(t *testing.T) {
 	}
 	users, _ := defineTables()
 
-	t.Run("do nothing (no-op update)", func(t *testing.T) {
+	t.Run("do nothing (native ignore)", func(t *testing.T) {
 		sqlText, args, err := db.Insert().
 			Table(users).
 			Set(users.Email, "alice@example.com").
@@ -692,7 +692,7 @@ func TestInsertOnConflictMySQL(t *testing.T) {
 			t.Fatalf("insert on conflict mysql do nothing ToSQL returned error: %v", err)
 		}
 
-		wantSQL := "INSERT INTO `users` (`email`, `name`) VALUES (?, ?) ON DUPLICATE KEY UPDATE `id` = `id`"
+		wantSQL := "INSERT IGNORE INTO `users` (`email`, `name`) VALUES (?, ?)"
 		if sqlText != wantSQL {
 			t.Fatalf("unexpected mysql do nothing SQL:\nwant: %s\ngot:  %s", wantSQL, sqlText)
 		}
