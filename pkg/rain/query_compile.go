@@ -398,6 +398,7 @@ func (c *compileContext) writeExpressionInContext(expr schema.Expression, contex
 		default:
 			return fmt.Errorf("rain: invalid binary operator %q", value.Operator)
 		}
+		c.ensureArgsCapacity(1)
 		c.writeByte('(')
 		if err := c.writeExpression(value.Left); err != nil {
 			return err
@@ -413,6 +414,7 @@ func (c *compileContext) writeExpressionInContext(expr schema.Expression, contex
 		if len(value.Exprs) < 2 {
 			return errors.New("rain: CONCAT requires at least two expressions")
 		}
+		c.ensureArgsCapacity(len(value.Exprs))
 		switch c.dialect.Name() {
 		case "postgres", "sqlite":
 			c.writeByte('(')
@@ -443,6 +445,7 @@ func (c *compileContext) writeExpressionInContext(expr schema.Expression, contex
 		if len(value.Values) == 0 {
 			return errors.New("rain: IN predicate requires at least one value")
 		}
+		c.ensureArgsCapacity(len(value.Values))
 		if err := c.writeExpression(value.Left); err != nil {
 			return err
 		}
@@ -451,20 +454,23 @@ func (c *compileContext) writeExpressionInContext(expr schema.Expression, contex
 		} else {
 			c.writeString(" IN (")
 		}
+		// OPTIMIZATION: Move context creation outside the loop and avoid
+		// redundant checks for multi-value IN clauses.
+		exprCtx := expressionContext{}
+		if len(value.Values) == 1 {
+			exprCtx.noParens = true
+		}
 		for idx, item := range value.Values {
 			if idx > 0 {
 				c.writeString(", ")
 			}
-			ctx := expressionContext{}
-			if len(value.Values) == 1 {
-				ctx.noParens = true
-			}
-			if err := c.writeExpressionInContext(item, ctx); err != nil {
+			if err := c.writeExpressionInContext(item, exprCtx); err != nil {
 				return err
 			}
 		}
 		c.writeByte(')')
 	case schema.BetweenExpr:
+		c.ensureArgsCapacity(2)
 		if err := c.writeExpression(value.Left); err != nil {
 			return err
 		}
@@ -515,6 +521,7 @@ func (c *compileContext) writeExpressionInContext(expr schema.Expression, contex
 			c.writeString(" IS NULL")
 		}
 	case schema.LogicalExpr:
+		c.ensureArgsCapacity(len(value.Exprs))
 		c.writeByte('(')
 		for idx, part := range value.Exprs {
 			if idx > 0 {
@@ -531,6 +538,17 @@ func (c *compileContext) writeExpressionInContext(expr schema.Expression, contex
 		if len(value.WhenThenPairs) == 0 {
 			return errors.New("rain: CASE expression requires at least one WHEN clause")
 		}
+		// OPTIMIZATION: Provide an argument capacity hint early to reduce slice re-allocations.
+		// We estimate based on pairs (When+Then) plus optional Value and Else expressions.
+		hint := len(value.WhenThenPairs) * 2
+		if value.ValueExpression != nil {
+			hint++
+		}
+		if value.ElseExpression != nil {
+			hint++
+		}
+		c.ensureArgsCapacity(hint)
+
 		c.writeByte('(')
 		c.writeString("CASE")
 		if value.ValueExpression != nil {
@@ -584,6 +602,7 @@ func (c *compileContext) writeExpressionInContext(expr schema.Expression, contex
 		if len(value.Exprs) < 2 {
 			return errors.New("rain: COALESCE requires at least two expressions")
 		}
+		c.ensureArgsCapacity(len(value.Exprs))
 		c.writeString("COALESCE(")
 		for idx, part := range value.Exprs {
 			if part == nil {
@@ -631,6 +650,9 @@ func (c *compileContext) writeColumnName(column schema.ColumnReference) {
 }
 
 func (c *compileContext) writeRaw(raw schema.RawExpr) error {
+	if len(raw.Args) > 0 {
+		c.ensureArgsCapacity(len(raw.Args))
+	}
 	argIndex := 0
 	for idx := range len(raw.SQL) {
 		if raw.SQL[idx] != '?' {
