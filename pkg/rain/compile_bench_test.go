@@ -76,6 +76,22 @@ func BenchmarkSelectToSQL(b *testing.B) {
 				ToSQL()
 		}
 	})
+
+	b.Run("InClause1000", func(b *testing.B) {
+		vals := make([]int64, 1000)
+		for i := range 1000 {
+			vals[i] = int64(i)
+		}
+
+		b.ReportAllocs()
+		b.ResetTimer()
+		for range b.N {
+			_, _, _ = db.Select().
+				Table(users).
+				Where(users.ID.In(vals...)).
+				ToSQL()
+		}
+	})
 }
 
 func BenchmarkInsertToSQL(b *testing.B) {
