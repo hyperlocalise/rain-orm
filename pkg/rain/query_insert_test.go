@@ -749,3 +749,105 @@ func TestInsertOnConflictMySQL(t *testing.T) {
 		}
 	})
 }
+
+func TestInsertIgnore(t *testing.T) {
+	t.Parallel()
+
+	users, _ := defineTables()
+
+	t.Run("postgres ignore", func(t *testing.T) {
+		db, _ := rain.OpenDialect("postgres")
+		sqlText, args, err := db.Insert().
+			Table(users).
+			Set(users.Email, "alice@example.com").
+			Ignore().
+			ToSQL()
+		if err != nil {
+			t.Fatalf("ToSQL returned error: %v", err)
+		}
+
+		wantSQL := `INSERT INTO "users" ("email") VALUES ($1) ON CONFLICT DO NOTHING`
+		if sqlText != wantSQL {
+			t.Fatalf("unexpected SQL:\nwant: %s\ngot:  %s", wantSQL, sqlText)
+		}
+		if len(args) != 1 || args[0] != "alice@example.com" {
+			t.Fatalf("unexpected args: %#v", args)
+		}
+	})
+
+	t.Run("sqlite ignore", func(t *testing.T) {
+		db, _ := rain.OpenDialect("sqlite")
+		sqlText, args, err := db.Insert().
+			Table(users).
+			Set(users.Email, "alice@example.com").
+			Ignore().
+			ToSQL()
+		if err != nil {
+			t.Fatalf("ToSQL returned error: %v", err)
+		}
+
+		wantSQL := `INSERT OR IGNORE INTO "users" ("email") VALUES (?)`
+		if sqlText != wantSQL {
+			t.Fatalf("unexpected SQL:\nwant: %s\ngot:  %s", wantSQL, sqlText)
+		}
+		if len(args) != 1 || args[0] != "alice@example.com" {
+			t.Fatalf("unexpected args: %#v", args)
+		}
+	})
+
+	t.Run("mysql ignore", func(t *testing.T) {
+		db, _ := rain.OpenDialect("mysql")
+		sqlText, args, err := db.Insert().
+			Table(users).
+			Set(users.Email, "alice@example.com").
+			Ignore().
+			ToSQL()
+		if err != nil {
+			t.Fatalf("ToSQL returned error: %v", err)
+		}
+
+		wantSQL := "INSERT IGNORE INTO `users` (`email`) VALUES (?)"
+		if sqlText != wantSQL {
+			t.Fatalf("unexpected SQL:\nwant: %s\ngot:  %s", wantSQL, sqlText)
+		}
+		if len(args) != 1 || args[0] != "alice@example.com" {
+			t.Fatalf("unexpected args: %#v", args)
+		}
+	})
+
+	t.Run("postgres targetless on conflict do nothing", func(t *testing.T) {
+		db, _ := rain.OpenDialect("postgres")
+		sqlText, _, err := db.Insert().
+			Table(users).
+			Set(users.Email, "alice@example.com").
+			OnConflict().
+			DoNothing().
+			ToSQL()
+		if err != nil {
+			t.Fatalf("ToSQL returned error: %v", err)
+		}
+
+		wantSQL := `INSERT INTO "users" ("email") VALUES ($1) ON CONFLICT DO NOTHING`
+		if sqlText != wantSQL {
+			t.Fatalf("unexpected SQL:\nwant: %s\ngot:  %s", wantSQL, sqlText)
+		}
+	})
+
+	t.Run("sqlite targetless on conflict do nothing uses prefix", func(t *testing.T) {
+		db, _ := rain.OpenDialect("sqlite")
+		sqlText, _, err := db.Insert().
+			Table(users).
+			Set(users.Email, "alice@example.com").
+			OnConflict().
+			DoNothing().
+			ToSQL()
+		if err != nil {
+			t.Fatalf("ToSQL returned error: %v", err)
+		}
+
+		wantSQL := `INSERT OR IGNORE INTO "users" ("email") VALUES (?)`
+		if sqlText != wantSQL {
+			t.Fatalf("unexpected SQL:\nwant: %s\ngot:  %s", wantSQL, sqlText)
+		}
+	})
+}
