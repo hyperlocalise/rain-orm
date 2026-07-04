@@ -26,6 +26,7 @@ type InsertQuery struct {
 	conflict      *insertConflictClause
 	ctes          []cteDefinition
 	defaultValues bool
+	useIgnore     bool
 
 	// OPTIMIZATION: Internal buffers to avoid heap allocations for common
 	// query shapes while keeping the struct size reasonable.
@@ -184,6 +185,15 @@ func (q *InsertQuery) DefaultValues() *InsertQuery {
 	return q
 }
 
+// Ignore configures the INSERT to ignore conflict errors.
+// MySQL renders "INSERT IGNORE", SQLite renders "INSERT OR IGNORE".
+// PostgreSQL does not support this and will return an error during compilation;
+// use .OnConflict().DoNothing() instead for PostgreSQL.
+func (q *InsertQuery) Ignore() *InsertQuery {
+	q.useIgnore = true
+	return q
+}
+
 // OnConflict starts an upsert clause for PostgreSQL and SQLite dialects.
 func (q *InsertQuery) OnConflict(columns ...schema.ColumnReference) *InsertConflictBuilder {
 	q.conflict = &insertConflictClause{columns: columns}
@@ -287,8 +297,9 @@ func (q *InsertQuery) writeValuesSQL(ctx *compileContext) error {
 		if err := q.validateSources(); err != nil {
 			return err
 		}
-		ctx.writeString("INSERT INTO ")
-		ctx.writeTableName(q.table)
+		if err := q.writeInsertInto(ctx); err != nil {
+			return err
+		}
 		if ctx.dialect.Name() == "mysql" {
 			ctx.writeString(" () VALUES ()")
 		} else {
@@ -299,8 +310,9 @@ func (q *InsertQuery) writeValuesSQL(ctx *compileContext) error {
 			return err
 		}
 
-		ctx.writeString("INSERT INTO ")
-		ctx.writeTableName(q.table)
+		if err := q.writeInsertInto(ctx); err != nil {
+			return err
+		}
 
 		if q.models != nil {
 			if err := q.writeModelsSQL(ctx); err != nil {
@@ -648,8 +660,9 @@ func (q *InsertQuery) writeSelectSQL(ctx *compileContext) error {
 		selectQuery = selectQuery.withSQLiteInsertSelectConflictWhere()
 	}
 
-	ctx.writeString("INSERT INTO ")
-	ctx.writeTableName(q.table)
+	if err := q.writeInsertInto(ctx); err != nil {
+		return err
+	}
 
 	if len(q.columns) > 0 {
 		ctx.writeString(" (")
@@ -729,6 +742,43 @@ func (q *InsertQuery) Scan(ctx context.Context, dest any) error {
 	return err
 }
 
+func (q *InsertQuery) writeInsertInto(ctx *compileContext) error {
+	dialectName := ctx.dialect.Name()
+
+	renderIgnore := q.useIgnore
+	if q.conflict != nil && q.conflict.action == insertConflictActionDoNothing {
+		if dialectName == "mysql" {
+			renderIgnore = true
+		} else if dialectName == "sqlite" && len(q.conflict.columns) == 0 && q.conflict.constraint == "" {
+			renderIgnore = true
+		}
+	}
+
+	if renderIgnore {
+		switch dialectName {
+		case "mysql":
+			ctx.writeString("INSERT IGNORE INTO ")
+		case "sqlite":
+			ctx.writeString("INSERT OR IGNORE INTO ")
+		case "postgres":
+			if q.useIgnore {
+				return errors.New("rain: .Ignore() is not supported for PostgreSQL; use .OnConflict().DoNothing() instead")
+			}
+			ctx.writeString("INSERT INTO ")
+		default:
+			if q.useIgnore {
+				return fmt.Errorf("rain: .Ignore() is not implemented for %s dialect", dialectName)
+			}
+			ctx.writeString("INSERT INTO ")
+		}
+	} else {
+		ctx.writeString("INSERT INTO ")
+	}
+
+	ctx.writeTableName(q.table)
+	return nil
+}
+
 func (q *InsertQuery) validateSources() error {
 	if q.table == nil {
 		return errors.New("rain: insert query requires a table")
@@ -784,14 +834,7 @@ func (q *InsertQuery) writeConflictClause(ctx *compileContext) error {
 			return errors.New("rain: MySQL ON DUPLICATE KEY UPDATE does not support WHERE filters")
 		}
 		if q.conflict.action == insertConflictActionDoNothing {
-			noopColumn, err := mysqlConflictNoopColumn(q.table)
-			if err != nil {
-				return err
-			}
-			ctx.writeString(" ON DUPLICATE KEY UPDATE ")
-			ctx.writeQuotedIdentifier(noopColumn.Name)
-			ctx.writeString(" = ")
-			ctx.writeQuotedIdentifier(noopColumn.Name)
+			// Handled by INSERT IGNORE in writeInsertInto
 			return nil
 		}
 		if q.conflict.action == insertConflictActionDoUpdateSet {
@@ -817,6 +860,16 @@ func (q *InsertQuery) writeConflictClause(ctx *compileContext) error {
 	}
 
 	if len(q.conflict.columns) == 0 && q.conflict.constraint == "" {
+		if q.conflict.action == insertConflictActionDoNothing {
+			if q.dialect.Name() == "postgres" {
+				ctx.writeString(" ON CONFLICT DO NOTHING")
+				return nil
+			}
+			if q.dialect.Name() == "sqlite" {
+				// Handled by INSERT OR IGNORE in writeInsertInto
+				return nil
+			}
+		}
 		return errors.New("rain: conflict clause requires at least one target (columns or constraint)")
 	}
 
@@ -875,29 +928,4 @@ func (q *InsertQuery) writeConflictClause(ctx *compileContext) error {
 	}
 
 	return nil
-}
-
-func mysqlConflictNoopColumn(table *schema.TableDef) (*schema.ColumnDef, error) {
-	if table == nil {
-		return nil, errors.New("rain: insert query requires a table")
-	}
-
-	if primaryKey, err := tablePrimaryKeyConstraint(table); err != nil {
-		return nil, err
-	} else if primaryKey != nil && len(primaryKey.Columns) > 0 {
-		return primaryKey.Columns[0], nil
-	}
-
-	if primaryKeys := primaryKeyColumns(table); len(primaryKeys) > 0 {
-		return primaryKeys[0], nil
-	}
-
-	if len(table.Columns) == 0 {
-		return nil, fmt.Errorf("rain: table %q has no columns for MySQL conflict DO NOTHING", table.Name)
-	}
-
-	// MySQL requires an assignment after ON DUPLICATE KEY UPDATE. A table without
-	// primary key metadata can still conflict on a unique index, so use the first
-	// declared column only as a visible no-op target.
-	return table.Columns[0], nil
 }
