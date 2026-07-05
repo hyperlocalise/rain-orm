@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"sync"
 
 	"github.com/hyperlocalise/rain-orm/pkg/dialect"
 	"github.com/hyperlocalise/rain-orm/pkg/schema"
@@ -31,6 +32,37 @@ type InsertQuery struct {
 	// query shapes while keeping the struct size reasonable.
 	valuesBuf    [8]assignment
 	returningBuf [2]schema.Expression
+}
+
+var insertQueryPool = sync.Pool{
+	New: func() any {
+		return &InsertQuery{}
+	},
+}
+
+func newInsertQuery(runner queryRunner, d dialect.Dialect) *InsertQuery {
+	q := insertQueryPool.Get().(*InsertQuery)
+	*q = InsertQuery{
+		runner:  runner,
+		dialect: d,
+	}
+	q.values = q.valuesBuf[:0]
+	q.returning = q.returningBuf[:0]
+	return q
+}
+
+func releaseInsertQuery(q *InsertQuery) {
+	if q == nil {
+		return
+	}
+	*q = InsertQuery{}
+	insertQueryPool.Put(q)
+}
+
+// Release returns the query builder to the pool for reuse.
+// The builder must not be used after calling Release.
+func (q *InsertQuery) Release() {
+	releaseInsertQuery(q)
 }
 
 type insertConflictAction uint8

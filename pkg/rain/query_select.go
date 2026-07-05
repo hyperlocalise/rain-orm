@@ -84,6 +84,12 @@ func releaseSelectQuery(q *SelectQuery) {
 	selectQueryPool.Put(q)
 }
 
+// Release returns the query builder to the pool for reuse.
+// The builder must not be used after calling Release.
+func (q *SelectQuery) Release() {
+	releaseSelectQuery(q)
+}
+
 // Table sets the table source for the query.
 func (q *SelectQuery) Table(table schema.TableReference) *SelectQuery {
 	q.table = table.TableDef()

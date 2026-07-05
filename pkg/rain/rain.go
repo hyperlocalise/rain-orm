@@ -187,18 +187,7 @@ func (db *DB) Primary() *DB {
 
 // Select starts a typed SELECT query builder.
 func (db *DB) Select(cols ...schema.Expression) *SelectQuery {
-	q := &SelectQuery{
-		runner:  db.selectRunner(),
-		dialect: db.dialect,
-		cache:   db.queryCache(),
-	}
-	q.cols = q.colsBuf[:0]
-	q.where = q.whereBuf[:0]
-	q.order = q.orderBuf[:0]
-	q.joins = q.joinsBuf[:0]
-	q.groupBy = q.groupByBuf[:0]
-	q.having = q.havingBuf[:0]
-
+	q := newSelectQuery(db.selectRunner(), db.dialect, db.queryCache())
 	if len(cols) > 0 {
 		q.Column(cols...)
 	}
@@ -226,36 +215,17 @@ func (db *DB) InvalidateQueryCache(ctx context.Context, tags ...string) error {
 
 // Insert starts a typed INSERT query builder.
 func (db *DB) Insert() *InsertQuery {
-	q := &InsertQuery{
-		runner:  db.primaryRunner(),
-		dialect: db.dialect,
-	}
-	q.values = q.valuesBuf[:0]
-	q.returning = q.returningBuf[:0]
-	return q
+	return newInsertQuery(db.primaryRunner(), db.dialect)
 }
 
 // Update starts a typed UPDATE query builder.
 func (db *DB) Update() *UpdateQuery {
-	q := &UpdateQuery{
-		runner:  db.primaryRunner(),
-		dialect: db.dialect,
-	}
-	q.values = q.valuesBuf[:0]
-	q.where = q.whereBuf[:0]
-	q.returning = q.returningBuf[:0]
-	return q
+	return newUpdateQuery(db.primaryRunner(), db.dialect)
 }
 
 // Delete starts a typed DELETE query builder.
 func (db *DB) Delete() *DeleteQuery {
-	q := &DeleteQuery{
-		runner:  db.primaryRunner(),
-		dialect: db.dialect,
-	}
-	q.where = q.whereBuf[:0]
-	q.returning = q.returningBuf[:0]
-	return q
+	return newDeleteQuery(db.primaryRunner(), db.dialect)
 }
 
 // Excluded returns an expression that references the conflicting row's value during an UPSERT.
@@ -417,18 +387,7 @@ func (tx *Tx) RunInTx(ctx context.Context, fn func(*Tx) error) error {
 
 // Select starts a typed SELECT query builder in the transaction.
 func (tx *Tx) Select(cols ...schema.Expression) *SelectQuery {
-	q := &SelectQuery{
-		runner:  tx,
-		dialect: tx.dialect,
-		cache:   tx.queryCache,
-	}
-	q.cols = q.colsBuf[:0]
-	q.where = q.whereBuf[:0]
-	q.order = q.orderBuf[:0]
-	q.joins = q.joinsBuf[:0]
-	q.groupBy = q.groupByBuf[:0]
-	q.having = q.havingBuf[:0]
-
+	q := newSelectQuery(tx, tx.dialect, tx.queryCache)
 	if len(cols) > 0 {
 		q.Column(cols...)
 	}
@@ -450,36 +409,17 @@ func (tx *Tx) InvalidateQueryCache(ctx context.Context, tags ...string) error {
 
 // Insert starts a typed INSERT query builder in the transaction.
 func (tx *Tx) Insert() *InsertQuery {
-	q := &InsertQuery{
-		runner:  tx,
-		dialect: tx.dialect,
-	}
-	q.values = q.valuesBuf[:0]
-	q.returning = q.returningBuf[:0]
-	return q
+	return newInsertQuery(tx, tx.dialect)
 }
 
 // Update starts a typed UPDATE query builder in the transaction.
 func (tx *Tx) Update() *UpdateQuery {
-	q := &UpdateQuery{
-		runner:  tx,
-		dialect: tx.dialect,
-	}
-	q.values = q.valuesBuf[:0]
-	q.where = q.whereBuf[:0]
-	q.returning = q.returningBuf[:0]
-	return q
+	return newUpdateQuery(tx, tx.dialect)
 }
 
 // Delete starts a typed DELETE query builder in the transaction.
 func (tx *Tx) Delete() *DeleteQuery {
-	q := &DeleteQuery{
-		runner:  tx,
-		dialect: tx.dialect,
-	}
-	q.where = q.whereBuf[:0]
-	q.returning = q.returningBuf[:0]
-	return q
+	return newDeleteQuery(tx, tx.dialect)
 }
 
 func (tx *Tx) execContext(ctx context.Context, query string, args ...any) (sql.Result, error) {

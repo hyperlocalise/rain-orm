@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"sync"
 
 	"github.com/hyperlocalise/rain-orm/pkg/dialect"
 	"github.com/hyperlocalise/rain-orm/pkg/schema"
@@ -30,6 +31,37 @@ type DeleteQuery struct {
 	// query shapes while keeping the struct size reasonable.
 	whereBuf     [4]schema.Predicate
 	returningBuf [2]schema.Expression
+}
+
+var deleteQueryPool = sync.Pool{
+	New: func() any {
+		return &DeleteQuery{}
+	},
+}
+
+func newDeleteQuery(runner queryRunner, d dialect.Dialect) *DeleteQuery {
+	q := deleteQueryPool.Get().(*DeleteQuery)
+	*q = DeleteQuery{
+		runner:  runner,
+		dialect: d,
+	}
+	q.where = q.whereBuf[:0]
+	q.returning = q.returningBuf[:0]
+	return q
+}
+
+func releaseDeleteQuery(q *DeleteQuery) {
+	if q == nil {
+		return
+	}
+	*q = DeleteQuery{}
+	deleteQueryPool.Put(q)
+}
+
+// Release returns the query builder to the pool for reuse.
+// The builder must not be used after calling Release.
+func (q *DeleteQuery) Release() {
+	releaseDeleteQuery(q)
 }
 
 // Table sets the DELETE target table.

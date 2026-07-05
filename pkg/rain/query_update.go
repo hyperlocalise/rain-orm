@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"sync"
 
 	"github.com/hyperlocalise/rain-orm/pkg/dialect"
 	"github.com/hyperlocalise/rain-orm/pkg/schema"
@@ -34,6 +35,38 @@ type UpdateQuery struct {
 	valuesBuf    [8]assignment
 	whereBuf     [4]schema.Predicate
 	returningBuf [2]schema.Expression
+}
+
+var updateQueryPool = sync.Pool{
+	New: func() any {
+		return &UpdateQuery{}
+	},
+}
+
+func newUpdateQuery(runner queryRunner, d dialect.Dialect) *UpdateQuery {
+	q := updateQueryPool.Get().(*UpdateQuery)
+	*q = UpdateQuery{
+		runner:  runner,
+		dialect: d,
+	}
+	q.values = q.valuesBuf[:0]
+	q.where = q.whereBuf[:0]
+	q.returning = q.returningBuf[:0]
+	return q
+}
+
+func releaseUpdateQuery(q *UpdateQuery) {
+	if q == nil {
+		return
+	}
+	*q = UpdateQuery{}
+	updateQueryPool.Put(q)
+}
+
+// Release returns the query builder to the pool for reuse.
+// The builder must not be used after calling Release.
+func (q *UpdateQuery) Release() {
+	releaseUpdateQuery(q)
 }
 
 // Table sets the UPDATE target table.
